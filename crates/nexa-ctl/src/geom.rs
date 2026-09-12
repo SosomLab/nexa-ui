@@ -86,6 +86,18 @@ impl Rect {
 
     /// 두 rect를 덮는 최소 rect. 빈 rect는 항등원.
     #[must_use]
+    /// 교집합(겹치지 않으면 빈 rect) — 클립 영역 계산용(nexa-sql 그리드 · 09-12).
+    pub fn intersection(&self, other: &Rect) -> Rect {
+        let x1 = self.x.max(other.x);
+        let y1 = self.y.max(other.y);
+        let x2 = self.right().min(other.right());
+        let y2 = self.bottom().min(other.bottom());
+        if x2 <= x1 || y2 <= y1 {
+            return Rect::new(x1, y1, 0, 0);
+        }
+        Rect::new(x1, y1, x2 - x1, y2 - y1)
+    }
+
     pub fn union(&self, other: &Rect) -> Rect {
         if self.is_empty() {
             return *other;
@@ -136,5 +148,20 @@ mod tests {
         assert!(a.intersects(&Rect::new(9, 9, 5, 5)));
         assert!(!a.intersects(&Rect::new(10, 0, 5, 5)));
         assert!(!a.intersects(&Rect::new(0, 0, 0, 5)));
+    }
+}
+
+#[cfg(test)]
+mod intersection_tests {
+    use super::*;
+
+    #[test]
+    fn intersection_clips() {
+        let a = Rect::new(0, 0, 10, 10);
+        assert_eq!(
+            a.intersection(&Rect::new(5, 5, 10, 10)),
+            Rect::new(5, 5, 5, 5)
+        );
+        assert!(a.intersection(&Rect::new(20, 20, 5, 5)).is_empty());
     }
 }

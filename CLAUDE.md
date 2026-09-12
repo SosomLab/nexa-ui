@@ -19,6 +19,7 @@
 | `nexa-gfx` | `../nexa-clip/crates/nclip-gfx` ← `nexa-beep/nbeep-gfx` | 745 LOC | `ab_glyph` |
 | `nexa-ctl` | `../nexa-clip/crates/nclip-ctl` ← `nbeep-ctl` ← `nexa-dir2/nexa-gui` | 12,910 LOC · 컨트롤 17종 · 디자인 토큰 | `nexa-gfx` |
 | `nexa-conf` | `../nexa-clip/crates/nexa-conf` (= `nexa-beep` 사본과 동일) | 599 LOC | 0 |
+| `nexa-font` | `../nexa-clip/crates/nclip-plat/src/font.rs` + `conf::load_ui_font` | 한글 UI·한글 고정폭 우선·기호 폴백 | `nexa-gfx` · memmap2 |
 
 > ⚠️ **아직 이관 안 한 것**: `nexa-dir2/crates/nexa-gui/widgets`(dock · tabbar · menubar · columns · rows — 7,648 LOC · Win32 앱 안에 있으나 플랫폼 중립). `DrawCtx` 어휘가 한 세대 앞서 있어(`select_font` 시그니처 · `term_text`·`draw_image`) **이식 시 어댑터 필요** → [docs/TODO](docs/TODO.md) U-2.
 

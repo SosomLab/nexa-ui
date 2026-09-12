@@ -1,0 +1,17 @@
+[package]
+name = "nexa-font"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa UI 시스템 폰트 발견 — 한글 UI · 고정폭(D2Coding 우선) · 기호 폴백 체인 (mmap · 임베드 없음)"
+
+[lints]
+workspace = true
+
+[dependencies]
+nexa-gfx.workspace = true
+# 시스템 폰트 mmap — 원장 docs/10 §3. fs::read는 폰트를 통째로 힙에 복사한다(macOS 한글 TTC 55MB).
+memmap2 = "0.9"

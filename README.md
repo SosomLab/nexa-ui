@@ -8,6 +8,7 @@
 | `nexa-gfx` | CPU 래스터라이저 · 텍스트 스택(`ab_glyph`) |
 | `nexa-ctl` | 드로잉 어휘(`DrawCtx`) · 기하 · 입력 이벤트 · 위젯 계약 · 컨트롤 17종 · 디자인 토큰 |
 | `nexa-conf` | 설정 직렬화·영속(의존 0) |
+| `nexa-font` | 시스템 폰트 발견 — 한글 UI · 한글 고정폭(D2Coding 우선) · 기호 폴백 |
 
 사용(path 의존):
 ```toml

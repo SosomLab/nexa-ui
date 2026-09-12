@@ -26,3 +26,4 @@
 | crate | 크레이트 | 사유 | 라이선스 |
 |---|---|---|---|
 | `ab_glyph 0.2` | nexa-gfx | TTF 파싱·글리프 래스터(계승) | Apache-2.0 |
+| `memmap2 0.9` | nexa-font | 시스템 폰트 mmap(clip DR 계승 — 힙 복사 55MB 회피) | MIT/Apache-2.0 |
