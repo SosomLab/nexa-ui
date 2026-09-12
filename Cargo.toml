@@ -1,0 +1,37 @@
+# Nexa UI — nexa 계열 공용 UI 라이브러리 (올 러스트 · 자체 CPU 래스터라이저 · 프레임워크 0)
+# 출처: nexa-clip/crates/{nclip-gfx, nclip-ctl, nexa-conf} (2026-09-12 추출 · DR-1)
+#   계보: nexa-dir2/nexa-gui → nexa-beep/nbeep-{gfx,ctl} → nexa-clip/nclip-{gfx,ctl} → ★ 여기.
+# 규칙: 앱 도메인 의존 0 · 외부 crate 기본 0 지향(ab_glyph 1개만 · docs/10 §3 원장).
+# 소비자: nexa-sql(첫 소비자) · nexa-clip · nexa-beep(이관은 각 저장소 결정).
+[workspace]
+resolver = "2"
+members = [
+  "crates/nexa-gfx",   # CPU 래스터라이저 · 텍스트 스택 (의존: ab_glyph)
+  "crates/nexa-ctl",   # 드로잉 어휘 · 기하 · 이벤트 · 위젯 계약 · 컨트롤 17종 · 디자인 토큰 (의존: nexa-gfx)
+  "crates/nexa-conf",  # 설정 직렬화·영속 (의존 0)
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+authors = ["Sangyong Bae <kiros33@gmail.com>"]
+repository = "https://github.com/SosomLab/nexa-ui"
+homepage = "https://sosomlab.com"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+redundant_clone = "warn"
+inefficient_to_string = "warn"
+unwrap_used = "warn"
+
+[workspace.dependencies]
+nexa-gfx = { path = "crates/nexa-gfx" }
+nexa-ctl = { path = "crates/nexa-ctl" }
+nexa-conf = { path = "crates/nexa-conf" }
+
+# 라이브러리 워크스페이스 — 릴리스 프로필은 소비 앱이 정한다(여기서는 기본값).

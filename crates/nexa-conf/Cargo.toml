@@ -1,0 +1,17 @@
+# nexa-conf — 설정 직렬화·영속 표준. ★ nexa 계열 공용 크레이트(DR-32).
+# 도메인 타입 0 · 시계 비소유 · 경로 비소유 · UI 비의존 — 앱 크레이트 의존 금지가 규칙이다.
+# nexa-beep의 사본과 본문을 같게 유지한다(공용 저장소 추출 시 diff가 아니라 이동이 되게).
+[package]
+name = "nexa-conf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa UI 설정 직렬화·영속 표준 (의존 0)"
+
+[lints]
+workspace = true
+
+[dependencies]

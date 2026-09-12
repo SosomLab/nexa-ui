@@ -1,0 +1,17 @@
+[package]
+name = "nexa-ctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa UI 컨트롤 — 드로잉 어휘·기하·이벤트·위젯 계약·컨트롤 17종·디자인 토큰 (앱 도메인 의존 0)"
+
+[lints]
+workspace = true
+
+# ⚠️ 앱 도메인(<app>-core 등) 의존 금지 — 이 크레이트의 존재 이유다(docs/13 §2-2).
+# 문자열(i18n)·크기 배율 같은 앱 정책은 전부 **주입**으로 받는다(controls::set_ctl_labels 등).
+[dependencies]
+nexa-gfx.workspace = true

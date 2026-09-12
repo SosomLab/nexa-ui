@@ -1,0 +1,28 @@
+# 빌드 산출물 (Rust)
+/target/
+/build/
+/dist/
+/out/
+# Cargo.lock은 바이너리 워크스페이스이므로 커밋한다(재현 빌드).
+**/*.rs.bk
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 에디터
+.vscode/
+.idea/
+*.swp
+
+# 로컬 실행 데이터 (포터블 모드 영속물)
+/data/
+*.log
+
+# 신원·키 잔재 (배포·커밋 금지)
+*.key
+
+# 실기 하네스가 만드는 고정물 — 생성물이다(scripts/linux-watch-e2e.sh)
+/scripts/fixtures/
+/scripts/watch.log

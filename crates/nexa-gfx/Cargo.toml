@@ -1,0 +1,15 @@
+[package]
+name = "nexa-gfx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa UI 렌더 기반 — CPU 래스터라이저·텍스트 스택 (플랫폼 중립)"
+
+[lints]
+workspace = true
+
+[dependencies]
+ab_glyph = "0.2"
