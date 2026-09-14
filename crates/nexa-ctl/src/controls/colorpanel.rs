@@ -76,7 +76,11 @@ pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
 /// RGB → HSV.
 #[must_use]
 pub fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
-    let (r, g, b) = (f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
+    let (r, g, b) = (
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+    );
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
     let d = max - min;
@@ -155,7 +159,10 @@ impl ColorPanel {
     #[must_use]
     pub fn rgba(&self) -> u32 {
         let (r, g, b) = hsv_to_rgb(self.h, self.s, self.v);
-        (u32::from(r) << 24) | (u32::from(g) << 16) | (u32::from(b) << 8) | (self.a * 255.0).round() as u32
+        (u32::from(r) << 24)
+            | (u32::from(g) << 16)
+            | (u32::from(b) << 8)
+            | (self.a * 255.0).round() as u32
     }
 
     /// 현재 값 `#RRGGBBAA`.
@@ -219,7 +226,13 @@ impl ColorPanel {
     pub fn preferred_size(&self) -> (i32, i32) {
         let w = (self.s(SQUARE) + self.s(GAP) + self.s(BAR_W) + self.s(GAP) + self.s(BAR_W))
             .max((self.s(CHIP) + self.s(CHIP_GAP)) * PRESETS.len() as i32);
-        let h = self.s(SQUARE) + self.s(GAP) + self.s(ROW_H) + self.s(GAP) + self.s(CHIP) + self.s(GAP) + self.s(CHIP);
+        let h = self.s(SQUARE)
+            + self.s(GAP)
+            + self.s(ROW_H)
+            + self.s(GAP)
+            + self.s(CHIP)
+            + self.s(GAP)
+            + self.s(CHIP);
         (w, h)
     }
 
@@ -253,7 +266,12 @@ impl ColorPanel {
     }
     fn hue_rect(&self) -> Rect {
         let b = self.base.bounds;
-        Rect::new(b.x + self.s(SQUARE) + self.s(GAP), b.y, self.s(BAR_W), self.s(SQUARE))
+        Rect::new(
+            b.x + self.s(SQUARE) + self.s(GAP),
+            b.y,
+            self.s(BAR_W),
+            self.s(SQUARE),
+        )
     }
     fn alpha_rect(&self) -> Rect {
         let b = self.base.bounds;
@@ -393,7 +411,12 @@ impl Widget for ColorPanel {
         let sw = self.swatch_rect();
         let hh = self.s(26).min(sw.h);
         self.hex.set_bounds(
-            Rect::new(sw.right() + self.s(GAP), sw.y + (sw.h - hh) / 2, self.s(HEX_W), hh),
+            Rect::new(
+                sw.right() + self.s(GAP),
+                sw.y + (sw.h - hh) / 2,
+                self.s(HEX_W),
+                hh,
+            ),
             inv,
         );
         inv.push(bounds);
@@ -477,8 +500,16 @@ impl Widget for ColorPanel {
         let cx = sq.x + (self.s * (sq.w - 1) as f32).round() as i32;
         let cy = sq.y + ((1.0 - self.v) * (sq.h - 1) as f32).round() as i32;
         let r = self.s(6);
-        ctx.stroke_ellipse(Rect::new(cx - r, cy - r, 2 * r, 2 * r), Color(0x00FF_FFFF), 2.0);
-        ctx.stroke_ellipse(Rect::new(cx - r - 1, cy - r - 1, 2 * r + 2, 2 * r + 2), Color(0x0000_0000), 1.0);
+        ctx.stroke_ellipse(
+            Rect::new(cx - r, cy - r, 2 * r, 2 * r),
+            Color(0x00FF_FFFF),
+            2.0,
+        );
+        ctx.stroke_ellipse(
+            Rect::new(cx - r - 1, cy - r - 1, 2 * r + 2, 2 * r + 2),
+            Color(0x0000_0000),
+            1.0,
+        );
         // 색상 막대(세로 그라데이션 · 1×N 이미지 스케일).
         let hr = self.hue_rect();
         {
@@ -512,18 +543,39 @@ impl Widget for ColorPanel {
             ctx.fill_rect(Rect::new(ar.x - 2, y, ar.w + 4, 1), Color(0x0000_0000));
         }
         // 현재 스와치 + hex.
-        chip(ctx, self.swatch_rect(), self.rgba(), self.s(4), theme.border, self.s(5));
+        chip(
+            ctx,
+            self.swatch_rect(),
+            self.rgba(),
+            self.s(4),
+            theme.border,
+            self.s(5),
+        );
         self.hex.paint(ctx, theme);
         // 프리셋 · 최근.
         let accent = self.accent_now(theme);
         let cur = self.rgba();
         for (i, &c) in PRESETS.iter().enumerate() {
             let r = self.chip_rect(self.presets_y(), i);
-            chip(ctx, r, c, self.s(3), if c == cur { accent } else { theme.border }, self.s(4));
+            chip(
+                ctx,
+                r,
+                c,
+                self.s(3),
+                if c == cur { accent } else { theme.border },
+                self.s(4),
+            );
         }
         for (i, &c) in self.recent.iter().enumerate() {
             let r = self.chip_rect(self.recent_y(), i);
-            chip(ctx, r, c, self.s(3), if c == cur { accent } else { theme.border }, self.s(4));
+            chip(
+                ctx,
+                r,
+                c,
+                self.s(3),
+                if c == cur { accent } else { theme.border },
+                self.s(4),
+            );
         }
         if self.recent.is_empty() {
             // 빈 최근 칸은 흐린 테두리로 자리만.
@@ -542,11 +594,22 @@ mod tests {
 
     #[test]
     fn hsv_round_trip_and_hex_forms() {
-        for &(r, g, b) in &[(255u8, 0u8, 0u8), (0, 255, 0), (0, 0, 255), (128, 64, 200), (255, 255, 255), (0, 0, 0)] {
+        for &(r, g, b) in &[
+            (255u8, 0u8, 0u8),
+            (0, 255, 0),
+            (0, 0, 255),
+            (128, 64, 200),
+            (255, 255, 255),
+            (0, 0, 0),
+        ] {
             let (h, s, v) = rgb_to_hsv(r, g, b);
             assert_eq!(hsv_to_rgb(h, s, v), (r, g, b));
         }
-        assert_eq!(rgba_from_hex("#3D8BFF"), Some(0x3D8B_FFFF), "6자리 = 불투명");
+        assert_eq!(
+            rgba_from_hex("#3D8BFF"),
+            Some(0x3D8B_FFFF),
+            "6자리 = 불투명"
+        );
         assert_eq!(rgba_from_hex("3D8BFF80"), Some(0x3D8B_FF80));
         assert_eq!(rgba_from_hex("#12345"), None);
         assert_eq!(rgba_to_hex(0x0102_0304), "#01020304");
@@ -570,9 +633,21 @@ mod tests {
         );
         assert_eq!(p.take_changed().as_deref(), Some("#FF0000FF"));
         // 왼쪽 아래로 드래그 = 검정.
-        p.on_event(&InputEvent::MouseMove { x: sq.x, y: sq.bottom() - 1 }, &mut inv);
+        p.on_event(
+            &InputEvent::MouseMove {
+                x: sq.x,
+                y: sq.bottom() - 1,
+            },
+            &mut inv,
+        );
         assert_eq!(p.value_hex(), "#000000FF");
-        p.on_event(&InputEvent::MouseUp { x: sq.x, y: sq.bottom() - 1 }, &mut inv);
+        p.on_event(
+            &InputEvent::MouseUp {
+                x: sq.x,
+                y: sq.bottom() - 1,
+            },
+            &mut inv,
+        );
         assert_eq!(p.recent(), &[0x0000_00FF], "놓으면 최근 색에");
         // 투명도 막대 맨 아래 = 알파 0.
         let ar = p.alpha_rect();
@@ -586,7 +661,13 @@ mod tests {
             &mut inv,
         );
         assert!(p.value_hex().ends_with("00"), "{}", p.value_hex());
-        p.on_event(&InputEvent::MouseUp { x: ar.x + 1, y: ar.bottom() - 1 }, &mut inv);
+        p.on_event(
+            &InputEvent::MouseUp {
+                x: ar.x + 1,
+                y: ar.bottom() - 1,
+            },
+            &mut inv,
+        );
         assert_eq!(p.recent().len(), 2);
         assert!(p.take_changed().is_some());
         assert!(p.take_changed().is_none(), "1회성");

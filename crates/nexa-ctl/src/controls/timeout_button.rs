@@ -266,7 +266,11 @@ impl Widget for TimeoutButton {
         ctx.stroke_round_rect(
             b,
             radius,
-            if self.warn { theme.danger } else { theme.border },
+            if self.warn {
+                theme.danger
+            } else {
+                theme.border
+            },
             1.0,
         );
         self.draw_focus_ring(ctx, theme, b);

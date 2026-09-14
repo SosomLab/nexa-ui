@@ -326,8 +326,8 @@ impl ScrollBars {
         let thick = sc(THICK, scale);
         let radius = thin / 2;
         // 세로 — 이 축이 깨어 있을 때만.
-        if let Some(hit) = Self::v_thumb(vp, content_h, off_y, scale, thick)
-            .filter(|_| self.is_active(Axis::V))
+        if let Some(hit) =
+            Self::v_thumb(vp, content_h, off_y, scale, thick).filter(|_| self.is_active(Axis::V))
         {
             let hot =
                 matches!(self.hover, Some(Axis::V)) || matches!(self.drag, Some((Axis::V, _)));
@@ -338,8 +338,8 @@ impl ScrollBars {
             ctx.fill_round_rect_alpha(thumb, radius, theme.text_dim, a);
         }
         // 가로 — 이 축이 깨어 있을 때만.
-        if let Some(hit) = Self::h_thumb(vp, content_w, off_x, scale, thick)
-            .filter(|_| self.is_active(Axis::H))
+        if let Some(hit) =
+            Self::h_thumb(vp, content_w, off_x, scale, thick).filter(|_| self.is_active(Axis::H))
         {
             let hot =
                 matches!(self.hover, Some(Axis::H)) || matches!(self.drag, Some((Axis::H, _)));
@@ -399,7 +399,15 @@ mod tests {
         assert!(sb.is_active(Axis::V) && !sb.is_active(Axis::H));
         // 가로 휠 = 가로도 깨어난다 · 숨김은 축별.
         sb.tick(0);
-        sb.on_event(&InputEvent::HWheel { delta: 300 }, vp(), 800, 400, 0, 0, 1.0);
+        sb.on_event(
+            &InputEvent::HWheel { delta: 300 },
+            vp(),
+            800,
+            400,
+            0,
+            0,
+            1.0,
+        );
         sb.tick(1000); // 가로 마감 = 3000 · 세로 마감 = 2000
         assert!(sb.is_active(Axis::V) && sb.is_active(Axis::H));
         assert!(sb.tick(2000), "세로 먼저 숨김");
@@ -426,7 +434,7 @@ mod tests {
     fn drag_thumb_updates_offset() {
         let mut sb = ScrollBars::new();
         sb.on_event(&wheel(-1), vp(), 200, 400, 0, 0, 1.0); // 보일 때만 썸이 잡힌다
-        // v_thumb at off 0: thumb top = vp.y = 0. 두께 THICK=11. 썸 폭 안 x=200-11-2=187.
+                                                            // v_thumb at off 0: thumb top = vp.y = 0. 두께 THICK=11. 썸 폭 안 x=200-11-2=187.
         let t = ScrollBars::v_thumb(vp(), 400, 0, 1.0, 11).unwrap();
         let (_ox, _oy, consumed) = sb.on_event(&down(t.x + 2, t.y + 2), vp(), 200, 400, 0, 0, 1.0);
         assert!(consumed && sb.drag.is_some(), "썸 클릭 = 드래그 시작");
@@ -507,7 +515,10 @@ mod tests {
         assert_eq!(sb.hover, None);
         sb.tick(50_000);
         assert!(sb.is_visible(), "언호버 직후엔 아직 지연이 남아 있다");
-        assert!(sb.tick(51_000) && !sb.is_visible(), "언호버 후 지연 경과 → 숨김");
+        assert!(
+            sb.tick(51_000) && !sb.is_visible(),
+            "언호버 후 지연 경과 → 숨김"
+        );
     }
 
     #[test]

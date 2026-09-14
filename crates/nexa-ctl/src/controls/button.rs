@@ -332,7 +332,11 @@ impl Widget for Button {
         //   눌림은 페이드를 쓰지 않는다(누른 건 즉시 보여야 한다).
         // 진행도(0~1) — 중립 버튼은 **선택색(밝은 하늘색)을 진행도만큼** 얹는다(콤보 항목과 같은 룩 · nexa-sql 사용자 09-14).
         // 색조(Safe/Danger) 버튼은 흰 글씨 위라 종전처럼 흰색 오버레이(토큰 알파).
-        let hov_p = if self.pressed { 0.0 } else { self.hover.value() };
+        let hov_p = if self.pressed {
+            0.0
+        } else {
+            self.hover.value()
+        };
         let hov = hover_alpha(false, hov_p);
 
         match self.mode {
