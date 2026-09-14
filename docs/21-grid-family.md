@@ -78,6 +78,20 @@ nexa-grid (크레이트 · nexa-ctl 위 · dir2 rows/columns 이식)
 
 **캡처 대화상자** `HotkeyCapture`(nexa-dlg · 20 §1 계층의 조립): 모달 오버레이 · "키를 누르세요" 안내 · 누르는 동안 조합을 실시간 표시(수식키만 눌린 상태는 미확정) · Esc = 취소 · Backspace = 비우기 · **충돌 검사**(같은 컨텍스트의 다른 명령 → "교체/취소") · [적용] [취소]. 캡처 컨트롤은 **nexa-clip 설정 화면의 단축키 행**(`nclip-ui/settings.rs` `wk()` 행 · 09-08 창 안 단축키 · 전역/창 컨텍스트)을 이식 원천으로 쓴다 — 키 조합 파싱·표기·수식키 판정이 이미 있다.
 
+### 3-2. 셀 안의 컨트롤 — TextEditor · Button · Checkbox · Image · ImageButton(사용자 09-14 *"그리드 셀로 사용"*)
+
+가상화를 지키면서 셀에 컨트롤을 두는 방법은 하나다 — **"그리는 것"과 "살아 있는 것"을 나눈다.**
+
+| 층 | 무엇 | 규칙 |
+|---|---|---|
+| **CellKind**(선언) | 컬럼/셀이 무엇인지: `Text · Number · Check(bool) · Button(label\|icon) · Image(icon key/이미지) · ImageButton · Editor(텍스트 편집 가능) · Custom(painter id)` | `RowSource::cell_kind(i, key) -> CellKind`(기본 = Text · 컬럼 기본값 오버라이드) |
+| **CellPainter**(그리기 · 상태 없음) | 각 CellKind를 **그리기만** 하는 함수 — 체크박스 글리프 · 버튼 면(State 레이어 · hover/pressed는 엔진이 넘김) · 이미지(`DrawCtx::image_scaled`) · 텍스트 | 셀마다 컨트롤 인스턴스를 만들지 않는다(10만 행 × 체크박스 = 인스턴스 0) · 기존 `Checkbox`/`Button` 컨트롤의 **페인트 함수를 정적 함수로 분리**해 재사용(코드 중복 0) |
+| **CellHit**(입력) | 엔진이 히트한 셀의 kind로 동작을 결정 — Check 토글 · Button 클릭 · ImageButton 클릭 · Editor 진입 → `RowSource::on_cell(i, key, CellEvent) -> bool`로 데이터측에 전달 | 키보드: Space = 토글/클릭 · Enter/F2 = 편집 진입 · Esc = 취소 |
+| **LiveEditor**(살아 있는 하나) | 편집 중인 셀 **한 곳에만** 실제 `TextBox`(또는 `Combo`)를 띄운다 — 셀 rect에 배치 · 커밋 시 `RowSource::set_cell(i, key, text) -> Result` · 스크롤로 벗어나면 커밋/취소 · IME·클립보드는 TextBox의 기존 호스트 계약 | "one live editor" 패턴(엑셀·VS Code 그리드 관례) |
+| 컬럼 기본 | `Column.kind: CellKind`(전 행 동일) · 행 단위 예외는 `cell_kind` | KeymapGrid [지정] = `Button` 컬럼 · 접속 목록 📌 = `Check` · 파일 = `Image`+Text |
+
+이식 순서: G-2에 `CellKind`/`cell_kind`/`on_cell`/`set_cell` 계약과 정적 페인터 · **G-2b** = LiveEditor(TextBox 재배치) · 이미지 셀은 `IconImage` 공유(`Rc`). 셀 컨트롤은 엔진 기능이므로 네 특화가 전부 얻는다.
+
 **결과 그리드 규칙 넷**(사용자 *"속도가 생명 · 메모리 적을수록"*): ① 페인트 경로 힙 할당 0(재사용 버퍼 · 폭 캐시) ② 행을 객체로 들지 않는다(컬럼 저장소 · 인덱스 정렬) ③ 받는 양을 정한다(상한·배치 · 26 §4-1) ④ 결과 교체 시 즉시 drop(클렌징 · 26 §4-5).
 
 ---
@@ -87,7 +101,8 @@ nexa-grid (크레이트 · nexa-ctl 위 · dir2 rows/columns 이식)
 | 단계 | 내용 |
 |---|---|
 | **G-1** | `nexa-grid` 크레이트 생성 · dir2 `columns.rs`+`rows.rs`+`typeahead.rs` 복사 · **DrawCtx 세대 어댑터**(D-3 합집합 — `select_font(slot,bold,italic)` ↔ nexa-ctl `select_font(slot,bold)`+italic 확장) · 147 테스트 이전 green |
-| **G-2** | `RowSource`에 `write_cell(&self, i, key, out: &mut String)`(기본 = `cell` 위임) · `CellPainter` 훅 · `Hierarchy` 기본 평면 · 마커 → 아이콘 키 |
+| **G-2** | `RowSource`에 `write_cell(&self, i, key, out: &mut String)`(기본 = `cell` 위임) · **`CellKind`/`cell_kind`/`on_cell`/`set_cell` + 정적 셀 페인터(체크·버튼·이미지·이미지버튼 · §3-2)** · `Hierarchy` 기본 평면 · 마커 → 아이콘 키 |
+| **G-2b** | LiveEditor — 편집 셀 한 곳에 실제 `TextBox` 배치 · 커밋/취소 · 스크롤 이탈 처리(§3-2) |
 | **G-3** | `ResultGrid`(nexa-sql `crates/nexa-sql/grid.rs` 교체 · `ResultSource` 컬럼 저장소 · 푸터 load/render/bytes 유지) — 26 §5 예산 실측 |
 | **G-4** | `ConnectionGrid`(접속 패널의 프로필 콤보를 Golden 로그인 리스트 그리드로 · T-31) |
 | **G-5** | `FileGrid`(20 F-3의 FileList = 이 특화) |
