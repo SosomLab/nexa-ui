@@ -449,7 +449,8 @@ impl TextBox {
             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
             let mut out = String::with_capacity(normalized.len());
             for c in normalized.chars() {
-                if c == '\n' || !c.is_control() {
+                // 탭은 코드(SQL·스크립트)에서 의미 있는 공백 — 제어문자지만 보존(09-14 nexa-sql 편집기).
+                if c == '\n' || c == '\t' || !c.is_control() {
                     out.push(c);
                 }
             }
