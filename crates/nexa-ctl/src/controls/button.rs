@@ -12,7 +12,7 @@ use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::{IconImage, Theme};
-use crate::tokens::{hover_alpha, Fade, FadeSpeed};
+use crate::tokens::{hover_alpha, hover_color, pressed_color, Fade, FadeSpeed};
 
 /// 눌림 때 선택색 위에 더 얹는 전경색 알파(선택색보다 한 단계 어둡게).
 const PRESSED_EXTRA: f32 = 0.10;
@@ -315,24 +315,19 @@ impl Widget for Button {
         // ★ hover 오버레이는 **배경을 칠한 다음** 얹는다 — 아래에서 배경을 그리고
         //   여기서 값을 계산해 두면 분기마다 다시 계산하지 않는다.
         //   눌림은 페이드를 쓰지 않는다(누른 건 즉시 보여야 한다).
-        let hov = hover_alpha(
-            false,
-            if self.pressed {
-                0.0
-            } else {
-                self.hover.value()
-            },
-        );
+        // 진행도(0~1) — 중립 버튼은 **선택색(밝은 하늘색)을 진행도만큼** 얹는다(콤보 항목과 같은 룩 · nexa-sql 사용자 09-14).
+        // 색조(Safe/Danger) 버튼은 흰 글씨 위라 종전처럼 흰색 오버레이(토큰 알파).
+        let hov_p = if self.pressed { 0.0 } else { self.hover.value() };
+        let hov = hover_alpha(false, hov_p);
 
         match self.mode {
             ButtonMode::Image(fit) => {
                 // 이미지 버튼 — 배경 + 버튼 크기에 맞춘 이미지(클립).
-                let bg = if self.pressed {
-                    theme.sel_bg
-                } else {
-                    theme.field_bg
-                };
-                ctx.fill_round_rect(b, radius, bg);
+                ctx.fill_round_rect(b, radius, theme.field_bg);
+                if self.pressed {
+                    let (pc, pa) = pressed_color(theme);
+                    ctx.fill_round_rect_alpha(b, radius, pc, pa);
+                }
                 if let Some(img) = self.image.as_deref() {
                     let area = Rect::new(
                         b.x + self.s(2),
@@ -347,8 +342,9 @@ impl Widget for Button {
                     // clip = 버튼 영역 → Cover에서 넘치는 부분은 잘린다.
                     ctx.image_scaled(dst, img, area);
                 }
-                if hov > 0.0 {
-                    ctx.fill_round_rect_alpha(b, radius, theme.text, hov);
+                if hov_p > 0.0 {
+                    let (hc, ha) = hover_color(theme);
+                    ctx.fill_round_rect_alpha(b, radius, hc, ha * hov_p);
                 }
                 if self.pressed {
                     ctx.fill_round_rect_alpha(b, radius, theme.text, PRESSED_EXTRA);
@@ -360,26 +356,23 @@ impl Widget for Button {
                 // 살짝 어둡게(색조 유지). 중립은 종전 그대로.
                 let on = crate::theme::Color(0x00FF_FFFF); // 색 위 흰 글씨
                 let (bg, fg) = match self.tone {
-                    ButtonTone::Default => (
-                        if self.pressed {
-                            theme.sel_bg
-                        } else {
-                            theme.field_bg
-                        },
-                        theme.text,
-                    ),
+                    ButtonTone::Default => (theme.field_bg, theme.text),
                     ButtonTone::Safe => (dim_if(theme.ok, self.pressed), on),
                     ButtonTone::Danger => (dim_if(theme.danger, self.pressed), on),
                 };
                 ctx.fill_round_rect(b, radius, bg);
-                if hov > 0.0 {
+                if matches!(self.tone, ButtonTone::Default) {
+                    // 중립 버튼: 눌림 = 설정 눌림색(기본 선택색) · hover = 설정 hover색 × 진행도.
+                    if self.pressed {
+                        let (pc, pa) = pressed_color(theme);
+                        ctx.fill_round_rect_alpha(b, radius, pc, pa);
+                    } else if hov_p > 0.0 {
+                        let (hc, ha) = hover_color(theme);
+                        ctx.fill_round_rect_alpha(b, radius, hc, ha * hov_p);
+                    }
+                } else if hov > 0.0 {
                     // 색조 버튼은 흰 글씨 위라 **흰색**으로 밝힌다(전경색으로 덮으면 탁해진다).
-                    let over = if matches!(self.tone, ButtonTone::Default) {
-                        theme.text
-                    } else {
-                        on
-                    };
-                    ctx.fill_round_rect_alpha(b, radius, over, hov);
+                    ctx.fill_round_rect_alpha(b, radius, on, hov);
                 }
                 // ★ 눌림 = 선택색 배경 위에 전경색을 한 겹 더(사용자 09-14 "선택된 색보다 조금 더 어둡게") +
                 //   내용물 1px 내려앉음 — 누른 버튼이 한눈에 식별된다.

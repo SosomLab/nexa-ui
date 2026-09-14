@@ -16,6 +16,7 @@
 pub mod button;
 pub mod carousel;
 pub mod checkbox;
+pub mod colorpanel;
 pub mod colorpick;
 pub mod combo;
 pub mod ctxmenu;
@@ -36,6 +37,7 @@ pub mod tree;
 pub use button::{Button, ButtonMode, ButtonTone, ImageFit};
 pub use carousel::Carousel;
 pub use checkbox::Checkbox;
+pub use colorpanel::{rgba_from_hex, rgba_to_hex, ColorPanel};
 pub use colorpick::ColorPicker;
 pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
 pub use ctxmenu::{ContextMenu, CtxItem};

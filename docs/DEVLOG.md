@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-14 (9차 · win)** — ★ **`ColorPanel`**(색 선택기 · 채도/명도 사각형 + 색상·투명도 막대 + `#RRGGBBAA` 입력 + 프리셋 12 + 최근 8 · HSV 보관 · 그라데이션은 코드 이미지 · 드래그 중 실시간 보고 · 테스트 3) · `tokens::set_hover_color/set_pressed_color`(0xRRGGBBAA · 버튼 hover/눌림 · 콤보 항목 공통) · 버튼 hover = 선택색 계열(전경색 오버레이 → hover 색 × 진행도) · `rgba_from_hex/rgba_to_hex` 재수출.
 - **2026-09-14 (8차 · win)** — `TimeoutButton`: `with_warn`(대기 내내 위험색 배경·흰 글씨·흰 게이지 — 파괴적 2단 확인용) · `with_suffix`(남은 초 단위 i18n · 기본 "초").
 - **2026-09-14 (7차 · win)** — ★ `tokens::IntentFade`(hover **의도 코얼레싱** + 페이드 · 사건은 목표 덮어쓰기만 · 70ms 머문 마지막 목표만 페이드 · 이탈 즉시) · `FadeSpeed { Fast, Slow }` 컨트롤 속성(`Button::set_fade_speed` · `ComboControl::set_fade_speed` · `HoverFade/IntentFade::with_speed`) · `set_fade_ms(speed, ms)` 전역 연계 · 콤보 드롭다운 항목 hover = IntentFade(Fast · 선택색 알파 페이드 · 키보드 `jump`) · `HoverFade::jump` · 테스트 +2.
 - **2026-09-14 (6차 · win)** — `Button`: hover 진입 = 별도 전역 `button_hover_in_ms`(기본 500 · `Fade::button_hover`) · 눌림 = 선택색 위 전경색 0.10 한 겹 + 내용 1px 내려앉음(`PRESSED_EXTRA`) · `is_animating`/`is_pressed` 공개.

@@ -22,7 +22,7 @@ use crate::edit::EditState;
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::{IconImage, Theme};
-use crate::tokens::{hover_alpha, Fade, FadeSpeed, IntentFade};
+use crate::tokens::{hover_alpha, hover_color, Fade, FadeSpeed, IntentFade};
 use crate::widget::{Invalidations, Widget};
 use std::rc::Rc;
 
@@ -422,7 +422,8 @@ pub trait ComboControl: Control {
             // 항목 하이라이트 = 선택색이 진행도만큼 **서서히 진해진다**(키보드 이동은 즉시 1.0).
             let v = self.core().item_fade.value(i);
             if v > 0.0 {
-                ctx.fill_round_rect_alpha(row, self.s(5), theme.sel_bg, v);
+                let (hc, ha) = hover_color(theme);
+                ctx.fill_round_rect_alpha(row, self.s(5), hc, ha * v);
             }
             // 선택 ✓(크기 70% — 사용자 확정 · 16→11).
             let cs = self.s(11);

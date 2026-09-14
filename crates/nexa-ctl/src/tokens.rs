@@ -225,6 +225,43 @@ pub fn button_hover_in_ms() -> u32 {
     BUTTON_HOVER_IN_MS.load(core::sync::atomic::Ordering::Relaxed)
 }
 
+/// ★ **hover / 눌림 색 오버라이드**(nexa-sql 사용자 09-14 "두 색은 설정으로") — 0xRRGGBBAA · 0 = 테마 기본(`sel_bg` · 불투명).
+/// 버튼 hover 오버레이 · 콤보 항목 하이라이트 · 버튼 눌림 배경이 함께 읽는다(설정 한 번 = 전 컨트롤 즉시).
+static HOVER_RGBA: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static PRESSED_RGBA: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// hover 색 지정(None = 테마 기본).
+pub fn set_hover_color(rgba: Option<u32>) {
+    HOVER_RGBA.store(rgba.unwrap_or(0), core::sync::atomic::Ordering::Relaxed);
+}
+
+/// 눌림 색 지정(None = 테마 기본).
+pub fn set_pressed_color(rgba: Option<u32>) {
+    PRESSED_RGBA.store(rgba.unwrap_or(0), core::sync::atomic::Ordering::Relaxed);
+}
+
+fn split_rgba(rgba: u32) -> (Color, f32) {
+    (Color(rgba >> 8), f32::from(rgba as u8) / 255.0)
+}
+
+/// 현재 hover 색 `(색, 알파)` — 미설정이면 `(theme.sel_bg, 1.0)`.
+#[must_use]
+pub fn hover_color(theme: &crate::theme::Theme) -> (Color, f32) {
+    match HOVER_RGBA.load(core::sync::atomic::Ordering::Relaxed) {
+        0 => (theme.sel_bg, 1.0),
+        v => split_rgba(v),
+    }
+}
+
+/// 현재 눌림 색 `(색, 알파)` — 미설정이면 `(theme.sel_bg, 1.0)`.
+#[must_use]
+pub fn pressed_color(theme: &crate::theme::Theme) -> (Color, f32) {
+    match PRESSED_RGBA.load(core::sync::atomic::Ordering::Relaxed) {
+        0 => (theme.sel_bg, 1.0),
+        v => split_rgba(v),
+    }
+}
+
 /// ★ **페이드 속도 속성** — 컨트롤마다 둘 중 하나를 고른다(nexa-sql 사용자 09-14).
 /// `Fast` = 바로 식별돼야 하는 대상(버튼 · 콤보 항목 · 기본 500ms) · `Slow` = 천천히 진해져도 되는 대상(행 · 기본 1000ms).
 /// 실제 ms는 프로세스 전역 설정([`set_fade_ms`])에 연계된다 — 컨트롤은 속도 이름만 안다.
