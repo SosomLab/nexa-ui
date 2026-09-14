@@ -49,6 +49,8 @@ pub struct TimeoutButton {
     warn: bool,
     /// 남은 초 뒤에 붙는 단위(기본 "초" · 호스트가 i18n으로 바꾼다).
     suffix: String,
+    /// 두 줄 표시 — 1줄 라벨 · 2줄 "(N초)" · 행간 0(좁은 버튼에 맞춤 · nexa-sql 사용자 09-14).
+    two_line: bool,
 }
 
 impl TimeoutButton {
@@ -67,7 +69,15 @@ impl TimeoutButton {
             done: false,
             warn: false,
             suffix: "초".into(),
+            two_line: false,
         }
+    }
+
+    /// 두 줄 표시(라벨 / (N초)) — 체이닝.
+    #[must_use]
+    pub fn with_two_line(mut self, on: bool) -> Self {
+        self.two_line = on;
+        self
     }
 
     /// 경고 톤(위험색 배경 · 흰 글씨) — 체이닝.
@@ -246,22 +256,30 @@ impl Widget for TimeoutButton {
         );
         self.draw_focus_ring(ctx, theme, b);
 
-        // 라벨 + 남은 초.
+        // 라벨 + 남은 초 — 한 줄("라벨 (N초)") 또는 두 줄(라벨 / (N초) · 행간 0 · 글자 2px 작게).
+        let fg = if self.warn { white } else { theme.text };
+        let counting = self.started_ms.is_some() && !self.expired();
+        if self.two_line && counting {
+            ctx.select_font_sized(FontSlot::Base, false, -2.0);
+            let th = ctx.text_height();
+            let l1 = self.label.clone();
+            let l2 = format!("({}{})", self.remaining_secs(), self.suffix);
+            let y0 = b.y + (b.h - th * 2).max(0) / 2;
+            let w1 = ctx.text_width(&l1);
+            let w2 = ctx.text_width(&l2);
+            ctx.text(b.x + (b.w - w1) / 2, y0, b, &l1, fg);
+            ctx.text(b.x + (b.w - w2) / 2, y0 + th, b, &l2, fg);
+            return;
+        }
         ctx.select_font(FontSlot::Base, false);
-        let text = if self.started_ms.is_some() && !self.expired() {
+        let text = if counting {
             format!("{} ({}{})", self.label, self.remaining_secs(), self.suffix)
         } else {
             self.label.clone()
         };
         let tw = ctx.text_width(&text);
         let th = ctx.text_height();
-        ctx.text(
-            b.x + (b.w - tw) / 2,
-            b.y + (b.h - th) / 2,
-            b,
-            &text,
-            if self.warn { white } else { theme.text },
-        );
+        ctx.text(b.x + (b.w - tw) / 2, b.y + (b.h - th) / 2, b, &text, fg);
     }
 }
 
