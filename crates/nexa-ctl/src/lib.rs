@@ -46,8 +46,8 @@ pub use controls::{
     TreeGrid, TreeModel, TreeNode, TreeView,
 };
 pub use controls::{
-    FiredBy, HAlign, MenuBar, MenuDef, MenuEntry, TimeoutButton, ToolIcon, ToolItem, Toolbar,
-    VAlign,
+    FiredBy, HAlign, MenuBar, MenuDef, MenuEntry, TabAction, TabBar, TimeoutButton, ToolIcon,
+    ToolItem, Toolbar, VAlign,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
