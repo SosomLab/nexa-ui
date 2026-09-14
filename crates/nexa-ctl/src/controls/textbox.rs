@@ -410,13 +410,11 @@ impl TextBox {
     #[must_use]
     /// 캐럿의 **문자 인덱스**(호스트가 "캐럿 위치의 문장" 같은 것을 계산 — nexa-sql Ctrl+Enter 한 문장 실행 · 09-14).
     /// 선택이 있으면 head(움직이는 쪽)다. 바이트 오프셋이 필요하면 호스트가 `text().char_indices()`로 바꾼다.
-    #[must_use]
     pub fn caret(&self) -> usize {
         self.edit.caret()
     }
 
     /// 선택 범위(문자 인덱스 · 정렬됨). 없으면 `None`.
-    #[must_use]
     pub fn selection(&self) -> Option<(usize, usize)> {
         self.edit.selection()
     }
