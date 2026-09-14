@@ -45,6 +45,10 @@ pub struct TimeoutButton {
     /// **한 번 발화하면 끝**. `take_fired`로 꺼낸 뒤에도 만료가 두 번째 발화를 만들지
     /// 않게 잠근다(호스트가 창을 닫기 전 tick이 한 번 더 도는 경우가 실제로 있다).
     done: bool,
+    /// 경고 톤 — 대기 내내 **위험색 배경 + 흰 글씨**(파괴적 확인용 · nexa-sql 삭제 2단 확인 09-14).
+    warn: bool,
+    /// 남은 초 뒤에 붙는 단위(기본 "초" · 호스트가 i18n으로 바꾼다).
+    suffix: String,
 }
 
 impl TimeoutButton {
@@ -61,7 +65,23 @@ impl TimeoutButton {
             hover: false,
             fired: None,
             done: false,
+            warn: false,
+            suffix: "초".into(),
         }
+    }
+
+    /// 경고 톤(위험색 배경 · 흰 글씨) — 체이닝.
+    #[must_use]
+    pub fn with_warn(mut self, on: bool) -> Self {
+        self.warn = on;
+        self
+    }
+
+    /// 남은 초 단위 문자열(i18n) — 체이닝.
+    #[must_use]
+    pub fn with_suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.suffix = suffix.into();
+        self
     }
 
     /// 카운트다운 시작(호스트가 현재 시각을 준다).
@@ -186,7 +206,10 @@ impl Widget for TimeoutButton {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let b = self.base.bounds;
         let radius = self.s(6);
-        let bg = if self.pressed {
+        let white = crate::theme::Color(0x00FF_FFFF);
+        let bg = if self.warn {
+            theme.danger
+        } else if self.pressed {
             theme.sel_bg
         } else if self.hover {
             theme.panel_bg_alt
@@ -194,14 +217,20 @@ impl Widget for TimeoutButton {
             theme.field_bg
         };
         ctx.fill_round_rect(b, radius, bg);
+        if self.warn && (self.pressed || self.hover) {
+            // 경고 톤의 hover/눌림 = 흰색 한 겹(색조 유지).
+            ctx.fill_round_rect_alpha(b, radius, white, if self.pressed { 0.22 } else { 0.10 });
+        }
 
         // 경과 게이지 — 왼쪽부터 차오른다(남은 시간이 줄어드는 게 눈에 보인다).
         let ratio = self.elapsed_ratio();
         if ratio > 0.0 {
             let w = (b.w as f32 * ratio).round() as i32;
             if w > 0 {
-                // 막판(20% 미만 남음)은 위험색으로 — 곧 취소된다는 신호.
-                let fill = if self.remaining_ms() * 5 <= self.total_ms {
+                // 막판(20% 미만 남음)은 위험색으로 — 곧 취소된다는 신호. 경고 톤에선 흰색 게이지.
+                let fill = if self.warn {
+                    white
+                } else if self.remaining_ms() * 5 <= self.total_ms {
                     theme.danger
                 } else {
                     theme.accent
@@ -209,13 +238,18 @@ impl Widget for TimeoutButton {
                 ctx.fill_round_rect_alpha(Rect::new(b.x, b.y, w.min(b.w), b.h), radius, fill, 0.28);
             }
         }
-        ctx.stroke_round_rect(b, radius, theme.border, 1.0);
+        ctx.stroke_round_rect(
+            b,
+            radius,
+            if self.warn { theme.danger } else { theme.border },
+            1.0,
+        );
         self.draw_focus_ring(ctx, theme, b);
 
         // 라벨 + 남은 초.
         ctx.select_font(FontSlot::Base, false);
         let text = if self.started_ms.is_some() && !self.expired() {
-            format!("{} ({}초)", self.label, self.remaining_secs())
+            format!("{} ({}{})", self.label, self.remaining_secs(), self.suffix)
         } else {
             self.label.clone()
         };
@@ -226,7 +260,7 @@ impl Widget for TimeoutButton {
             b.y + (b.h - th) / 2,
             b,
             &text,
-            theme.text,
+            if self.warn { white } else { theme.text },
         );
     }
 }
