@@ -33,6 +33,7 @@ pub mod draw;
 pub mod edit;
 pub mod event;
 pub mod geom;
+pub mod highlight;
 pub mod raster;
 pub mod theme;
 pub mod tokens;
@@ -43,7 +44,7 @@ pub use controls::{
     BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, ColorPicker, Combo,
     ComboControl, ComboItem, Control, ControlBase, CtlMsg, EditCtxAction, FlatRow, GridColumn,
     ImageFit, LabelSide, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl,
-    TreeGrid, TreeModel, TreeNode, TreeView,
+    TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use controls::{
     FiredBy, HAlign, MenuBar, MenuDef, MenuEntry, TabAction, TabBar, TimeoutButton, ToolIcon,
@@ -53,6 +54,7 @@ pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
+pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
 pub use widget::{Invalidations, Widget};

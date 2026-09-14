@@ -48,7 +48,7 @@ pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use switch::Switch;
 pub use tabbar::{TabAction, TabBar};
-pub use textbox::{EditCtxAction, TextBox};
+pub use textbox::{EditCtxAction, TextBox, WhitespaceMode, WhitespaceStyle};
 pub use timeout_button::{FiredBy, TimeoutButton};
 pub use toolbar::{ToolIcon, ToolItem, Toolbar, DEFAULT_ICON};
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};

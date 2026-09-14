@@ -7,11 +7,44 @@ use crate::draw::{DrawCtx, FontSlot};
 use crate::edit::{EditKey, EditState};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
-use crate::theme::{IconImage, Theme};
+use crate::theme::{Color, IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
 use std::rc::Rc;
 
 /// 텍스트 박스 컨트롤.
+/// 공백 표시 범위 — Sublime `draw_white_space`(none · selection · all).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WhitespaceMode {
+    None,
+    #[default]
+    Selection,
+    All,
+}
+
+/// 공백 표시 스타일 — 표시할 글자(공백·탭·줄끝 · `'\0'` = 표시 안 함) · 색(None = 테마 `text_dim`) · 불투명도(0.0~1.0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WhitespaceStyle {
+    pub mode: WhitespaceMode,
+    pub space: char,
+    pub tab: char,
+    pub eol: char,
+    pub color: Option<Color>,
+    pub alpha: f32,
+}
+
+impl Default for WhitespaceStyle {
+    fn default() -> Self {
+        WhitespaceStyle {
+            mode: WhitespaceMode::Selection,
+            space: '·',
+            tab: '→',
+            eol: '\0',
+            color: None,
+            alpha: 0.4,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TextBox {
     base: ControlBase,
@@ -77,6 +110,12 @@ pub struct TextBox {
     ml_content: std::cell::Cell<(i32, i32)>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
+    /// 구문 강조(멀티라인 · 옵션) — 줄 단위 스팬을 색으로 그린다.
+    highlighter: Option<Rc<dyn crate::highlight::Highlighter>>,
+    /// 세로 안내선(글자 열 · 예 `[80]` · 여러 개) — 멀티라인 고정폭에서 그린다.
+    rulers: Vec<usize>,
+    /// 공백 문자 표시(설정 `editor.whitespace*`).
+    whitespace: WhitespaceStyle,
 }
 
 /// 멀티라인 한 줄의 화면 배치(클릭 매핑용 · 페인트가 채운다).
@@ -134,6 +173,9 @@ impl TextBox {
             ml_bars: super::ScrollBars::new(),
             ml_content: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
+            highlighter: None,
+            rulers: Vec::new(),
+            whitespace: WhitespaceStyle::default(),
         }
     }
 
@@ -144,6 +186,26 @@ impl TextBox {
     }
 
     /// 줄번호 거터 켜기/끄기(멀티라인에서만 그려진다 · 기본 끔).
+    /// 구문 강조 규격 지정(None = 강조 없음). 멀티라인에서만 그린다.
+    pub fn set_highlighter(&mut self, h: Option<Rc<dyn crate::highlight::Highlighter>>) {
+        self.highlighter = h;
+    }
+
+    #[must_use]
+    pub fn highlighter(&self) -> Option<&Rc<dyn crate::highlight::Highlighter>> {
+        self.highlighter.as_ref()
+    }
+
+    /// 공백 표시 방식(어떤 공백을 · 어떤 글자로 · 무슨 색/투명도로).
+    pub fn set_whitespace(&mut self, ws: WhitespaceStyle) {
+        self.whitespace = ws;
+    }
+
+    /// 세로 안내선 열 목록(0 = 없음) — 설정 `editor.rulers`(기본 80).
+    pub fn set_rulers(&mut self, cols: Vec<usize>) {
+        self.rulers = cols;
+    }
+
     pub fn set_line_numbers(&mut self, on: bool) {
         self.line_numbers = on;
     }
@@ -703,6 +765,32 @@ impl TextBox {
         lay.clear();
         let dx = tx - hs; // 가로 스크롤 반영 시작 x
         let (vx0, vx1) = (tx, tx + avail); // 뷰포트(선택 반전 클립 범위)
+                                           // 줄끝 표시용 전체 글자(eol 표시가 켜진 때만 수집 — 꺼진 기본은 비용 0).
+        let eol_chars: Vec<char> =
+            if self.whitespace.eol != '\0' && self.whitespace.mode != WhitespaceMode::None {
+                display.chars().collect()
+            } else {
+                Vec::new()
+            };
+        // 세로 안내선(열 × 'M' 폭 · 뷰포트 안에서만).
+        if !self.rulers.is_empty() {
+            let cw = ctx.text_width("M").max(1);
+            for &col in &self.rulers {
+                let rx = dx + cw * col as i32;
+                if rx >= vx0 && rx < vx1 {
+                    ctx.fill_rect(Rect::new(rx, b.y + 1, 1, b.h - 2), theme.border);
+                }
+            }
+        }
+        // 구문 강조 상태(블록 주석)를 첫 표시 행까지 이어 온다.
+        let mut hl_state = 0u32;
+        let mut hl_spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
+        if let Some(h) = &self.highlighter {
+            for (_, l) in lines.iter().take(top) {
+                hl_spans.clear();
+                h.line_spans(l, &mut hl_state, &mut hl_spans);
+            }
+        }
         for (vi, li) in (top..lines.len().min(top + rows)).enumerate() {
             let (start_idx, line_str) = &lines[li];
             let y = top0 + (vi as i32) * lh;
@@ -758,8 +846,70 @@ impl TextBox {
             }
             if empty && li == 0 {
                 ctx.text(dx, y, view, &self.placeholder, theme.text_dim);
+            } else if let Some(h) = &self.highlighter {
+                hl_spans.clear();
+                h.line_spans(line_str, &mut hl_state, &mut hl_spans);
+                let lchars: Vec<char> = line_str.chars().collect();
+                let mut ci = 0usize;
+                for (n, k) in &hl_spans {
+                    let end = (ci + n).min(lchars.len());
+                    let sx = dx + w.get(ci).copied().unwrap_or(0);
+                    if sx < vx1 && end > ci {
+                        let seg: String = lchars[ci..end].iter().collect();
+                        ctx.text(sx, y, view, &seg, k.color(theme));
+                    }
+                    ci = end;
+                }
+                if ci < lchars.len() {
+                    let seg: String = lchars[ci..].iter().collect();
+                    ctx.text(
+                        dx + w.get(ci).copied().unwrap_or(0),
+                        y,
+                        view,
+                        &seg,
+                        theme.text,
+                    );
+                }
             } else {
                 ctx.text(dx, y, view, line_str, theme.text);
+            }
+            // 공백 표시(·/→/¶ · 선택 안 또는 전체 · 반투명 = 배경과 섞은 색).
+            if self.whitespace.mode != WhitespaceMode::None && !empty {
+                let ws = &self.whitespace;
+                let base = ws.color.unwrap_or(theme.text_dim);
+                let col = base.lerp(theme.field_bg, 1.0 - ws.alpha.clamp(0.0, 1.0));
+                let (ls, le) = (*start_idx, *start_idx + line_len);
+                let (sa, se) = match (ws.mode, sel) {
+                    (WhitespaceMode::All, _) => (ls, le + 1),
+                    (WhitespaceMode::Selection, Some((a, e))) => (a, e),
+                    _ => (0, 0),
+                };
+                let mut buf = [0u8; 4];
+                for (ci, ch) in line_str.chars().enumerate() {
+                    let idx = ls + ci;
+                    if idx < sa || idx >= se {
+                        continue;
+                    }
+                    let mark = match ch {
+                        ' ' => ws.space,
+                        '\t' => ws.tab,
+                        _ => continue,
+                    };
+                    if mark == '\0' {
+                        continue;
+                    }
+                    let mx = dx + w.get(ci).copied().unwrap_or(0);
+                    if mx >= vx0 && mx < vx1 {
+                        ctx.text(mx, y, view, mark.encode_utf8(&mut buf), col);
+                    }
+                }
+                // 줄끝 표시 — 이 행이 논리 줄의 끝(다음 글자가 '\n')일 때.
+                if ws.eol != '\0' && le >= sa && le < se && eol_chars.get(le) == Some(&'\n') {
+                    let mx = dx + w.get(line_len).copied().unwrap_or(0);
+                    if mx >= vx0 && mx < vx1 {
+                        ctx.text(mx, y, view, ws.eol.encode_utf8(&mut buf), col);
+                    }
+                }
             }
             // 캐럿 — 이 줄이 캐럿 줄일 때(포커스·깜빡임 위상).
             if self.base.focused && ctx.caret_on() && li == caret_line {

@@ -37,6 +37,11 @@ pub struct Theme {
     pub sel_bg: Color,
     /// 선택 행 배경(비포커스 — 무채색 관례).
     pub sel_bg_inactive: Color,
+    /// 구문 강조 — 키워드 · 문자열 · 주석 · 숫자([`crate::highlight`]).
+    pub syn_keyword: Color,
+    pub syn_string: Color,
+    pub syn_comment: Color,
+    pub syn_number: Color,
     /// 위험 행위(파일 실체화 승인·차단 등).
     pub danger: Color,
     /// 긍정 상태(대조 완료 등).
@@ -65,6 +70,10 @@ impl Theme {
             text_dim: Color(0x008A_919C),
             sel_bg: Color(0x0024_405F),
             sel_bg_inactive: Color(0x002C_313A),
+            syn_keyword: Color(0x0079_B8FF),
+            syn_string: Color(0x00E3_A26A),
+            syn_comment: Color(0x007C_8A5A),
+            syn_number: Color(0x00B5_CEA8),
             danger: Color(0x00E5_534B),
             ok: Color(0x002E_A043),
             warn: Color(0x00B5_7C1E),
@@ -89,6 +98,10 @@ impl Theme {
             text_dim: Color(0x006B_7280),
             sel_bg: Color(0x00D8_E8FF),
             sel_bg_inactive: Color(0x00E6_E9EE),
+            syn_keyword: Color(0x000A_4FB5),
+            syn_string: Color(0x00A3_1515),
+            syn_comment: Color(0x0057_8A2A),
+            syn_number: Color(0x0009_8658),
             danger: Color(0x00D3_2F2F),
             ok: Color(0x001A_7F37),
             warn: Color(0x009A_6700),
