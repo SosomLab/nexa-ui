@@ -4,6 +4,8 @@
 //! - 스크롤(휠)·바 근처 접근·드래그 중엔 **콘텐츠 위에 겹쳐** 위치·비율을 보여준다(세로·가로).
 //! - 바 위에 마우스가 오면 **더 두껍게** + 클릭 드래그 가능.
 //! - 항상 **반투명**.
+//! - **축은 따로 논다**(nexa-sql 사용자 09-14): 세로 휠은 세로 막대만, 가로 휠은 가로 막대만 깨운다 · 숨김 시각도 축별.
+//!   `show()`(프로그램적)만 둘 다 깨운다.
 //!
 //! 상태(hover/drag/표시)만 보유하고 **오프셋은 호스트가 소유**한다 — [`ScrollBars::on_event`]에
 //! 현재 오프셋을 넣으면 갱신된 오프셋을 돌려준다(스크롤 가능한 어떤 뷰에도 재사용: 갤러리·트리·그리드).
@@ -53,15 +55,24 @@ pub struct ScrollBars {
     hover: Option<Axis>,
     /// 드래그 중: (축, 잡은 지점 오프셋 = 커서 - 썸 시작).
     drag: Option<(Axis, i32)>,
-    /// 스크롤/접근/드래그로 활성화되어 보이는가(1·2단계).
-    active: bool,
-    /// 이 시각(ms)이 지나면 숨긴다(1→0단계). 활동마다 뒤로 민다.
-    hide_at_ms: u64,
-    /// 활동이 있었다 — 다음 [`ScrollBars::tick`]에서 마감 시각을 다시 잡는다.
+    /// 축별 — 스크롤/접근/드래그로 활성화되어 보이는가(1·2단계). [세로, 가로].
+    active: [bool; 2],
+    /// 축별 — 이 시각(ms)이 지나면 숨긴다(1→0단계). 활동마다 뒤로 민다.
+    hide_at_ms: [u64; 2],
+    /// 축별 — 활동이 있었다 — 다음 [`ScrollBars::tick`]에서 마감 시각을 다시 잡는다.
     /// (`on_event`는 시계를 모른다. 시각 주입은 호스트가 하는 `tick` 한 곳으로 모은다.)
-    bumped: bool,
+    bumped: [bool; 2],
     /// 모습이 바뀌어 다시 그려야 한다(표시 전환·호버 두께) — `tick`이 호스트에 알린다.
     dirty: bool,
+}
+
+impl Axis {
+    const fn idx(self) -> usize {
+        match self {
+            Axis::V => 0,
+            Axis::H => 1,
+        }
+    }
 }
 
 /// px 헬퍼.
@@ -74,7 +85,8 @@ impl ScrollBars {
     /// (타이핑으로 가로 스크롤이 따라붙는 경우 등). 이걸 부르지 않으면 막대가
     /// `on_event` 전까지 숨어 있어 "스크롤이 생기지 않는다"로 보인다(08-10 지적).
     pub fn show(&mut self) {
-        self.wake();
+        self.wake(Axis::V);
+        self.wake(Axis::H);
     }
 
     /// 새 스크롤바.
@@ -86,7 +98,11 @@ impl ScrollBars {
     /// 지금 화면에 보이는가(자동 숨김 전 단계).
     #[must_use]
     pub fn is_visible(&self) -> bool {
-        self.active
+        self.active[0] || self.active[1]
+    }
+
+    fn is_active(&self, axis: Axis) -> bool {
+        self.active[axis.idx()]
     }
 
     /// 가로 썸 rect(호스트 검증·테스트용) — 필요 없으면 `None`. 두께는 잡기 쉬운 THICK 기준.
@@ -159,30 +175,35 @@ impl ScrollBars {
         match *ev {
             InputEvent::Wheel { delta } => {
                 oy -= delta / 3;
-                self.wake(); // 0/1→1단계 + 카운트다운 리셋
+                self.wake(Axis::V); // 0/1→1단계 + 카운트다운 리셋 — 세로만
                 let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                 (ox, oy, Self::v_needed(vp, content_h))
             }
             InputEvent::HWheel { delta } => {
                 ox += delta / 3;
-                self.wake();
+                self.wake(Axis::H);
                 let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                 (ox, oy, Self::h_needed(vp, content_w))
             }
             InputEvent::MouseDown { x, y, .. } => {
                 let p = Point { x, y };
-                if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
-                    if t.contains(p) {
-                        self.drag = Some((Axis::V, y - t.y));
-                        self.wake();
-                        return (ox, oy, true);
+                // 보이는 축의 썸만 잡힌다.
+                if self.is_active(Axis::V) {
+                    if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
+                        if t.contains(p) {
+                            self.drag = Some((Axis::V, y - t.y));
+                            self.wake(Axis::V);
+                            return (ox, oy, true);
+                        }
                     }
                 }
-                if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
-                    if t.contains(p) {
-                        self.drag = Some((Axis::H, x - t.x));
-                        self.wake();
-                        return (ox, oy, true);
+                if self.is_active(Axis::H) {
+                    if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
+                        if t.contains(p) {
+                            self.drag = Some((Axis::H, x - t.x));
+                            self.wake(Axis::H);
+                            return (ox, oy, true);
+                        }
                     }
                 }
                 (ox, oy, false)
@@ -207,53 +228,53 @@ impl ScrollBars {
                             }
                         }
                     }
-                    self.wake();
+                    self.wake(axis);
                     let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                     return (ox, oy, true);
                 }
-                // 호버 판정(썸 위 = 2단계 두껍게). 바가 보일 때만 판정한다
+                // 호버 판정(썸 위 = 2단계 두껍게). **그 축의** 바가 보일 때만 판정한다
                 // (0단계에선 접근으로 다시 뜨지 않는다 — 스크롤로만 깨어난다).
                 let was_hover = self.hover;
                 self.hover = None;
-                if self.active {
+                if self.is_active(Axis::V) {
                     if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
                         if t.contains(p) {
                             self.hover = Some(Axis::V);
                         }
                     }
-                    if self.hover.is_none() {
-                        if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
-                            if t.contains(p) {
-                                self.hover = Some(Axis::H);
-                            }
+                }
+                if self.hover.is_none() && self.is_active(Axis::H) {
+                    if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
+                        if t.contains(p) {
+                            self.hover = Some(Axis::H);
                         }
                     }
-                    // 호버가 바뀌면 두께가 바뀐다 — 다시 그려야 보인다.
-                    if self.hover != was_hover {
-                        self.dirty = true;
-                    }
+                }
+                // 호버가 바뀌면 두께가 바뀐다 — 다시 그려야 보인다.
+                if self.hover != was_hover {
+                    self.dirty = true;
                 }
                 (ox, oy, false)
             }
             InputEvent::MouseUp { .. } => {
-                let was = self.drag.is_some();
-                self.drag = None;
-                if was {
-                    self.wake(); // 놓는 순간부터 다시 카운트 — 곧바로 사라지지 않는다
+                let was = self.drag.take();
+                if let Some((axis, _)) = was {
+                    self.wake(axis); // 놓는 순간부터 다시 카운트 — 곧바로 사라지지 않는다
                 }
-                (ox, oy, was)
+                (ox, oy, was.is_some())
             }
             _ => (ox, oy, false),
         }
     }
 
-    /// 스크롤/드래그 활동 → 표시(1단계) + 숨김 마감 연기.
-    fn wake(&mut self) {
-        if !self.active {
+    /// 그 축의 스크롤/드래그 활동 → 표시(1단계) + 숨김 마감 연기.
+    fn wake(&mut self, axis: Axis) {
+        let i = axis.idx();
+        if !self.active[i] {
             self.dirty = true; // 숨김 → 표시 전환은 다시 그려야 보인다
         }
-        self.active = true;
-        self.bumped = true;
+        self.active[i] = true;
+        self.bumped[i] = true;
     }
 
     /// 호스트가 호출 — `now_ms`가 마감을 넘겼고 호버/드래그가 아니면 숨긴다(1→0단계).
@@ -266,16 +287,21 @@ impl ScrollBars {
     pub fn tick(&mut self, now_ms: u64) -> bool {
         let delay = hide_delay_ms();
         let mut redraw = core::mem::take(&mut self.dirty);
-        // 활동이 있었거나 호버/드래그 중(2단계)이면 마감을 계속 뒤로 민다.
-        if self.bumped || self.hover.is_some() || self.drag.is_some() {
-            self.bumped = false;
-            self.hide_at_ms = now_ms.saturating_add(delay);
-            return redraw;
-        }
-        // delay 0 = 자동 숨김 안 함(사용자가 항상 보이길 택한 경우).
-        if self.active && delay != 0 && now_ms >= self.hide_at_ms {
-            self.active = false;
-            redraw = true;
+        for axis in [Axis::V, Axis::H] {
+            let i = axis.idx();
+            let engaged = matches!(self.hover, Some(a) if a == axis)
+                || matches!(self.drag, Some((a, _)) if a == axis);
+            // 그 축에 활동이 있었거나 호버/드래그 중(2단계)이면 마감을 계속 뒤로 민다.
+            if self.bumped[i] || engaged {
+                self.bumped[i] = false;
+                self.hide_at_ms[i] = now_ms.saturating_add(delay);
+                continue;
+            }
+            // delay 0 = 자동 숨김 안 함(사용자가 항상 보이길 택한 경우).
+            if self.active[i] && delay != 0 && now_ms >= self.hide_at_ms[i] {
+                self.active[i] = false;
+                redraw = true;
+            }
         }
         redraw
     }
@@ -293,14 +319,16 @@ impl ScrollBars {
         off_y: i32,
         scale: f32,
     ) {
-        if !self.active {
+        if !self.is_visible() {
             return;
         }
         let thin = sc(THIN, scale);
         let thick = sc(THICK, scale);
         let radius = thin / 2;
-        // 세로.
-        if let Some(hit) = Self::v_thumb(vp, content_h, off_y, scale, thick) {
+        // 세로 — 이 축이 깨어 있을 때만.
+        if let Some(hit) = Self::v_thumb(vp, content_h, off_y, scale, thick)
+            .filter(|_| self.is_active(Axis::V))
+        {
             let hot =
                 matches!(self.hover, Some(Axis::V)) || matches!(self.drag, Some((Axis::V, _)));
             let w = if hot { thick } else { thin };
@@ -309,8 +337,10 @@ impl ScrollBars {
             let a = if hot { ALPHA_HOT } else { ALPHA_IDLE };
             ctx.fill_round_rect_alpha(thumb, radius, theme.text_dim, a);
         }
-        // 가로.
-        if let Some(hit) = Self::h_thumb(vp, content_w, off_x, scale, thick) {
+        // 가로 — 이 축이 깨어 있을 때만.
+        if let Some(hit) = Self::h_thumb(vp, content_w, off_x, scale, thick)
+            .filter(|_| self.is_active(Axis::H))
+        {
             let hot =
                 matches!(self.hover, Some(Axis::H)) || matches!(self.drag, Some((Axis::H, _)));
             let h = if hot { thick } else { thin };
@@ -357,7 +387,27 @@ mod tests {
     #[test]
     fn hidden_until_scrolled() {
         let sb = ScrollBars::new();
-        assert!(!sb.active, "스크롤 전엔 비활성(안 보임)");
+        assert!(!sb.is_visible(), "스크롤 전엔 비활성(안 보임)");
+    }
+
+    #[test]
+    fn wheel_wakes_only_its_axis() {
+        let _g = lock_delay();
+        // 세로 휠 = 세로 막대만(가로 콘텐츠가 넘쳐도 가로 막대는 안 뜬다 — nexa-sql 사용자 09-14).
+        let mut sb = ScrollBars::new();
+        sb.on_event(&wheel(-100), vp(), 800, 400, 0, 0, 1.0);
+        assert!(sb.is_active(Axis::V) && !sb.is_active(Axis::H));
+        // 가로 휠 = 가로도 깨어난다 · 숨김은 축별.
+        sb.tick(0);
+        sb.on_event(&InputEvent::HWheel { delta: 300 }, vp(), 800, 400, 0, 0, 1.0);
+        sb.tick(1000); // 가로 마감 = 3000 · 세로 마감 = 2000
+        assert!(sb.is_active(Axis::V) && sb.is_active(Axis::H));
+        assert!(sb.tick(2000), "세로 먼저 숨김");
+        assert!(!sb.is_active(Axis::V) && sb.is_active(Axis::H));
+        assert!(sb.tick(3000) && !sb.is_visible(), "가로도 숨김");
+        // 프로그램적 표시는 둘 다.
+        sb.show();
+        assert!(sb.is_active(Axis::V) && sb.is_active(Axis::H));
     }
 
     #[test]
@@ -366,7 +416,7 @@ mod tests {
         let (_ox, oy, consumed) = sb.on_event(&wheel(-300), vp(), 200, 400, 0, 0, 1.0);
         assert!(consumed, "세로 스크롤 소비");
         assert_eq!(oy, 100, "delta/3=100");
-        assert!(sb.active, "스크롤 시 표시");
+        assert!(sb.is_visible(), "스크롤 시 표시");
         // 과도 스크롤 클램프(content_h 400 - vp.h 100 = 300).
         let (_ox, oy, _) = sb.on_event(&wheel(-100_000), vp(), 200, 400, oy, 0, 1.0);
         assert_eq!(oy, 300);
@@ -375,6 +425,7 @@ mod tests {
     #[test]
     fn drag_thumb_updates_offset() {
         let mut sb = ScrollBars::new();
+        sb.on_event(&wheel(-1), vp(), 200, 400, 0, 0, 1.0); // 보일 때만 썸이 잡힌다
         // v_thumb at off 0: thumb top = vp.y = 0. 두께 THICK=11. 썸 폭 안 x=200-11-2=187.
         let t = ScrollBars::v_thumb(vp(), 400, 0, 1.0, 11).unwrap();
         let (_ox, _oy, consumed) = sb.on_event(&down(t.x + 2, t.y + 2), vp(), 200, 400, 0, 0, 1.0);
@@ -399,10 +450,10 @@ mod tests {
         let _g = lock_delay();
         let mut sb = ScrollBars::new();
         sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
-        assert!(sb.active, "스크롤 = 1단계 표시");
+        assert!(sb.is_visible(), "스크롤 = 1단계 표시");
         sb.tick(0); // 마감 = 0 + 2000ms
-        assert!(!sb.tick(1999) && sb.active, "지연 이전엔 유지");
-        assert!(sb.tick(2000) && !sb.active, "지연이 지나면 숨김");
+        assert!(!sb.tick(1999) && sb.is_visible(), "지연 이전엔 유지");
+        assert!(sb.tick(2000) && !sb.is_visible(), "지연이 지나면 숨김");
     }
 
     #[test]
@@ -417,7 +468,7 @@ mod tests {
             // 500번 불러도 시계가 1.5초 안이면 살아 있어야 한다.
             assert!(!sb.tick(i * 3), "호출 횟수로 사라지면 안 된다(t={})", i * 3);
         }
-        assert!(sb.active);
+        assert!(sb.is_visible());
     }
 
     #[test]
@@ -428,12 +479,12 @@ mod tests {
         sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
         sb.tick(0);
         assert!(!sb.tick(499));
-        assert!(sb.tick(500) && !sb.active, "설정한 500ms에 숨는다");
+        assert!(sb.tick(500) && !sb.is_visible(), "설정한 500ms에 숨는다");
         // 0 = 자동 숨김 없음.
         set_hide_delay_ms(0);
         sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
         sb.tick(0);
-        assert!(!sb.tick(u64::MAX) && sb.active, "0이면 숨기지 않는다");
+        assert!(!sb.tick(u64::MAX) && sb.is_visible(), "0이면 숨기지 않는다");
         set_hide_delay_ms(DEFAULT_HIDE_MS); // 전역이라 되돌린다
     }
 
@@ -449,14 +500,14 @@ mod tests {
         for i in 0..50 {
             sb.tick(i * 1000);
         }
-        assert!(sb.active, "호버 중(2단계)엔 유지 — 사라지지 않는다");
+        assert!(sb.is_visible(), "호버 중(2단계)엔 유지 — 사라지지 않는다");
         // 마지막 호버 틱이 t=49_000이었으니 마감은 51_000.
         // 썸 밖으로 이동(1단계) → 남은 지연을 채운 뒤에야 숨는다(즉시 사라지지 않는다).
         sb.on_event(&mv(0, 0), vp(), 200, 400, 0, 0, 1.0);
         assert_eq!(sb.hover, None);
         sb.tick(50_000);
-        assert!(sb.active, "언호버 직후엔 아직 지연이 남아 있다");
-        assert!(sb.tick(51_000) && !sb.active, "언호버 후 지연 경과 → 숨김");
+        assert!(sb.is_visible(), "언호버 직후엔 아직 지연이 남아 있다");
+        assert!(sb.tick(51_000) && !sb.is_visible(), "언호버 후 지연 경과 → 숨김");
     }
 
     #[test]
