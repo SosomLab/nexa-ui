@@ -147,6 +147,15 @@ impl Button {
         self.pressed
     }
 
+    /// ★ 일시 상태 초기화(hover 목표 off · 눌림 해제 · 포커스 해제) — 컨트롤이 **가려지거나 다른 컨트롤로 교체될 때**
+    /// 호스트가 부른다. 안 그러면 이벤트를 못 받는 동안 hover가 1.0에 멈춰 있다가 다시 보일 때 "선택된 것처럼" 남는다
+    /// (nexa-sql 삭제 무장 버그 09-14). 다시 보일 때는 호스트가 현재 커서로 hover를 재판정한다.
+    pub fn clear_transient(&mut self) {
+        self.hover.set(false);
+        self.pressed = false;
+        self.base.focused = false;
+    }
+
     /// 색조 지정(체이닝 · 08-17) — Safe(초록)·Danger(붉은 벽돌)는 흰 글씨.
     #[must_use]
     pub fn with_tone(mut self, tone: ButtonTone) -> Self {

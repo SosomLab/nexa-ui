@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-14 (16차 · win)** — `Button::clear_transient`(hover·눌림·포커스 초기화 — 가려지거나 교체될 때 호스트가 부른다).
 - **2026-09-14 (15차 · win)** — `ControlBase.enabled` + `Control::set_enabled/is_enabled`(전 컨트롤 상속) · `Button` 비활성 = 입력·hover·포커스 무시 · 흐린 글자 + 바탕 한 겹.
 - **2026-09-14 (14차 · win)** — `TimeoutButton::with_show_remaining/set_show_remaining`(잔여 초 표시 여부 · 끄면 라벨 + 게이지만).
 - **2026-09-14 (13차 · win)** — `TimeoutButton::tick`: 카운트다운 중 매 틱 재그리기(게이지 아날로그처럼 부드럽게 · 숫자는 초 단위) · 테스트 갱신.
