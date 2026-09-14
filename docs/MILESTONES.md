@@ -13,7 +13,7 @@
 | 상태 | 항목 |
 |:--:|---|
 | ☐ | dock · tabbar · menubar 이식(dir2 → DrawCtx 어댑터) |
-| ☐ | `nexa-grid` 가상화 데이터 그리드(10만 행 · 컬럼 리사이즈/정렬/고정) |
+| 📐 | `nexa-grid` 계열([21](21-grid-family.md)) — 엔진(dir2 `VirtualRows`+`RowSource`) + ResultGrid(속도·메모리) · FileGrid · ConnectionGrid · KeymapGrid+HotkeyCapture |
 | 📐 | `nexa-edit` 다중행 편집기 코어(설계 = nexa-sql docs/07) |
 | ☐ | 텍스트 셰이핑(한글 조합 표시 · IME 인라인) |
 

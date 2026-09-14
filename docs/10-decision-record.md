@@ -25,6 +25,7 @@
 | **D-6** | 파일 아이콘 = 자체 알파 마스크 세트(beep Lucide 원장 · 3-OS 동일 · 권장) / OS 아이콘 |
 | **D-7** | 휴지통 1차 범위 — 3-OS 전부(권장 · shell32 · `.Trash` · XDG) / Windows만 |
 | **D-8** | FileList 상세 보기 = U-3 `nexa-grid`와 컬럼 모델 공유(권장) / 분리 |
+| **D-10** | `nexa-grid` 별도 크레이트(권장 · dir2 이식 단위 · 앱은 `RowSource`만 구현) / `nexa-ctl::controls::grid` 모듈 — [21 §5](21-grid-family.md) |
 | **D-9** | ★ beep ADR-0014(네이티브 파일 대화상자 · 구현 0) 정정 — 계열 전체 자체 `FilePicker`(권장) / beep만 예외 — [20 §8](20-file-management-and-dialogs.md) · beep 저장소 결정(DR-4) |
 
 ## 3. 외부 crate 원장
