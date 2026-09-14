@@ -1195,6 +1195,9 @@ impl Widget for TextBox {
                 self.ml_user_scrolled = false; // 타이핑 = 캐럿 이동 → 캐럿 추종 재개
                 if c == '\u{8}' {
                     self.edit.backspace();
+                } else if c == '\t' && self.multiline && self.room() > 0 {
+                    // 멀티라인(편집기)은 Tab = 탭 문자 삽입(nexa-sql 사용자 09-15) — 단일 행은 호스트가 포커스 이동에 쓴다.
+                    self.edit.insert('\t');
                 } else if !c.is_control() && self.accepts(c) && self.room() > 0 {
                     self.edit.insert(c);
                 }

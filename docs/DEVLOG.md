@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (1차 · win)** — `tokens::set_intent_ms/set_fade_out_ms`(hover 의도·나감 시간 전역 · nexa-sql 비노출 설정 연동) · `TextBox` 멀티라인 Tab 문자 삽입(단일 행은 포커스 이동 유지).
 - **2026-09-14 (16차 · win)** — `Button::clear_transient`(hover·눌림·포커스 초기화 — 가려지거나 교체될 때 호스트가 부른다).
 - **2026-09-14 (15차 · win)** — `ControlBase.enabled` + `Control::set_enabled/is_enabled`(전 컨트롤 상속) · `Button` 비활성 = 입력·hover·포커스 무시 · 흐린 글자 + 바탕 한 겹.
 - **2026-09-14 (14차 · win)** — `TimeoutButton::with_show_remaining/set_show_remaining`(잔여 초 표시 여부 · 끄면 라벨 + 게이지만).

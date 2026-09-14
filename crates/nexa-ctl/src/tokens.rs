@@ -262,6 +262,31 @@ pub fn pressed_color(theme: &crate::theme::Theme) -> (Color, f32) {
     }
 }
 
+/// hover 나감 시간(ms) — 전역(기본 [`motion::HOVER_OUT_MS`] · nexa-sql 설정 `ui.fade_out_ms`).
+static FADE_OUT_MS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(motion::HOVER_OUT_MS);
+
+pub fn set_fade_out_ms(ms: u32) {
+    FADE_OUT_MS.store(ms, core::sync::atomic::Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn fade_out_ms() -> u32 {
+    FADE_OUT_MS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// hover 의도 판정 시간(ms) — 전역(기본 70 · nexa-sql 설정 `ui.hover_intent_ms`) · [`HoverIntent`]·[`IntentFade`] 공용.
+static INTENT_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(70);
+
+pub fn set_intent_ms(ms: u64) {
+    INTENT_MS.store(ms, core::sync::atomic::Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn intent_ms() -> u64 {
+    INTENT_MS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// ★ **페이드 속도 속성** — 컨트롤마다 둘 중 하나를 고른다(nexa-sql 사용자 09-14).
 /// `Fast` = 바로 식별돼야 하는 대상(버튼 · 콤보 항목 · 기본 500ms) · `Slow` = 천천히 진해져도 되는 대상(행 · 기본 1000ms).
 /// 실제 ms는 프로세스 전역 설정([`set_fade_ms`])에 연계된다 — 컨트롤은 속도 이름만 안다.
@@ -360,7 +385,7 @@ impl Fade {
     /// hover 기본값 — [`hover_in_ms`](진입 · 전역 설정 가능) / [`motion::HOVER_OUT_MS`].
     #[must_use]
     pub fn hover() -> Self {
-        Self::new(hover_in_ms(), motion::HOVER_OUT_MS)
+        Self::new(hover_in_ms(), fade_out_ms())
     }
 
     /// 버튼용 — [`button_hover_in_ms`](기본 500ms · 행보다 빠르게) / [`motion::HOVER_OUT_MS`].
@@ -372,7 +397,7 @@ impl Fade {
     /// 속도 속성으로 — 진입 = [`FadeSpeed::in_ms`] · 나감 = [`motion::HOVER_OUT_MS`].
     #[must_use]
     pub fn at(speed: FadeSpeed) -> Self {
-        Self::new(speed.in_ms(), motion::HOVER_OUT_MS)
+        Self::new(speed.in_ms(), fade_out_ms())
     }
 
     /// 목표만 바꾼다 — **지금 진행도는 그대로 둔다**.
@@ -638,7 +663,7 @@ impl IntentFade {
         if self.want != self.applied {
             match self.since {
                 None => self.since = Some(now_ms),
-                Some(s) if now_ms.saturating_sub(s) >= Self::INTENT_MS => {
+                Some(s) if now_ms.saturating_sub(s) >= intent_ms() => {
                     self.applied = self.want;
                     self.fade.set(self.want);
                     self.since = None;
@@ -729,7 +754,7 @@ impl<T: Copy + PartialEq> HoverIntent<T> {
             return None;
         }
         let (t, at) = self.pending?;
-        if now_ms.saturating_sub(at) < Self::INTENT_MS {
+        if now_ms.saturating_sub(at) < intent_ms() {
             return None;
         }
         self.pending = None;
