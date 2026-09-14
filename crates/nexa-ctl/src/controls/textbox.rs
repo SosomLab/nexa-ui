@@ -67,6 +67,9 @@ pub struct TextBox {
     /// 사용자가 휠/바로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
     /// vscroll/mhscroll을 그대로 존중(자유 스크롤). 편집(캐럿 이동) 시 거짓으로 리셋.
     ml_user_scrolled: bool,
+    /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
+    line_numbers: bool,
+    gutter_px: std::cell::Cell<i32>,
     /// 멀티라인 스크롤바(08-18 · 대화 입력창과 동일 컨트롤 · 상하+좌우 · 자동 숨김).
     ml_bars: super::ScrollBars,
     /// 멀티라인 콘텐츠 크기 (content_w, content_h) px — paint가 실측해 캐시하고
@@ -126,6 +129,8 @@ impl TextBox {
             vscroll: std::cell::Cell::new(0),
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
+            line_numbers: false,
+            gutter_px: std::cell::Cell::new(0),
             ml_bars: super::ScrollBars::new(),
             ml_content: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
@@ -136,6 +141,17 @@ impl TextBox {
     /// `true` = 다시 그려야 한다.
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.ml_bars.tick(now_ms)
+    }
+
+    /// 줄번호 거터 켜기/끄기(멀티라인에서만 그려진다 · 기본 끔).
+    pub fn set_line_numbers(&mut self, on: bool) {
+        self.line_numbers = on;
+    }
+
+    /// 줄번호 거터 폭(마지막 페인트 실측 · 0 = 없음).
+    #[must_use]
+    pub fn gutter_width(&self) -> i32 {
+        self.gutter_px.get()
     }
 
     /// 멀티라인 오버레이 스크롤바가 지금 보이는가 — 호스트가 페이드 타이머(≈30ms)를 돌릴지 정하는 근거(09-14).
@@ -535,12 +551,21 @@ impl TextBox {
         ctx.select_font(FontSlot::Base, false);
         let th = ctx.text_height();
         let lh = self.line_h();
-        let tx = b.x + self.s(10);
+        let text = self.edit.text();
+        // 줄번호 거터 폭 — 논리 줄 수의 자릿수 × 숫자 폭 + 여백(줄 수가 변해도 자릿수가 같으면 폭 불변).
+        let logical_count = text.split('\n').count().max(1);
+        let gw = if self.line_numbers && self.multiline {
+            let digits = logical_count.to_string().len().max(2) as i32;
+            digits * ctx.text_width("0") + self.s(14)
+        } else {
+            0
+        };
+        self.gutter_px.set(gw);
+        let tx = b.x + self.s(10) + gw;
         let top0 = b.y + self.s(8);
         let avail = (b.right() - self.s(10) - tx).max(self.s(20));
 
         // 표시 텍스트 — 조합 중이면 캐럿 자리에 preedit를 끼워 그린다(편집 불변).
-        let text = self.edit.text();
         let chars: Vec<char> = text.chars().collect();
         let caret_i = self.edit.caret().min(chars.len());
         let preedit_n = self.edit.preedit().chars().count();
@@ -663,6 +688,17 @@ impl TextBox {
             None
         };
 
+        // 거터 배경·구분선(텍스트보다 먼저 · 가로 스크롤 무관).
+        if gw > 0 {
+            let gr = Rect::new(b.x + 1, b.y + 1, self.s(10) + gw - self.s(4), b.h - 2);
+            ctx.fill_rect(gr, theme.panel_bg_alt);
+            ctx.fill_rect(Rect::new(gr.right(), b.y + 1, 1, b.h - 2), theme.border);
+        }
+        // 소프트 행 → 논리 줄 번호(행 시작이 논리 줄 시작이면 번호 · 접힌 나머지 행은 빈칸).
+        let logical_starts: Vec<usize> = Self::logical_lines(&display)
+            .into_iter()
+            .map(|(st, _)| st)
+            .collect();
         let mut lay = self.line_lay.borrow_mut();
         lay.clear();
         let dx = tx - hs; // 가로 스크롤 반영 시작 x
@@ -670,6 +706,25 @@ impl TextBox {
         for (vi, li) in (top..lines.len().min(top + rows)).enumerate() {
             let (start_idx, line_str) = &lines[li];
             let y = top0 + (vi as i32) * lh;
+            if gw > 0 {
+                if let Ok(n) = logical_starts.binary_search(start_idx) {
+                    let num = (n + 1).to_string();
+                    let nw = ctx.text_width(&num);
+                    let gx = b.x + self.s(10) + gw - self.s(8) - nw;
+                    let is_caret_line = li == caret_line;
+                    ctx.text(
+                        gx,
+                        y,
+                        Rect::new(b.x, b.y, self.s(10) + gw, b.h),
+                        &num,
+                        if is_caret_line {
+                            theme.text
+                        } else {
+                            theme.text_dim
+                        },
+                    );
+                }
+            }
             let view = Rect::new(tx, y, avail, lh);
             let mut w = Vec::new();
             ctx.text_prefix_widths(line_str, &mut w);
@@ -721,7 +776,7 @@ impl TextBox {
             ctx,
             theme,
             b,
-            (content_w + self.s(20)).max(b.w),
+            (content_w + self.s(20) + gw).max(b.w),
             content_h.max(b.h),
             hs,
             (top as i32) * lh,

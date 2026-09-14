@@ -10,7 +10,7 @@
 //! pressed = 더 진한 배경 + 아이콘 1px 내림(눌림 식별). 클릭은 [`Toolbar::take_clicked`] 1회성.
 
 use super::{image_fit_contain, Control, ControlBase};
-use crate::draw::DrawCtx;
+use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
 use crate::theme::{Color, IconImage, Theme};
@@ -21,6 +21,8 @@ use std::rc::Rc;
 /// 항목 아이콘 종류.
 #[derive(Clone, Debug)]
 pub enum ToolIcon {
+    /// 텍스트 글리프(▶ ≡ ⚙ 등 · 09-14 nexa-sql — 아이콘 세트가 오기 전의 자리 · 테마 기준색 · hover = accent).
+    Glyph(String),
     /// 이미지(투명 배경 RGBA) — **원본 색 그대로**.
     Image(Rc<IconImage>),
     /// SVG 유래 알파 마스크 — **테마 기준색 틴트**(hover/pressed = accent).
@@ -383,6 +385,23 @@ impl Widget for Toolbar {
                 slot.h - pad * 2,
             );
             match &it.icon {
+                ToolIcon::Glyph(g) => {
+                    let color = if is_hover || is_pressed {
+                        theme.accent
+                    } else {
+                        theme.text
+                    };
+                    ctx.select_font(FontSlot::Base, false);
+                    let gw = ctx.text_width(g);
+                    let gh = ctx.text_height();
+                    ctx.text(
+                        icon_area.x + (icon_area.w - gw) / 2,
+                        icon_area.y + (icon_area.h - gh) / 2,
+                        slot,
+                        g,
+                        color,
+                    );
+                }
                 ToolIcon::Image(img) => {
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, img, slot);
