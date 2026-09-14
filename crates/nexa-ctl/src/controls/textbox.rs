@@ -408,6 +408,19 @@ impl TextBox {
 
     /// 선택 텍스트(복사 — ① 08-13). 위젯은 OS 클립보드를 모른다 — 호스트가 잇는다.
     #[must_use]
+    /// 캐럿의 **문자 인덱스**(호스트가 "캐럿 위치의 문장" 같은 것을 계산 — nexa-sql Ctrl+Enter 한 문장 실행 · 09-14).
+    /// 선택이 있으면 head(움직이는 쪽)다. 바이트 오프셋이 필요하면 호스트가 `text().char_indices()`로 바꾼다.
+    #[must_use]
+    pub fn caret(&self) -> usize {
+        self.edit.caret()
+    }
+
+    /// 선택 범위(문자 인덱스 · 정렬됨). 없으면 `None`.
+    #[must_use]
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        self.edit.selection()
+    }
+
     pub fn copy_selection(&self) -> Option<String> {
         self.base.focused.then(|| self.edit.selected_text())?
     }
