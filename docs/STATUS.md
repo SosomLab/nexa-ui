@@ -2,6 +2,12 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-14 (1차 · win) — 설계: 파일 관리 · 파일 대화상자(20) — 3-OS 동일 UI · 계층 확장
+
+**요청**(사용자 · nexa-sql 세션): OS별 차이 없는 동일 UI · 파일 관리·파일 Dialog 대폭 개선 · 컨트롤 라이브러리 위에 계층 구조로 확장.
+**설계** [20](20-file-management-and-dialogs.md): 원칙(네이티브 대화상자 0 · OS 차이는 `nexa-fs`에만 · 원자→조합→조립→앱) · `nexa-fs`(places·listing·sort·ops·watch(dir2 fsprobe 이식)·naming·kind·path) → `nexa-ctl` 파일 컨트롤 6종 + `Overlay` z 스택 → `nexa-dlg`(Dialog·MessageBox·Prompt·Progress·FilePicker 4종) → 앱. 대화상자 개선 12항(키보드 우선·경로 편집·자연 정렬·필터·저장 검증·최근/즐겨찾기·외부 변경 반영…). 모달 = 창 안 오버레이(3-OS 동일).
+**보정**: `nexa-fs`는 dir2 `nexa-vfs`·`nexa-ops`·`nexa-tree`(std 전용) **추출** · beep ADR-0014(네이티브 대화상자 결정 · 구현 0)와 충돌 → **D-9**. **⏳ 사용자**: D-4(모달) · D-5(별도 크레이트) · D-6(아이콘) · D-7(휴지통 범위) · D-8(FileList=nexa-grid 공유) · **D-9(beep ADR-0014 정정)**. **다음**: D-5 답 → F-1 `nexa-fs`. → [journal](journal/2026-09-14.md)
+
 ## 2026-09-12 (2차 · mac) — ★ `nexa-font` 신설 · `Rect::intersection` · nexa-sql이 첫 소비자로 연결
 
 **요청**(사용자): *"한글 처리와 고정폭 폰트 등을 잘 지원"* · *"쿼리·결과 파트 외에는 일반 폰트 · 영역별 폰트 구성"*.

@@ -17,6 +17,11 @@
 | 📐 | `nexa-edit` 다중행 편집기 코어(설계 = nexa-sql docs/07) |
 | ☐ | 텍스트 셰이핑(한글 조합 표시 · IME 인라인) |
 
+## U1b — 파일 관리 · 파일 대화상자([20](20-file-management-and-dialogs.md))
+| 상태 | 항목 |
+|:--:|---|
+| 📐 | `nexa-fs`(OS 차이를 가두는 층) · `nexa-ctl` 파일 컨트롤 6종 + `Overlay` · `nexa-dlg`(FilePicker·MessageBox·Prompt·Progress) — 네이티브 대화상자 0 |
+
 ## U2 — 소비자 이관
 | 상태 | 항목 |
 |:--:|---|
