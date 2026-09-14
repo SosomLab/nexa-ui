@@ -110,6 +110,8 @@ pub struct TextBox {
     ml_content: std::cell::Cell<(i32, i32)>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
+    /// ★ 단일 행 hover 페이드(회색 계열 · `Slow` 1초 · nexa-sql 사용자 09-14) — 멀티라인(편집기)은 제외.
+    hover: crate::tokens::Fade,
     /// 구문 강조(멀티라인 · 옵션) — 줄 단위 스팬을 색으로 그린다.
     highlighter: Option<Rc<dyn crate::highlight::Highlighter>>,
     /// 세로 안내선(글자 열 · 예 `[80]` · 여러 개) — 멀티라인 고정폭에서 그린다.
@@ -173,6 +175,7 @@ impl TextBox {
             ml_bars: super::ScrollBars::new(),
             ml_content: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
+            hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Slow),
             highlighter: None,
             rulers: Vec::new(),
             whitespace: WhitespaceStyle::default(),
@@ -182,7 +185,15 @@ impl TextBox {
     /// 멀티라인 스크롤바 시간 틱(08-18 · 자동 숨김) — 호스트(프로필)가 부른다.
     /// `true` = 다시 그려야 한다.
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        self.ml_bars.tick(now_ms)
+        let a = self.ml_bars.tick(now_ms);
+        let b = self.hover.tick(now_ms);
+        a || b
+    }
+
+    /// hover 페이드가 움직이는 중인가(호스트가 프레임을 예약할지).
+    #[must_use]
+    pub fn is_animating(&self) -> bool {
+        self.hover.is_animating()
     }
 
     /// 줄번호 거터 켜기/끄기(멀티라인에서만 그려진다 · 기본 끔).
@@ -963,6 +974,11 @@ impl Widget for TextBox {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // hover 목표(단일 행만) — 밝기는 `tick`이 옮긴다.
+        if let InputEvent::MouseMove { x, y } = *ev {
+            self.hover
+                .set(!self.multiline && self.base.bounds.contains(Point { x, y }));
+        }
         // 우클릭 편집 메뉴가 열려 있으면 가장 먼저 먹는다(팝업 최상위).
         if self.ctx_menu.is_open() {
             let menu_rect = self.ctx_menu.bounds();
@@ -1279,6 +1295,11 @@ impl Widget for TextBox {
         }
         let b = self.base.bounds;
         ctx.fill_round_rect(b, self.s(6), theme.field_bg);
+        // hover — 전경색(회색 계열)을 진행도만큼 얹는다(서서히 진해짐 · 색을 새로 만들지 않는다).
+        let hov = crate::tokens::hover_alpha(false, self.hover.value());
+        if hov > 0.0 {
+            ctx.fill_round_rect_alpha(b, self.s(6), theme.text, hov);
+        }
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
         self.draw_focus_ring(ctx, theme, b);
 

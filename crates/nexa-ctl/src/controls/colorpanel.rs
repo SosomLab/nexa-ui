@@ -230,6 +230,16 @@ impl ColorPanel {
         }
     }
 
+    /// hex 입력란 hover 페이드 틱 — 다시 그려야 하면 true.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.hex.tick(now_ms)
+    }
+
+    #[must_use]
+    pub fn is_animating(&self) -> bool {
+        self.hex.is_animating()
+    }
+
     pub fn set_scale(&mut self, scale: f32) {
         self.base.scale = scale;
         self.hex.set_scale(scale);
