@@ -195,6 +195,22 @@ pub mod motion {
     }
 }
 
+/// hover 진입 시간(ms) — 프로세스 전역. 설정 한 번으로 **모든 hover 페이드**(버튼·콤보·트리·그리드 행)에 즉시 반영
+/// (nexa-sql 사용자 09-14 "1000ms는 설정에 반영" · 스크롤바 숨김 지연과 같은 핫스왑 원칙). 0 = 즉시.
+static HOVER_IN_MS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(motion::HOVER_IN_MS);
+
+/// hover 진입 시간을 바꾼다(다음에 만들어지는 [`Fade::hover`]부터 적용).
+pub fn set_hover_in_ms(ms: u32) {
+    HOVER_IN_MS.store(ms, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 hover 진입 시간(ms).
+#[must_use]
+pub fn hover_in_ms() -> u32 {
+    HOVER_IN_MS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// ★ **hover 오버레이 알파** — 선택 여부와 진행도(0~1)로 정해지는 단일 원천.
 ///
 /// 컨트롤마다 알파를 손으로 고르면 같은 hover가 곳마다 다르게 보인다. 여기 한 군데서 정한다.
@@ -255,10 +271,10 @@ impl Fade {
         }
     }
 
-    /// hover 기본값 — [`motion::HOVER_IN_MS`] / [`motion::HOVER_OUT_MS`].
+    /// hover 기본값 — [`hover_in_ms`](진입 · 전역 설정 가능) / [`motion::HOVER_OUT_MS`].
     #[must_use]
-    pub const fn hover() -> Self {
-        Self::new(motion::HOVER_IN_MS, motion::HOVER_OUT_MS)
+    pub fn hover() -> Self {
+        Self::new(hover_in_ms(), motion::HOVER_OUT_MS)
     }
 
     /// 목표만 바꾼다 — **지금 진행도는 그대로 둔다**.
