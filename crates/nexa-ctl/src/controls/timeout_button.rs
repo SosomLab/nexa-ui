@@ -105,14 +105,14 @@ impl TimeoutButton {
     /// 시각 주입 — 만료되면 **자동 발화**하고 `true`(재그리기 필요)를 준다.
     /// 남은 시간 표시가 바뀌어도 `true`.
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        let before = self.remaining_secs();
         self.now_ms = now_ms;
         if !self.done && self.expired() {
             self.fired = Some(FiredBy::Timeout);
             self.done = true;
             return true;
         }
-        before != self.remaining_secs()
+        // 카운트다운 중엔 매 틱 다시 그린다 — 게이지가 **아날로그처럼 부드럽게** 차오른다(숫자는 초 단위 · nexa-sql 사용자 09-14).
+        self.started_ms.is_some() && !self.done
     }
 
     /// 남은 시간(ms · 시작 전이면 총 시간).
@@ -350,13 +350,16 @@ mod tests {
     }
 
     #[test]
-    fn countdown_reports_remaining_and_redraw_on_second_change() {
+    fn countdown_reports_remaining_and_redraws_every_tick_for_smooth_gauge() {
         let (mut t, _) = btn();
+        assert!(!t.tick(500), "시작 전엔 재그리기 없음");
         t.start(0);
         assert_eq!(t.remaining_secs(), 60);
         assert!(t.tick(1_000), "초 단위가 바뀌면 재그리기");
         assert_eq!(t.remaining_secs(), 59);
-        assert!(!t.tick(1_100), "같은 초 안에서는 재그리기 불필요");
+        // 게이지는 아날로그처럼 부드럽게 — 같은 초 안이라도 카운트다운 중엔 매 틱 다시 그린다(nexa-sql 사용자 09-14).
+        assert!(t.tick(1_100), "카운트다운 중엔 매 틱 재그리기(게이지)");
+        assert_eq!(t.remaining_secs(), 59, "숫자는 초 단위 그대로");
         assert!(!t.expired());
     }
 
