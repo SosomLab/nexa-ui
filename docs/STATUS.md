@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-14 (3·4차 · win) — TabBar 이식 ✅ · 블록 선택 ✅ · ★ 구문 강조 엔진(highlight) ✅ · 안내선·공백 표시 ✅
+
+`TabBar`(single ◀▶/드래그 · multiline · `TabAction`) · TextBox 선택 연결 블록 · **`highlight.rs`**(데이터 주도 `SyntaxSpec` · `.nexa-syntax` 파서 · 내장 SQL · `to_html` 서식 복사) · `Theme.syn_*` 4색 · TextBox `set_highlighter/set_rulers/set_whitespace`. 186 테스트 green · clippy 0. 정규식 엔진(자체 NFA)은 후속 — `.sublime-syntax` 호환·찾기 패널·인텔리전스가 같이 쓴다. → [journal](journal/2026-09-14.md)
+
 ## 2026-09-14 (2차 · win) — 설계: 그리드 계열(21) — 엔진 1 + 특화 4(결과·파일·접속·단축키)
 
 **요청**(사용자 · nexa-sql 세션): 그리드들은 골격 공유·상속 활용 · dir2 grid 차용 · 결과 그리드 속도·메모리 최우선 · 단축키 설정 그리드 + 캡처 창. → [21](21-grid-family.md): `VirtualRows<S: RowSource>`(dir2 이식) + 오버라이드 지점 표 + `write_cell` 할당 0 훅 + `HotkeyCapture`(clip 단축키 행 이식). **⏳ 사용자**: D-10(별도 크레이트) + D-4~D-9. **다음**: G-1(이식 + DrawCtx 어댑터 · D-3). → [journal](journal/2026-09-14.md)

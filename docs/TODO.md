@@ -5,7 +5,8 @@
 | ID | 우선 | 규모 | 항목 | 의존 | 상태 |
 |---|:--:|:--:|---|---|:--:|
 | **U-1** | P0 | 소 | nexa-sql에서 `nexa-ctl` path 의존 + 창 열어 컨트롤 1개 그리기(수직 슬라이스) | — | ☐ |
-| **U-2** | P0 | 중 | dir2 `widgets/{dock,tabbar,menubar}` 이식 — `DrawCtx` 합집합(D-3) 후 어댑터 | D-3 | ☐ |
+| **U-2** | P0 | 중 | dir2 `widgets/{dock,tabbar,menubar}` 이식 — ✅ tabbar(09-14) · ✅ menubar(pulldown) · ☐ dock — `DrawCtx` 합집합(D-3) 후 어댑터 | D-3 | 🚧 |
+| **U-4** | P1 | 중 | 자체 정규식 엔진(Thompson NFA · 캡처 · 외부 crate 0) → `.sublime-syntax` 컨텍스트 호환 · 강조 행 시작 상태 캐시 · 찾기 패널 · `TokenKind::Builtin`(`syn_builtin`) | — | ☐ |
 | **U-3** | P0 | 대 | `nexa-grid` — 가상화 행 · 컬럼 모델(dir2 `columns.rs`) · 셀 편집 · 클립보드 복사(TSV) | U-2 | ☐ |
 | **G-1~G-6** | P0 | 대 | `nexa-grid` 계열([21](21-grid-family.md)) — G-1 dir2 rows/columns 이식+DrawCtx 어댑터 · G-2 `write_cell`/`CellPainter`/`Hierarchy` 훅 · G-3 ResultGrid(컬럼 저장소) · G-4 ConnectionGrid · G-5 FileGrid · G-6 KeymapGrid+HotkeyCapture | D-3 D-10 | ☐ |
 | **U-4** | P1 | 중 | 셰이퍼 검토 — 한글 조합 중 글자 인라인 표시 · 합자 · `rustybuzz`(MIT) vs 자체 | — | ☐ |
