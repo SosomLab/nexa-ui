@@ -138,6 +138,12 @@ impl TextBox {
         self.ml_bars.tick(now_ms)
     }
 
+    /// 멀티라인 오버레이 스크롤바가 지금 보이는가 — 호스트가 페이드 타이머(≈30ms)를 돌릴지 정하는 근거(09-14).
+    #[must_use]
+    pub fn scrollbars_visible(&self) -> bool {
+        self.multiline && self.ml_bars.is_visible()
+    }
+
     /// 허용 문자 필터 지정(08-22) — 타이핑·붙여넣기 공통. None = 전부 허용(기본).
     pub fn set_char_filter(&mut self, f: Option<fn(char) -> bool>) {
         self.char_filter = f;
