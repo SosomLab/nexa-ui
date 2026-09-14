@@ -211,6 +211,20 @@ pub fn hover_in_ms() -> u32 {
     HOVER_IN_MS.load(core::sync::atomic::Ordering::Relaxed)
 }
 
+/// **버튼** hover 진입 시간(ms) — 행보다 빠르게(기본 500 · nexa-sql 사용자 09-14 "클릭 준비가 된 버튼을 식별").
+static BUTTON_HOVER_IN_MS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(500);
+
+/// 버튼 hover 진입 시간을 바꾼다(다음에 만들어지는 [`Fade::button_hover`]부터).
+pub fn set_button_hover_in_ms(ms: u32) {
+    BUTTON_HOVER_IN_MS.store(ms, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 버튼 hover 진입 시간(ms).
+#[must_use]
+pub fn button_hover_in_ms() -> u32 {
+    BUTTON_HOVER_IN_MS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// ★ **hover 오버레이 알파** — 선택 여부와 진행도(0~1)로 정해지는 단일 원천.
 ///
 /// 컨트롤마다 알파를 손으로 고르면 같은 hover가 곳마다 다르게 보인다. 여기 한 군데서 정한다.
@@ -275,6 +289,12 @@ impl Fade {
     #[must_use]
     pub fn hover() -> Self {
         Self::new(hover_in_ms(), motion::HOVER_OUT_MS)
+    }
+
+    /// 버튼용 — [`button_hover_in_ms`](기본 500ms · 행보다 빠르게) / [`motion::HOVER_OUT_MS`].
+    #[must_use]
+    pub fn button_hover() -> Self {
+        Self::new(button_hover_in_ms(), motion::HOVER_OUT_MS)
     }
 
     /// 목표만 바꾼다 — **지금 진행도는 그대로 둔다**.

@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-14 (6차 · win)** — `Button`: hover 진입 = 별도 전역 `button_hover_in_ms`(기본 500 · `Fade::button_hover`) · 눌림 = 선택색 위 전경색 0.10 한 겹 + 내용 1px 내려앉음(`PRESSED_EXTRA`) · `is_animating`/`is_pressed` 공개.
 - **2026-09-14 (5차 · win)** — `tokens::set_hover_in_ms/hover_in_ms`(hover 진입 시간 프로세스 전역 · `Fade::hover()`가 읽음 · nexa-sql 설정 `grid.hover_fade` 1000ms → 버튼·콤보·트리·그리드 행 공통 반영).
 - **2026-09-14 (4차 · win)** — `ScrollBars` **축별 표시**(nexa-sql 사용자 09-14 "상하 스크롤 때 좌우 막대는 안 보여도 된다"): 세로 휠 = 세로만 · 가로 휠 = 가로만 · 숨김 시각·활동 플래그 축별 · 보이는 축의 썸만 잡힘 · `show()`는 둘 다 · 테스트 +1(`wheel_wakes_only_its_axis`).
 - **2026-09-14 (3차 · win)** — nexa-sql 요구로 컨트롤 보강: `TextBox` 캐럿/선택 인덱스 공개 · 멀티라인 붙여넣기 탭 보존 · `scrollbars_visible()` · **줄번호 거터**(`set_line_numbers`) · `ToolIcon::Glyph`. TabBar 이식(dir2 → nexa-ctl · U-2) 진행. → [journal](journal/2026-09-14.md)

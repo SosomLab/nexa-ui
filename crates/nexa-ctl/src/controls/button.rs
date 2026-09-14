@@ -13,6 +13,9 @@ use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::{IconImage, Theme};
 use crate::tokens::{hover_alpha, Fade};
+
+/// 눌림 때 선택색 위에 더 얹는 전경색 알파(선택색보다 한 단계 어둡게).
+const PRESSED_EXTRA: f32 = 0.10;
 use crate::widget::{Invalidations, Widget};
 use std::rc::Rc;
 
@@ -94,7 +97,7 @@ impl Button {
             clicked: false,
             tone: ButtonTone::Default,
             font: FontSlot::Base,
-            hover: Fade::hover(),
+            hover: Fade::button_hover(),
         }
     }
 
@@ -111,13 +114,25 @@ impl Button {
             clicked: false,
             tone: ButtonTone::Default,
             font: FontSlot::Base,
-            hover: Fade::hover(),
+            hover: Fade::button_hover(),
         }
     }
 
     /// ★ hover 페이드 틱 — 밝기가 변했으면 `true`(그때만 다시 그린다).
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.hover.tick(now_ms)
+    }
+
+    /// hover 페이드가 움직이는 중인가(호스트가 다음 프레임을 예약할지).
+    #[must_use]
+    pub fn is_animating(&self) -> bool {
+        self.hover.is_animating()
+    }
+
+    /// 눌린 상태(마우스 다운 ~ 업).
+    #[must_use]
+    pub fn is_pressed(&self) -> bool {
+        self.pressed
     }
 
     /// 색조 지정(체이닝 · 08-17) — Safe(초록)·Danger(붉은 벽돌)는 흰 글씨.
@@ -323,6 +338,9 @@ impl Widget for Button {
                 if hov > 0.0 {
                     ctx.fill_round_rect_alpha(b, radius, theme.text, hov);
                 }
+                if self.pressed {
+                    ctx.fill_round_rect_alpha(b, radius, theme.text, PRESSED_EXTRA);
+                }
                 ctx.stroke_round_rect(b, radius, theme.border, 1.0);
             }
             ButtonMode::Normal => {
@@ -351,7 +369,13 @@ impl Widget for Button {
                     };
                     ctx.fill_round_rect_alpha(b, radius, over, hov);
                 }
+                // ★ 눌림 = 선택색 배경 위에 전경색을 한 겹 더(사용자 09-14 "선택된 색보다 조금 더 어둡게") +
+                //   내용물 1px 내려앉음 — 누른 버튼이 한눈에 식별된다.
+                if self.pressed {
+                    ctx.fill_round_rect_alpha(b, radius, theme.text, PRESSED_EXTRA);
+                }
                 ctx.stroke_round_rect(b, radius, theme.border, 1.0);
+                let sink = if self.pressed { self.s(1) } else { 0 };
 
                 // 아이콘 변 = 공용 단일 원천(콤보/Choose/트리와 동일 — 드리프트 방지).
                 let icon = self.s(super::LEADING_ICON);
@@ -370,8 +394,8 @@ impl Widget for Button {
                     self.halign(),
                 );
                 // 세로 배치 = VAlign(기본 중앙).
-                let icon_y = self.align_y(b, icon, self.s(4));
-                let text_y = self.align_y(b, th, self.s(4));
+                let icon_y = self.align_y(b, icon, self.s(4)) + sink;
+                let text_y = self.align_y(b, th, self.s(4)) + sink;
                 if let (Some(x), Some(img)) = (img_x, self.image.as_deref()) {
                     let boxr = Rect::new(x, icon_y, icon, icon);
                     let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
