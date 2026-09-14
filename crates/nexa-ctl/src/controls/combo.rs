@@ -22,7 +22,7 @@ use crate::edit::EditState;
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::{IconImage, Theme};
-use crate::tokens::{hover_alpha, Fade};
+use crate::tokens::{hover_alpha, Fade, FadeSpeed, IntentFade};
 use crate::widget::{Invalidations, Widget};
 use std::rc::Rc;
 
@@ -122,6 +122,9 @@ pub struct ComboCore {
     /// 위의 [`ComboCore::hover`]와 다른 것이다 — 저건 **열린 목록 안의 하이라이트**,
     /// 이건 **닫힌 박스 자체의 hover**다.
     box_hover: Fade,
+    /// ★ 열린 목록 항목의 hover — 의도 코얼레싱(70ms 머문 마지막 목표만) + 버튼 속도 페이드(500ms).
+    /// 키보드 이동·열릴 때의 기본 항목은 즉시(`jump`). `hover`는 이 값이 적용될 때 따라온다.
+    item_fade: IntentFade,
     /// 팝업이 넘지 못하는 **뷰포트 하한 y**(08-20 — 창 아래 끝에서 목록이
     /// 잘려 선택 불가). None = 종전대로 아래로만. 호스트가 창/위젯 경계를 준다.
     viewport_bottom: Option<i32>,
@@ -135,7 +138,9 @@ impl ComboCore {
             selected,
             open: false,
             hover: selected,
-            box_hover: Fade::hover(),
+            // 콤보는 클릭 대상 — 박스·항목 모두 `Fast`(사용자 09-14 500ms).
+            box_hover: Fade::at(FadeSpeed::Fast),
+            item_fade: IntentFade::buttons(),
             changed: false,
             viewport_bottom: None,
         }
@@ -171,9 +176,31 @@ pub trait ComboControl: Control {
     /// 공유 콤보 상태 가변(구현 필수).
     fn core_mut(&mut self) -> &mut ComboCore;
 
-    /// ★ 닫힌 박스 hover 페이드 틱 — 밝기가 변했으면 `true`(그때만 다시 그린다).
+    /// ★ hover 페이드 틱(닫힌 박스 + 열린 목록 항목) — 밝기가 변했으면 `true`(그때만 다시 그린다).
     fn tick_hover(&mut self, now_ms: u64) -> bool {
-        self.core_mut().box_hover.tick(now_ms)
+        let c = self.core_mut();
+        let a = c.box_hover.tick(now_ms);
+        let b = c.open && c.item_fade.tick(now_ms);
+        if c.open {
+            // 의도가 적용된 항목이 곧 Enter 대상(hover).
+            if let Some(i) = c.item_fade.current() {
+                c.hover = i;
+            }
+        }
+        a || b
+    }
+
+    /// ★ 페이드 속도 속성(박스 hover + 목록 항목) — 기본 `Fast`.
+    fn set_fade_speed(&mut self, speed: FadeSpeed) {
+        let c = self.core_mut();
+        c.box_hover = Fade::at(speed);
+        c.item_fade.set_speed(speed);
+    }
+
+    /// hover 페이드가 움직이거나 의도를 기다리는 중인가(호스트가 프레임을 예약).
+    fn hover_animating(&self) -> bool {
+        let c = self.core();
+        c.box_hover.is_animating() || (c.open && c.item_fade.is_animating())
     }
 
     /// ⇕(편집 가능=확장) vs ∨(일반) — `Choose`가 `true`로 재정의.
@@ -205,12 +232,15 @@ pub trait ComboControl: Control {
         let c = self.core_mut();
         c.open = !c.open;
         c.hover = c.selected;
+        // 열릴 때 기본 항목은 즉시 표시 · 닫히면 목록 hover 해제.
+        c.item_fade.jump(c.open.then_some(c.selected));
         inv.push(popup_or_box(b, self));
     }
     /// 드롭다운 닫기.
     fn close(&mut self, inv: &mut Invalidations) {
         if self.core().open {
             self.core_mut().open = false;
+            self.core_mut().item_fade.jump(None);
             inv.push(self.bounds());
         }
     }
@@ -222,6 +252,7 @@ pub trait ComboControl: Control {
         }
         let h = (self.core().hover as i32 + delta).clamp(0, n - 1);
         self.core_mut().hover = h as usize;
+        self.core_mut().item_fade.jump(Some(h as usize));
     }
     /// 현재 선택 값.
     fn value(&self) -> String {
@@ -388,8 +419,10 @@ pub trait ComboControl: Control {
         let mut y = pop.y + self.s(POPUP_PAD);
         for (i, it) in self.core().items.iter().enumerate() {
             let row = Rect::new(pop.x + self.s(3), y, pop.w - self.s(6), rh);
-            if i == self.core().hover {
-                ctx.fill_round_rect(row, self.s(5), theme.sel_bg);
+            // 항목 하이라이트 = 선택색이 진행도만큼 **서서히 진해진다**(키보드 이동은 즉시 1.0).
+            let v = self.core().item_fade.value(i);
+            if v > 0.0 {
+                ctx.fill_round_rect_alpha(row, self.s(5), theme.sel_bg, v);
             }
             // 선택 ✓(크기 70% — 사용자 확정 · 16→11).
             let cs = self.s(11);
@@ -1019,9 +1052,17 @@ impl Choose {
 fn combo_event<C: ComboControl + ?Sized>(c: &mut C, ev: &InputEvent, inv: &mut Invalidations) {
     match *ev {
         // ★ 닫힌 박스 hover — 목표만 바꾸고 밝기는 `tick_hover`가 옮긴다.
+        //   열린 목록은 항목 목표만 덮어쓴다(의도 코얼레싱 — 지나가는 항목은 효과에 닿지 않는다).
         InputEvent::MouseMove { x, y } => {
             let over = c.bounds().contains(Point { x, y });
             c.core_mut().box_hover.set(over);
+            if c.is_open() {
+                let t = match c.popup_hit(x, y) {
+                    Some(PopupHit::Item(i)) => Some(i),
+                    _ => None,
+                };
+                c.core_mut().item_fade.set(t);
+            }
         }
         InputEvent::MouseDown { x, y, .. } => {
             let badge = c.help_badge_rect(c.bounds());

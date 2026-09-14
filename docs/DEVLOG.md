@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-14 (7차 · win)** — ★ `tokens::IntentFade`(hover **의도 코얼레싱** + 페이드 · 사건은 목표 덮어쓰기만 · 70ms 머문 마지막 목표만 페이드 · 이탈 즉시) · `FadeSpeed { Fast, Slow }` 컨트롤 속성(`Button::set_fade_speed` · `ComboControl::set_fade_speed` · `HoverFade/IntentFade::with_speed`) · `set_fade_ms(speed, ms)` 전역 연계 · 콤보 드롭다운 항목 hover = IntentFade(Fast · 선택색 알파 페이드 · 키보드 `jump`) · `HoverFade::jump` · 테스트 +2.
 - **2026-09-14 (6차 · win)** — `Button`: hover 진입 = 별도 전역 `button_hover_in_ms`(기본 500 · `Fade::button_hover`) · 눌림 = 선택색 위 전경색 0.10 한 겹 + 내용 1px 내려앉음(`PRESSED_EXTRA`) · `is_animating`/`is_pressed` 공개.
 - **2026-09-14 (5차 · win)** — `tokens::set_hover_in_ms/hover_in_ms`(hover 진입 시간 프로세스 전역 · `Fade::hover()`가 읽음 · nexa-sql 설정 `grid.hover_fade` 1000ms → 버튼·콤보·트리·그리드 행 공통 반영).
 - **2026-09-14 (4차 · win)** — `ScrollBars` **축별 표시**(nexa-sql 사용자 09-14 "상하 스크롤 때 좌우 막대는 안 보여도 된다"): 세로 휠 = 세로만 · 가로 휠 = 가로만 · 숨김 시각·활동 플래그 축별 · 보이는 축의 썸만 잡힘 · `show()`는 둘 다 · 테스트 +1(`wheel_wakes_only_its_axis`).

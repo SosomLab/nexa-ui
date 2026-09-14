@@ -12,7 +12,7 @@ use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::{IconImage, Theme};
-use crate::tokens::{hover_alpha, Fade};
+use crate::tokens::{hover_alpha, Fade, FadeSpeed};
 
 /// 눌림 때 선택색 위에 더 얹는 전경색 알파(선택색보다 한 단계 어둡게).
 const PRESSED_EXTRA: f32 = 0.10;
@@ -127,6 +127,18 @@ impl Button {
     #[must_use]
     pub fn is_animating(&self) -> bool {
         self.hover.is_animating()
+    }
+
+    /// ★ 페이드 속도 속성 — 기본 `Fast`(버튼은 클릭 준비를 바로 식별). 값(ms)은 전역 설정에 연계.
+    pub fn set_fade_speed(&mut self, speed: FadeSpeed) {
+        self.hover = Fade::at(speed);
+    }
+
+    /// 체이닝용 [`Button::set_fade_speed`].
+    #[must_use]
+    pub fn with_fade_speed(mut self, speed: FadeSpeed) -> Self {
+        self.set_fade_speed(speed);
+        self
     }
 
     /// 눌린 상태(마우스 다운 ~ 업).

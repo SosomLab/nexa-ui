@@ -225,6 +225,41 @@ pub fn button_hover_in_ms() -> u32 {
     BUTTON_HOVER_IN_MS.load(core::sync::atomic::Ordering::Relaxed)
 }
 
+/// ★ **페이드 속도 속성** — 컨트롤마다 둘 중 하나를 고른다(nexa-sql 사용자 09-14).
+/// `Fast` = 바로 식별돼야 하는 대상(버튼 · 콤보 항목 · 기본 500ms) · `Slow` = 천천히 진해져도 되는 대상(행 · 기본 1000ms).
+/// 실제 ms는 프로세스 전역 설정([`set_fade_ms`])에 연계된다 — 컨트롤은 속도 이름만 안다.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FadeSpeed {
+    #[default]
+    Fast,
+    Slow,
+}
+
+impl FadeSpeed {
+    /// 이 속도의 진입 시간(ms · 전역 설정값).
+    #[must_use]
+    pub fn in_ms(self) -> u32 {
+        match self {
+            FadeSpeed::Fast => button_hover_in_ms(),
+            FadeSpeed::Slow => hover_in_ms(),
+        }
+    }
+}
+
+/// 속도별 진입 시간을 바꾼다(설정 → 전 컨트롤 즉시 연계).
+pub fn set_fade_ms(speed: FadeSpeed, ms: u32) {
+    match speed {
+        FadeSpeed::Fast => set_button_hover_in_ms(ms),
+        FadeSpeed::Slow => set_hover_in_ms(ms),
+    }
+}
+
+/// 속도별 진입 시간(ms).
+#[must_use]
+pub fn fade_ms(speed: FadeSpeed) -> u32 {
+    speed.in_ms()
+}
+
 /// ★ **hover 오버레이 알파** — 선택 여부와 진행도(0~1)로 정해지는 단일 원천.
 ///
 /// 컨트롤마다 알파를 손으로 고르면 같은 hover가 곳마다 다르게 보인다. 여기 한 군데서 정한다.
@@ -294,7 +329,13 @@ impl Fade {
     /// 버튼용 — [`button_hover_in_ms`](기본 500ms · 행보다 빠르게) / [`motion::HOVER_OUT_MS`].
     #[must_use]
     pub fn button_hover() -> Self {
-        Self::new(button_hover_in_ms(), motion::HOVER_OUT_MS)
+        Self::at(FadeSpeed::Fast)
+    }
+
+    /// 속도 속성으로 — 진입 = [`FadeSpeed::in_ms`] · 나감 = [`motion::HOVER_OUT_MS`].
+    #[must_use]
+    pub fn at(speed: FadeSpeed) -> Self {
+        Self::new(speed.in_ms(), motion::HOVER_OUT_MS)
     }
 
     /// 목표만 바꾼다 — **지금 진행도는 그대로 둔다**.
@@ -352,15 +393,61 @@ impl Fade {
 /// 목록에서 커서가 A→B로 옮겨가면 **A는 꺼지는 중, B는 켜지는 중**이다. 동시에 움직이는
 /// 것은 항상 **둘뿐**이므로 항목 수와 무관하게 [`Fade`] 두 개면 충분하다
 /// (행이 1,000개여도 상태는 두 개다).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct HoverFade {
     cur: Option<usize>,
     cur_f: Fade,
     prev: Option<usize>,
     prev_f: Fade,
+    /// 새 항목이 켜질 때 쓸 속도 속성 — 행은 `Slow` · 버튼/콤보 항목은 `Fast`.
+    speed: FadeSpeed,
+}
+
+impl Default for HoverFade {
+    fn default() -> Self {
+        Self::with_speed(FadeSpeed::Slow)
+    }
 }
 
 impl HoverFade {
+    /// 속도 속성을 고른 새 값.
+    #[must_use]
+    pub fn with_speed(speed: FadeSpeed) -> Self {
+        Self {
+            cur: None,
+            cur_f: Fade::new(0, 0),
+            prev: None,
+            prev_f: Fade::new(0, 0),
+            speed,
+        }
+    }
+
+    /// 버튼 속도(`Fast` · 콤보 드롭다운 항목 등 "클릭 준비" 식별용).
+    #[must_use]
+    pub fn button() -> Self {
+        Self::with_speed(FadeSpeed::Fast)
+    }
+
+    /// 속도 속성 변경(다음에 켜지는 항목부터).
+    pub fn set_speed(&mut self, speed: FadeSpeed) {
+        self.speed = speed;
+    }
+
+    #[must_use]
+    pub fn speed(&self) -> FadeSpeed {
+        self.speed
+    }
+
+    /// 애니메이션 없이 `idx`만 켠다(키보드 이동 · 팝업 열릴 때의 기본 항목) — 이전 항목은 즉시 끈다.
+    pub fn jump(&mut self, idx: Option<usize>) {
+        self.prev = None;
+        self.prev_f = Fade::new(0, 0);
+        self.cur = idx;
+        let mut f = Fade::at(self.speed);
+        f.jump(idx.is_some());
+        self.cur_f = f;
+    }
+
     /// 지금 커서가 올라간 항목(없으면 `None`).
     pub fn set(&mut self, idx: Option<usize>) {
         if idx == self.cur {
@@ -370,7 +457,7 @@ impl HoverFade {
         let mut next = if idx.is_some() && idx == self.prev {
             self.prev_f
         } else {
-            Fade::hover()
+            Fade::at(self.speed)
         };
         next.set(true);
         let mut leaving = self.cur_f;
@@ -415,6 +502,133 @@ impl HoverFade {
             self.prev = None;
         }
         a || b
+    }
+}
+
+/// ★ **의도 코얼레싱 + 페이드** — hover 효과의 공용 부품(nexa-sql 사용자 09-14 "마우스가 거쳐 가는 모든 대상이
+/// 이벤트를 만들어 속도를 떨어뜨리면 안 되고, 최종 위치가 아닌 대상의 효과는 바로 취소").
+///
+/// - 사건(커서 이동)은 [`set`](Self::set)으로 **목표를 덮어쓰기만** 한다 — 큐 없음 · 비용 0 · 항목 수와 무관.
+/// - [`tick`](Self::tick)이 목표가 [`INTENT_MS`](Self::INTENT_MS) 동안 유지됐을 때 **한 번만** 페이드에 넘긴다.
+///   빠르게 지나간 목표는 페이드에 닿지도 않는다(= 선발생 의도 취소 · 마지막만 수행).
+/// - 목표가 바뀌면 이미 켜지던 항목은 [`HoverFade`]가 **즉시** 끄기 시작한다(꺼지는 쪽은 빠른 out).
+/// - 커서 이탈(`None`)은 기다리지 않고 바로 끈다.
+///
+/// 상태는 항목 수와 무관하게 상수 크기(목표 1 · 적용 1 · 페이드 2).
+#[derive(Clone, Copy, Debug)]
+pub struct IntentFade {
+    fade: HoverFade,
+    /// 사건이 덮어쓰는 마지막 목표(시계 없이 기록).
+    want: Option<usize>,
+    /// 페이드에 마지막으로 넘긴 목표.
+    applied: Option<usize>,
+    /// `want`가 바뀐 뒤 처음 본 `tick` 시각.
+    since: Option<u64>,
+}
+
+impl Default for IntentFade {
+    fn default() -> Self {
+        Self::rows()
+    }
+}
+
+impl IntentFade {
+    /// "머문다"로 보는 최소 시간(ms) — [`HoverIntent::INTENT_MS`]와 같은 관례.
+    pub const INTENT_MS: u64 = 70;
+
+    #[must_use]
+    pub fn new(fade: HoverFade) -> Self {
+        Self {
+            fade,
+            want: None,
+            applied: None,
+            since: None,
+        }
+    }
+
+    /// 속도 속성으로.
+    #[must_use]
+    pub fn with_speed(speed: FadeSpeed) -> Self {
+        Self::new(HoverFade::with_speed(speed))
+    }
+
+    /// 행(목록·그리드) = `Slow`.
+    #[must_use]
+    pub fn rows() -> Self {
+        Self::with_speed(FadeSpeed::Slow)
+    }
+
+    /// 버튼/콤보 항목 = `Fast`.
+    #[must_use]
+    pub fn buttons() -> Self {
+        Self::with_speed(FadeSpeed::Fast)
+    }
+
+    /// 속도 속성 변경(컨트롤 속성 연계).
+    pub fn set_speed(&mut self, speed: FadeSpeed) {
+        self.fade.set_speed(speed);
+    }
+
+    #[must_use]
+    pub fn speed(&self) -> FadeSpeed {
+        self.fade.speed()
+    }
+
+    /// 목표 덮어쓰기(커서 이동마다 · 시계 없음). 이탈은 즉시 반영.
+    pub fn set(&mut self, target: Option<usize>) {
+        if target == self.want {
+            return;
+        }
+        self.want = target;
+        self.since = None;
+        if target.is_none() {
+            self.applied = None;
+            self.fade.set(None);
+        }
+    }
+
+    /// 애니메이션 없이 `idx`를 켠다(키보드 이동 등).
+    pub fn jump(&mut self, idx: Option<usize>) {
+        self.want = idx;
+        self.applied = idx;
+        self.since = None;
+        self.fade.jump(idx);
+    }
+
+    /// 시간을 흘린다 — 의도 만료 판정 + 페이드 진행. 다시 그려야 하면 `true`.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        let mut changed = false;
+        if self.want != self.applied {
+            match self.since {
+                None => self.since = Some(now_ms),
+                Some(s) if now_ms.saturating_sub(s) >= Self::INTENT_MS => {
+                    self.applied = self.want;
+                    self.fade.set(self.want);
+                    self.since = None;
+                    changed = true;
+                }
+                Some(_) => {}
+            }
+        }
+        self.fade.tick(now_ms) || changed
+    }
+
+    /// 항목 `idx`의 밝기 0.0~1.0.
+    #[must_use]
+    pub fn value(&self, idx: usize) -> f32 {
+        self.fade.value(idx)
+    }
+
+    /// 페이드에 적용된(= 효과가 켜진/켜지는) 항목.
+    #[must_use]
+    pub fn current(&self) -> Option<usize> {
+        self.applied
+    }
+
+    /// 아직 움직이거나 기다리는 게 있나(호스트가 프레임을 예약할지).
+    #[must_use]
+    pub fn is_animating(&self) -> bool {
+        self.fade.is_animating() || self.want != self.applied
     }
 }
 
@@ -501,6 +715,39 @@ impl<T: Copy + PartialEq> HoverIntent<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intent_fade_applies_only_the_last_target_after_dwell() {
+        let mut f = IntentFade::rows();
+        f.set(Some(1));
+        f.tick(0); // since = 0
+        f.set(Some(2)); // 70ms 전에 목표 교체 — 1은 페이드에 닿지 않는다
+        f.tick(50); // since = 50 (새 목표)
+        assert_eq!(f.current(), None, "아직 머문 시간이 짧다");
+        assert!(f.is_animating(), "기다리는 중 = 프레임 유지");
+        f.tick(120);
+        assert_eq!(f.current(), Some(2), "70ms 머문 마지막 목표만 적용");
+        assert_eq!(f.value(1), 0.0, "지나간 목표는 효과 0");
+        // 이탈은 즉시.
+        f.set(None);
+        assert_eq!(f.current(), None);
+        // 키보드 점프는 즉시 1.0.
+        f.jump(Some(3));
+        assert_eq!(f.value(3), 1.0);
+    }
+
+    #[test]
+    fn hover_fade_speed_and_jump() {
+        let mut h = HoverFade::button();
+        h.jump(Some(0));
+        assert_eq!(h.value(0), 1.0);
+        h.set(Some(1));
+        assert_eq!(h.current(), Some(1));
+        assert!(h.value(0) > 0.99, "이전 항목은 꺼지기 시작(아직 틱 전)");
+        h.tick(0);
+        h.tick(1000);
+        assert_eq!(h.value(0), 0.0, "out 뒤 0");
+    }
 
     /// ★ 간격은 전부 4의 배수여야 한다 — 리듬의 근거.
     #[test]
