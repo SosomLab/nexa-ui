@@ -131,6 +131,18 @@ pub struct ComboCore {
 }
 
 impl ComboCore {
+    /// 항목 목록(읽기 — 호스트의 "목록 복사" 등).
+    #[must_use]
+    pub fn items(&self) -> &[ComboItem] {
+        &self.items
+    }
+
+    /// 선택 index.
+    #[must_use]
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     fn new(items: Vec<ComboItem>, selected: usize) -> Self {
         let selected = selected.min(items.len().saturating_sub(1));
         Self {
