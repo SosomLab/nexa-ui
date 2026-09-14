@@ -273,6 +273,12 @@ impl Widget for Button {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 비활성 = 입력 무시(hover도 없음).
+        if !self.base.enabled {
+            self.hover.set(false);
+            self.pressed = false;
+            return;
+        }
         match *ev {
             // ★ hover 목표만 바꾼다 — 밝기는 `tick`이 시간에 맞춰 옮긴다.
             InputEvent::MouseMove { x, y } => {
@@ -356,7 +362,14 @@ impl Widget for Button {
                 // 살짝 어둡게(색조 유지). 중립은 종전 그대로.
                 let on = crate::theme::Color(0x00FF_FFFF); // 색 위 흰 글씨
                 let (bg, fg) = match self.tone {
-                    ButtonTone::Default => (theme.field_bg, theme.text),
+                    ButtonTone::Default => (
+                        theme.field_bg,
+                        if self.base.enabled {
+                            theme.text
+                        } else {
+                            theme.text_dim
+                        },
+                    ),
                     ButtonTone::Safe => (dim_if(theme.ok, self.pressed), on),
                     ButtonTone::Danger => (dim_if(theme.danger, self.pressed), on),
                 };
@@ -412,7 +425,12 @@ impl Widget for Button {
             }
         }
 
-        self.draw_focus_ring(ctx, theme, b);
+        if self.base.enabled {
+            self.draw_focus_ring(ctx, theme, b);
+        } else {
+            // 비활성 = 바탕색을 한 겹 얹어 전체를 흐리게(테두리·글자 모두).
+            ctx.fill_round_rect_alpha(b, radius, theme.panel_bg, 0.45);
+        }
         let badge = self.help_badge_rect(b);
         self.draw_help_badge(ctx, theme, badge);
         self.draw_help_tip(ctx, theme, badge);

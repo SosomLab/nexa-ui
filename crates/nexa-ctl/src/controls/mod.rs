@@ -216,6 +216,8 @@ pub struct ControlBase {
     pub focused: bool,
     /// 창 활성(→ 강조색 강도 · macOS 관례).
     pub active: bool,
+    /// 사용 가능(기본 참). 거짓 = 흐리게 · 입력 무시(선택 항목이 없을 때의 Details/Delete 등 · nexa-sql 사용자 09-14).
+    pub enabled: bool,
     /// 상세 설명(도움말 툴팁 내용).
     pub help: Option<String>,
     /// 도움말 기능 사용 여부(Y = "?" 배지 표시).
@@ -241,6 +243,7 @@ impl Default for ControlBase {
             scale: 1.0,
             focused: false,
             active: true,
+            enabled: true,
             help: None,
             show_help: false,
             help_open: false,
@@ -270,6 +273,19 @@ pub trait Control: crate::widget::Widget {
     /// ⚠️ 도움말 툴팁은 여기서 닫지 않는다 — 바깥 클릭 닫기는 [`Control::handle_help_click`]이
     /// 담당한다. 호스트가 클릭마다 포커스를 재계산하는 구조에서 "?" 배지는 컨트롤 bounds
     /// 밖이라, 여기서 닫으면 "닫기→토글" 순서가 되어 재클릭 닫기가 영원히 무효화된다(08-09).
+    /// 사용 가능 여부 — 거짓이면 컨트롤은 흐리게 그리고 입력을 무시한다(구현체가 존중).
+    fn set_enabled(&mut self, on: bool) {
+        self.base_mut().enabled = on;
+        if !on {
+            self.base_mut().focused = false;
+        }
+    }
+
+    #[must_use]
+    fn is_enabled(&self) -> bool {
+        self.base().enabled
+    }
+
     fn set_focused(&mut self, on: bool) {
         self.base_mut().focused = on;
     }
