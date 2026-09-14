@@ -734,12 +734,19 @@ impl TextBox {
                 let (ls, le) = (*start_idx, *start_idx + line_len);
                 let s0 = a.max(ls);
                 let s1 = e.min(le);
-                if s1 > s0 {
+                // 줄 넘김까지 선택에 들면(다음 행으로 이어짐) 뷰포트 오른쪽 끝까지 채우고,
+                // 높이는 행 피치(lh) 전체 — 행끼리 붙은 **한 블록**으로 보인다(09-14 사용자: DBeaver·Sublime식).
+                let spans_next = e > le && li + 1 < lines.len() && a <= le;
+                if s1 > s0 || spans_next {
                     let x0 = (dx + w.get(s0 - ls).copied().unwrap_or(0)).max(vx0);
-                    let x1 = (dx + w.get(s1 - ls).copied().unwrap_or(0)).min(vx1);
+                    let x1 = if spans_next {
+                        vx1
+                    } else {
+                        (dx + w.get(s1 - ls).copied().unwrap_or(0)).min(vx1)
+                    };
                     if x1 > x0 {
                         ctx.fill_rect(
-                            Rect::new(x0, y, x1 - x0, th),
+                            Rect::new(x0, y, x1 - x0, lh),
                             if self.base.focused {
                                 theme.sel_bg
                             } else {
