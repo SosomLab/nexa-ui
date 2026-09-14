@@ -1563,8 +1563,9 @@ mod tests {
         let mut inv = Invalidations::default();
         t.set_bounds(Rect::new(0, 0, 200, 80), &mut inv);
         t.set_focused(true);
-        t.paste("가나다\r\n라마바\nAB\tCD", &mut inv);
-        assert_eq!(t.text(), "가나다\n라마바\nABCD");
+        t.paste("가나다\r\n라마바\nAB\tCD\u{7}EF", &mut inv);
+        // 개행 정규화 · 탭 보존(09-14 — SQL·코드 들여쓰기) · 그 외 제어문자(BEL)는 버린다.
+        assert_eq!(t.text(), "가나다\n라마바\nAB\tCDEF");
     }
 
     #[test]
