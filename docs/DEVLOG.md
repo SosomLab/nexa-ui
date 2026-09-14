@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-14 (14차 · win)** — `TimeoutButton::with_show_remaining/set_show_remaining`(잔여 초 표시 여부 · 끄면 라벨 + 게이지만).
 - **2026-09-14 (13차 · win)** — `TimeoutButton::tick`: 카운트다운 중 매 틱 재그리기(게이지 아날로그처럼 부드럽게 · 숫자는 초 단위) · 테스트 갱신.
 - **2026-09-14 (12차 · win)** — `TimeoutButton::with_two_line`(라벨 / (N초) 두 줄 · 행간 0 · 글자 2px 작게).
 - **2026-09-14 (11차 · win)** — `TextBox` 단일 행 hover 페이드(회색 계열 · `Slow` · `tick`/`is_animating`) · `ColorPanel::tick/is_animating`(hex 입력란) — nexa-sql 사용자 09-14 "텍스트박스 등에도 1초 진해지는 효과".

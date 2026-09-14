@@ -51,6 +51,8 @@ pub struct TimeoutButton {
     suffix: String,
     /// 두 줄 표시 — 1줄 라벨 · 2줄 "(N초)" · 행간 0(좁은 버튼에 맞춤 · nexa-sql 사용자 09-14).
     two_line: bool,
+    /// 잔여 시간(초) 표시 여부(기본 켬) — 끄면 라벨 + 게이지(진척률)만(nexa-sql 삭제 확인 09-14).
+    show_remaining: bool,
 }
 
 impl TimeoutButton {
@@ -70,7 +72,20 @@ impl TimeoutButton {
             warn: false,
             suffix: "초".into(),
             two_line: false,
+            show_remaining: true,
         }
+    }
+
+    /// 잔여 시간(초) 표시 여부 — 체이닝. `false` = 라벨 + 게이지만.
+    #[must_use]
+    pub fn with_show_remaining(mut self, on: bool) -> Self {
+        self.show_remaining = on;
+        self
+    }
+
+    /// 잔여 시간 표시 여부 변경(런타임).
+    pub fn set_show_remaining(&mut self, on: bool) {
+        self.show_remaining = on;
     }
 
     /// 두 줄 표시(라벨 / (N초)) — 체이닝.
@@ -258,7 +273,8 @@ impl Widget for TimeoutButton {
 
         // 라벨 + 남은 초 — 한 줄("라벨 (N초)") 또는 두 줄(라벨 / (N초) · 행간 0 · 글자 2px 작게).
         let fg = if self.warn { white } else { theme.text };
-        let counting = self.started_ms.is_some() && !self.expired();
+        // 잔여 시간 표시를 끄면 카운트다운 중에도 라벨만(게이지가 진척률을 보여 준다).
+        let counting = self.started_ms.is_some() && !self.expired() && self.show_remaining;
         if self.two_line && counting {
             ctx.select_font_sized(FontSlot::Base, false, -2.0);
             let th = ctx.text_height();
