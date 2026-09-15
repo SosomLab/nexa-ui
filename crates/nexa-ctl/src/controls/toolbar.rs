@@ -74,6 +74,8 @@ pub struct ToolItem {
     pub visible: bool,
     /// 툴팁 텍스트(08-23 — hover 시 아래 캡슐 · 빈 = 없음).
     pub tip: String,
+    /// 활성 여부(09-15 nexa-sql 접속 해제 버튼): `false`면 흐리게 그리고 hover·클릭을 받지 않는다.
+    pub enabled: bool,
 }
 
 impl ToolItem {
@@ -85,7 +87,15 @@ impl ToolItem {
             right: false,
             visible: true,
             tip: String::new(),
+            enabled: true,
         }
+    }
+
+    /// 시작부터 비활성(체이닝) — 호스트가 [`Toolbar::set_item_enabled`]로 켠다.
+    #[must_use]
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
+        self
     }
 
     /// 오른쪽 끝 배치 항목(체이닝).
@@ -264,6 +274,22 @@ impl Toolbar {
         }
     }
 
+    /// 항목 활성/비활성(09-15) — 비활성은 흐리게 · hover/클릭 없음. 미지 id는 무시.
+    pub fn set_item_enabled(&mut self, id: &str, enabled: bool, inv: &mut Invalidations) {
+        if let Some(i) = self.items.iter().position(|it| it.id == id) {
+            if self.items[i].enabled != enabled {
+                self.items[i].enabled = enabled;
+                if let Some(slot) = self.tint.borrow_mut().get_mut(i) {
+                    *slot = None;
+                }
+                if self.hover == Some(i) {
+                    self.hover = None;
+                }
+                inv.push(self.base.bounds);
+            }
+        }
+    }
+
     /// hover 항목의 툴팁을 그린다(08-23) — **팝업 레이어**에서 부른다(다른
     /// 크롬(필터 바 등)이 바 아래 띠를 덮으므로 paint 안에서 그리면 가려진다).
     pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
@@ -282,8 +308,11 @@ impl Toolbar {
     }
 
     fn item_at(&self, x: i32, y: i32) -> Option<usize> {
-        (0..self.items.len())
-            .find(|&i| self.items[i].visible && self.slot_rect(i).contains(Point { x, y }))
+        (0..self.items.len()).find(|&i| {
+            self.items[i].visible
+                && self.items[i].enabled
+                && self.slot_rect(i).contains(Point { x, y })
+        })
     }
 
     /// 마스크 항목의 틴트 이미지(캐시) — 색이 바뀌면(테마·hover) 다시 만든다.
@@ -415,8 +444,10 @@ impl Widget for Toolbar {
                     ctx.image_scaled(dst, &img, slot);
                 }
                 ToolIcon::Mask { w, h, alpha } => {
-                    // SVG 유래 = 테마 기준색 · hover/pressed = 선색 변경(accent).
-                    let color = if is_hover || is_pressed {
+                    // SVG 유래 = 테마 기준색 · hover/pressed = 선색 변경(accent) · 비활성 = 흐림.
+                    let color = if !it.enabled {
+                        theme.text_dim
+                    } else if is_hover || is_pressed {
                         theme.accent
                     } else {
                         theme.text
@@ -424,6 +455,9 @@ impl Widget for Toolbar {
                     let img = self.tinted(i, *w, *h, alpha, color);
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, &img, slot);
+                    if !it.enabled {
+                        ctx.fill_rect_alpha(fit, theme.chrome_bg, 0.45);
+                    }
                 }
                 ToolIcon::Avatar {
                     img,
