@@ -11,13 +11,17 @@
 //! 확장자 자동 부여 · 파일명 규칙 즉시 검증.
 
 use nexa_ctl::controls::LabelSide;
+use nexa_ctl::IconImage;
 use nexa_ctl::{
     Button, Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, DrawCtx, FontSlot,
     GridColumn, InputEvent, Invalidations, Key, Point, Rect, TextBox, Theme, TreeControl, TreeGrid,
     TreeModel, TreeNode, TreeView, Widget,
 };
+use nexa_fs::shell::{IconKey, IconService, Lookup};
 use nexa_fs::{Entry, Place, PlaceKind, SortKey};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// 열기 / 저장.
@@ -155,6 +159,12 @@ pub struct FilePicker {
     /// 헤더 열 폭(논리 px) — 정렬 히트테스트 근거.
     col_w: [i32; 4],
     grid_rect: Rect,
+    /// 아이콘 변환 캐시(서비스의 RGBA → 이 창의 `IconImage` · 키 = 서비스 키) · 폴백 그림 2종.
+    icons: HashMap<IconKey, Rc<IconImage>>,
+    fallback_dir: Rc<IconImage>,
+    fallback_file: Rc<IconImage>,
+    /// 마지막으로 반영한 서비스 버전 — 바뀌면(아이콘/종류 이름 도착) 제자리 갱신.
+    icon_version: u64,
 }
 
 /// 더블클릭 간격.
@@ -228,6 +238,10 @@ impl FilePicker {
             action: PickerAction::None,
             col_w: [320, 150, 90, 110],
             grid_rect: Rect::default(),
+            icons: HashMap::new(),
+            fallback_dir: Rc::new(fallback_icon(true)),
+            fallback_file: Rc::new(fallback_icon(false)),
+            icon_version: IconService::global().version(),
             labels,
         };
         p.rebuild_places();
@@ -295,9 +309,10 @@ impl FilePicker {
         self.filter_combo.is_open() || self.extra_open()
     }
 
-    /// 프레임 틱 — 다시 그려야 하면 true.
+    /// 프레임 틱 — 다시 그려야 하면 true(아이콘/종류 이름 도착 포함).
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        self.up_btn.tick(now_ms)
+        self.apply_icon_updates()
+            | self.up_btn.tick(now_ms)
             | self.new_folder_btn.tick(now_ms)
             | self.ok_btn.tick(now_ms)
             | self.cancel_btn.tick(now_ms)
@@ -312,10 +327,17 @@ impl FilePicker {
                 .is_some_and(|(_, c)| c.tick_hover(now_ms))
     }
 
-    /// 애니메이션 진행 중(호스트가 타이머를 유지할 근거).
+    /// 아이콘/종류 이름 조회가 아직 진행 중인가(도착을 받으려면 호스트 타이머가 살아 있어야 한다).
+    #[must_use]
+    pub fn icons_pending(&self) -> bool {
+        IconService::global().pending() > 0
+    }
+
+    /// 애니메이션 진행 중(호스트가 타이머를 유지할 근거) — 아이콘 조회 중도 포함.
     #[must_use]
     pub fn animating(&self) -> bool {
-        self.up_btn.is_animating()
+        self.icons_pending()
+            || self.up_btn.is_animating()
             || self.new_folder_btn.is_animating()
             || self.ok_btn.is_animating()
             || self.cancel_btn.is_animating()
@@ -352,29 +374,31 @@ impl FilePicker {
                 PlaceKind::Drive | PlaceKind::Recent => p.name.clone(),
             }
         };
-        let std_places: Vec<TreeNode> = self
-            .places
-            .iter()
-            .filter(|p| p.kind != PlaceKind::Drive)
-            .map(|p| TreeNode::leaf(label_of(p, &self.labels)))
-            .collect();
+        let places = self.places.clone();
+        let mut std_places: Vec<TreeNode> = Vec::new();
+        for p in places.iter().filter(|p| p.kind != PlaceKind::Drive) {
+            let node = TreeNode::leaf(label_of(p, &self.labels));
+            let img = self.path_icon(&p.path);
+            std_places.push(node.with_image(img));
+        }
         nodes.extend(std_places);
-        let drives: Vec<TreeNode> = self
-            .places
-            .iter()
-            .filter(|p| p.kind == PlaceKind::Drive)
-            .map(|p| TreeNode::leaf(p.name.clone()))
-            .collect();
+        let mut drives: Vec<TreeNode> = Vec::new();
+        for p in places.iter().filter(|p| p.kind == PlaceKind::Drive) {
+            let node = TreeNode::leaf(p.name.clone());
+            let img = self.path_icon(&p.path);
+            drives.push(node.with_image(img));
+        }
         if !drives.is_empty() {
             let mut b = TreeNode::branch(self.labels.place_drives.clone(), drives);
             b.expanded = true;
             nodes.push(b);
         }
         if !self.recent.is_empty() {
+            let folder = self.kind_icon(true, "");
             let kids: Vec<TreeNode> = self
                 .recent
                 .iter()
-                .map(|p| TreeNode::leaf(nexa_fs::path::display(p)))
+                .map(|p| TreeNode::leaf(nexa_fs::path::display(p)).with_image(folder.clone()))
                 .collect();
             let mut b = TreeNode::branch(self.labels.place_recent.clone(), kids);
             b.expanded = true;
@@ -414,6 +438,85 @@ impl FilePicker {
             }
             _ => None,
         }
+    }
+
+    /// 서비스 키의 아이콘 — 캐시 적중/도착이면 OS 아이콘, 아니면(조회 중·없음) 자체 그림. **절대 막지 않는다**.
+    fn icon_for(&mut self, key: IconKey, is_dir: bool) -> Rc<IconImage> {
+        if let Some(img) = self.icons.get(&key) {
+            return img.clone();
+        }
+        match IconService::global().icon(&key, false) {
+            Lookup::Ready(Some(ic)) => {
+                let rc = Rc::new(IconImage::from_rgba(ic.w, ic.h, ic.rgba.clone()));
+                self.icons.insert(key, rc.clone());
+                rc
+            }
+            Lookup::Ready(None) | Lookup::Pending => {
+                if is_dir {
+                    self.fallback_dir.clone()
+                } else {
+                    self.fallback_file.clone()
+                }
+            }
+        }
+    }
+
+    fn kind_icon(&mut self, is_dir: bool, ext: &str) -> Rc<IconImage> {
+        self.icon_for(
+            IconKey::Kind {
+                ext: ext.to_string(),
+                is_dir,
+            },
+            is_dir,
+        )
+    }
+
+    fn path_icon(&mut self, path: &Path) -> Rc<IconImage> {
+        self.icon_for(IconKey::Path(path.to_path_buf()), true)
+    }
+
+    /// OS 종류 이름(도착 전·없음 = None → 호출자 폴백 문구).
+    fn kind_name(&mut self, is_dir: bool, ext: &str) -> Option<String> {
+        match IconService::global().kind_name(ext, is_dir) {
+            Lookup::Ready(v) => v,
+            Lookup::Pending => None,
+        }
+    }
+
+    /// 조회 결과가 도착했으면(서비스 버전 변화) 목록·장소의 아이콘/종류 이름을 **제자리에서** 갱신(스크롤·선택 유지).
+    fn apply_icon_updates(&mut self) -> bool {
+        let v = IconService::global().version();
+        if v == self.icon_version {
+            return false;
+        }
+        self.icon_version = v;
+        let mut changed = false;
+        let shown = self.shown.clone();
+        for (row, &i) in shown.iter().enumerate() {
+            let (is_dir, ext) = (self.entries[i].is_dir, self.entries[i].ext());
+            let img = self.kind_icon(is_dir, &ext);
+            let name = self.kind_name(is_dir, &ext);
+            if let Some(node) = self.grid.model_mut().roots.get_mut(row) {
+                if node.image.as_ref().map(Rc::as_ptr) != Some(Rc::as_ptr(&img)) {
+                    node.image = Some(img);
+                    changed = true;
+                }
+                if let Some(n) = name {
+                    if node.cells.get(2) != Some(&n) {
+                        if let Some(c) = node.cells.get_mut(2) {
+                            *c = n;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        // 장소(특수 폴더·드라이브·최근) — 수가 적어 통째로 다시 만든다(선택 행 보존).
+        let sel = self.places_view.selected_row();
+        self.rebuild_places();
+        self.places_view.set_selected_row(sel);
+        self.last_place_row = sel;
+        changed || true
     }
 
     fn current_filter(&self) -> &FileFilter {
@@ -463,6 +566,26 @@ impl FilePicker {
             .filter(|(_, e)| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
             .map(|(i, _)| i)
             .collect();
+        // 아이콘·OS 종류 이름 — 표시 항목의 (폴더?, 확장자) 조합마다 1회(캐시 · 디스크 접근 없음).
+        let mut icons: HashMap<(bool, String), Rc<IconImage>> = HashMap::new();
+        let mut kind_names: HashMap<(bool, String), String> = HashMap::new();
+        let combos: Vec<(bool, String)> = {
+            let mut v: Vec<(bool, String)> = self
+                .shown
+                .iter()
+                .map(|&i| (self.entries[i].is_dir, self.entries[i].ext()))
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        for (is_dir, ext) in combos {
+            let img = self.kind_icon(is_dir, &ext);
+            icons.insert((is_dir, ext.clone()), img);
+            if let Some(k) = self.kind_name(is_dir, &ext) {
+                kind_names.insert((is_dir, ext), k);
+            }
+        }
         let nodes: Vec<TreeNode> = self
             .shown
             .iter()
@@ -477,17 +600,25 @@ impl FilePicker {
                 } else {
                     nexa_fs::fmt_size(e.size)
                 };
-                let kind = if e.is_dir {
-                    self.labels.kind_folder.clone()
-                } else {
-                    let ext = e.ext();
-                    if ext.is_empty() {
-                        self.labels.kind_file.clone()
-                    } else {
-                        format!("{} {}", ext.to_uppercase(), self.labels.kind_file)
-                    }
-                };
-                TreeNode::leaf(e.name.clone()).with_cells(vec![modified, size, kind])
+                let ext = e.ext();
+                let kind = kind_names
+                    .get(&(e.is_dir, ext.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        if e.is_dir {
+                            self.labels.kind_folder.clone()
+                        } else if ext.is_empty() {
+                            self.labels.kind_file.clone()
+                        } else {
+                            format!("{} {}", ext.to_uppercase(), self.labels.kind_file)
+                        }
+                    });
+                let icon = icons.get(&(e.is_dir, ext)).cloned();
+                let node = TreeNode::leaf(e.name.clone()).with_cells(vec![modified, size, kind]);
+                match icon {
+                    Some(img) => node.with_image(img),
+                    None => node,
+                }
             })
             .collect();
         let mark = |k: SortKey| -> &'static str {
@@ -758,6 +889,11 @@ impl FilePicker {
         let fw = self.s(FILTER_W);
         self.filter_combo
             .set_bounds(Rect::new(x1 - fw, y_name, fw, row), &mut inv);
+        // ★ 드롭다운은 창 바닥을 넘지 않는다(넘치면 위로 펼침 · 사용자 09-15 "확장자 콤보가 숨겨져 선택 불가").
+        self.filter_combo.set_viewport_bottom(b.bottom());
+        if let Some((_, c)) = &mut self.extra {
+            c.set_viewport_bottom(b.bottom());
+        }
         self.name_box.set_bounds(
             Rect::new(x0 + lw, y_name, (x1 - fw - gap) - (x0 + lw), row),
             &mut inv,
@@ -1086,6 +1222,54 @@ impl Widget for FilePicker {
         self.path_box.paint_popup(ctx, theme);
         self.name_box.paint_popup(ctx, theme);
     }
+}
+
+/// 셸 아이콘이 없는 OS의 자체 그림(16px · 폴더 = 호박색 탭 폴더 · 파일 = 회색 종이 + 접힌 모서리).
+fn fallback_icon(is_dir: bool) -> IconImage {
+    const N: u32 = 16;
+    let mut rgba = vec![0u8; (N * N * 4) as usize];
+    let mut put = |x: u32, y: u32, c: [u8; 4]| {
+        let i = ((y * N + x) * 4) as usize;
+        rgba[i..i + 4].copy_from_slice(&c);
+    };
+    if is_dir {
+        let body = [0xE8, 0xB8, 0x4A, 0xFF];
+        let dark = [0xC9, 0x96, 0x2E, 0xFF];
+        for y in 3..14 {
+            for x in 1..15 {
+                let tab = y < 5 && x > 7;
+                if !tab {
+                    put(
+                        x,
+                        y,
+                        if y == 3 || y == 13 || x == 1 || x == 14 {
+                            dark
+                        } else {
+                            body
+                        },
+                    );
+                }
+            }
+        }
+    } else {
+        let paper = [0xF4, 0xF4, 0xF4, 0xFF];
+        let edge = [0x9A, 0x9A, 0x9A, 0xFF];
+        for y in 1..15 {
+            for x in 3..13 {
+                let fold = x > 9 && y < 4 && (x - 9) > (3 - y);
+                if fold {
+                    continue;
+                }
+                let border = y == 1
+                    || y == 14
+                    || x == 3
+                    || x == 12
+                    || (x > 9 && y < 5 && (x - 9) == (4 - y));
+                put(x, y, if border { edge } else { paper });
+            }
+        }
+    }
+    IconImage::from_rgba(N, N, rgba)
 }
 
 #[cfg(test)]

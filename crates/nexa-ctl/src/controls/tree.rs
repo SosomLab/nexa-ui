@@ -313,7 +313,9 @@ pub trait TreeControl: Control {
         let mut tx = chev.right() + self.s(4);
         // 선행 이미지(옵션 · 셰브론과 별개) — 공용 아이콘 크기(콤보/버튼과 동일 원천).
         if let Some(img) = row.image.as_deref() {
-            let isz = self.s(super::LEADING_ICON);
+            // 16px급 원본(OS 셸 아이콘)은 **원본 크기**로(13px로 줄이면 흐려진다) · 더 큰 그림은 공용 크기로 맞춘다.
+            let native = img.w.min(img.h).min(16) as i32;
+            let isz = self.s(super::LEADING_ICON).max(self.s(native));
             let boxr = Rect::new(tx, cell.y + (cell.h - isz) / 2, isz, isz);
             let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
             ctx.image_scaled(fit, img, cell);

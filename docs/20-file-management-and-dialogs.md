@@ -60,8 +60,21 @@
 | `ops` | `copy/move/rename/mkdir/trash/delete` — `Conflict{Overwrite\|Skip\|Rename\|Ask}` · `Progress{done, total, current}` · 취소 · **워커 스레드에서 실행**(호스트가 스폰) | 휴지통: Windows `IFileOperation`(shell32 인박스 · dir2 선례) · macOS `~/.Trash` 이동(+ `osascript` 폴백) · Linux XDG trash(`~/.local/share/Trash/{files,info}`) | **`nexa-ops` 전부**(std 전용 · 진행·충돌·undo·일괄 이름변경) · 휴지통 = `win.rs:2759`(`SHFileOperationW`+`FOF_ALLOWUNDO`) · `recycle.rs`(복원) |
 | `watch` | `Watcher::new(dir) · poll(now) -> Changed{added, removed, modified}` — **dir2 `fsprobe.rs`(폴더 mtime + 상한 4096 열거 서명) 이식** + OS 통지 어댑터(있으면 즉시 · 없으면 폴링 3s/활성 · 30s/비활성 = dir2 X-40·X-44 실측) | ReadDirectoryChangesW · FSEvents(후속) · inotify(후속) — 1차는 **프로브만**(3-OS 동일 동작 보장) | `fsprobe.rs`(프로브) · `watcher.rs`(RDCW · 300ms 디바운스) · `shellnotify.rs` |
 | `naming` | `fn validate(name) -> Result<(), NameError>` — 3-OS **공통 최소 집합**(`\/:*?"<>|` 금지 · 예약어 CON/PRN… · 끝 공백·점 · 255바이트) | 없음(교집합을 쓴다 — 한 OS에서 만든 파일이 다른 OS에서도 열리게) | `nexa-ops::unique_dest` · 신규 검증 |
-| `kind` | `fn icon_key(ext) -> IconKey` · `fn kind_label(ext) -> KindKey`(i18n 키) | 없음 — **OS 아이콘·OS 종류 문자열을 쓰지 않는다**(3-OS 동일 화면의 조건) | `nexa-core::FileKind` · `icons.rs::icon_key`(LRU 부분 · 셸 아이콘은 버린다) |
+| `kind` → **`shell`**(09-15 개정 · D-6 ⓑ) | `IconService::global()` — `icon(IconKey{Kind{ext,is_dir} \| Path}, large) -> Lookup{Ready(Option) \| Pending}` · `kind_name(ext, is_dir)` · `version()`/`pending()` · **워커 스레드 + 프로세스 캐시(상한 512 · 실패도 기억)** — UI는 절대 막히지 않고 `Pending`이면 자체 그림으로 그리다 도착 시 제자리 갱신 | Windows `SHGetFileInfoW`(확장자 기반 `USEFILEATTRIBUTES` = 디스크 0 · 경로 기반 = 특수 폴더/드라이브) · macOS `NSWorkspace icon(forFile:)`/UTType(후속) · Linux freedesktop 테마(`shared-mime-info` glob → 아이콘 이름 → 테마 PNG · 후속) · 없으면 `None` | 신규(§2-1) |
 | `path` | 표시용 `display(path)`(홈 → `~` · 구분자는 OS 그대로 표시) · `parent_chain(path)`(브레드크럼) · `complete(prefix) -> Vec<String>`(NameBox 자동완성) | 구분자 | `pathinput.rs`(`expand_env`·`suggest_folders`) · `nav.rs::History` · `widgets/pathbar.rs::split_path` |
+
+### 2-1. OS 아이콘 전략(09-15 · 사용자 요청 "각 OS 제공 이미지 최대 활용 · 성능 영향 0 · 확장성 · 메모리 적게")
+
+| 원칙 | 구현 |
+|---|---|
+| **UI 스레드는 절대 막지 않는다** | 실측(Windows 11) `SHGetFileInfoW` 아이콘 ≈ **12ms/확장자** · 종류 이름 ≈ 2ms · 경로 아이콘 ≈ 17ms → 동기 호출이면 폴더 하나에 수백 ms. `IconService`는 조회를 **워커 스레드**(STA COM · mpsc 채널)에 맡기고 즉시 `Pending`을 돌려준다. 호출자는 자체 그림(폴더 = 호박색 · 파일 = 종이)으로 먼저 그리고, `version()`이 바뀌면 **제자리 갱신**(`TreeModel.roots[i].image` 교체 · 스크롤/선택 유지). |
+| **조회는 확장자마다 프로세스 수명에 1회** | 목록은 `IconKey::Kind{ext,is_dir}`(디스크 접근 없음 · 파일 수와 무관 · 폴더에 파일 1만 개여도 확장자 수만큼) · 경로 조회(`IconKey::Path`)는 사이드바 장소·드라이브 등 **소수 항목에만**. 대화상자를 닫았다 다시 열어도 0ms(전역 캐시). |
+| **메모리 상한** | 16×16 RGBA = 1KB · 캐시 상한 **512개(≤ 0.5MB)** · 오래된 것부터 버림(`VecDeque`) · 실패(`None`)도 기억해 재조회 0 · 소비자(nexa-dlg)는 `Arc<RgbaIcon>` → 자기 `IconImage`로 1회 변환. 큰 아이콘(32/48 · 아이콘 보기)은 같은 키에 `large` 플래그로 분리 — 필요할 때만. |
+| **확장성(OS 어댑터 1곳)** | `shell::imp` 모듈만 OS별 — 공개 API·서비스·캐시는 공통. macOS = `NSWorkspace.shared.icon(forFile:)`/`icon(for: UTType)` → `CGImage` → RGBA(objc 런타임 FFI · crate 0) · Linux = `~/.config/mimeapps` 없이 `shared-mime-info` `globs2`로 MIME → 아이콘 이름(`text-x-sql` …) → 현재 GTK 테마 폴더(`~/.icons` · `/usr/share/icons/<theme>/16x16/mimetypes`) PNG(자체 디코더 · clip `imgdec` 재사용) · 둘 다 `SUPPORTED=false`면 즉시 `Ready(None)`(스레드도 안 만든다). |
+| **종류 이름도 OS 것** | `kind_name(ext, is_dir)` — Windows `SHGFI_TYPENAME`("파일 폴더" · "Microsoft Word 문서" · 사용자 언어) · 없으면 앱 i18n 폴백(`Folder`/`SQL File`). |
+| **렌더** | nexa-ctl 트리는 16px급 원본을 **원본 크기**로(13px로 줄이면 흐림) · 더 큰 그림은 공용 `LEADING_ICON`. 사전 스케일은 `IconImage::resized`(글리프 캐시 라운드에서 추가). |
+
+작업: **F-8** macOS/Linux 어댑터 · 큰 아이콘 · 아이콘 보기(TODO).
 
 ---
 
@@ -165,7 +178,7 @@
 |---|---|---|
 | **D-4** | 모달 방식 — 창 안 오버레이 기본 + Progress만 별도 창(권장) / 전부 별도 창 | 오버레이 |
 | **D-5** | `nexa-fs`·`nexa-dlg`를 **별도 크레이트**(권장 · 의존 방향 강제 · dir2가 fs만 소비 가능) / `nexa-ctl` 안 모듈 | 별도 크레이트 |
-| **D-6** | 아이콘 세트 — 자체 알파 마스크(beep Lucide 원장 · ISC) 3-OS 동일(권장) / OS 아이콘 | 자체 |
+| **D-6** | 아이콘 세트 — ⓐ 자체 알파 마스크 3-OS 동일 / ⓑ **OS 아이콘 우선 + 자체 폴백**(사용자 09-15 확정: "각 OS가 제공하는 폴더/파일 이미지를 최대한 활용 · 성능 영향 0") — §2-1 | **ⓑ 확정** |
 | **D-7** | 휴지통 1차 범위 — 3-OS 전부(권장 · Windows shell32 · macOS `.Trash` · Linux XDG) / Windows만 | 3-OS |
 | **D-8** | FileList와 U-3 `nexa-grid`의 관계 — 같은 크레이트의 한 컨트롤(권장 · 컬럼 모델 공유) / 분리 | 공유 |
 | **D-9** | ★ **beep ADR-0014(네이티브 파일 대화상자) 정정** — ⓐ 계열 전체를 자체 `FilePicker`로 통일(이번 요청 · 권장 — 3-OS 동일 · Linux 포털 문제 소멸 · beep 시제품 대체) ⓑ beep만 예외 유지(OS 관례 우선) — beep 저장소에서 ADR 정정 항목으로 기록(DR-4) | ⓐ |

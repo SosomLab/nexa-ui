@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (5차 · win)** — ★ `nexa-fs::shell` **OS 아이콘 서비스**(Windows `SHGetFileInfoW` · 워커 스레드 · `Lookup{Ready|Pending}` · 전역 LRU 512 · 종류 이름) · `FilePicker` 아이콘/OS 종류 이름 제자리 갱신 · 콤보 뷰포트 하한(창 밖 드롭다운) · 트리 16px 원본 크기 · docs/20 §2-1 · D-6 ⓑ 확정 · F-8. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (4차 · win)** — `ContextMenu` 아이콘(`MenuIcon`)·단축키·**하위 메뉴** · `EditMenu` 아이콘/단축키 주입 · 툴바 hover 배경 제거 · TextBox 선택 = 텍스트 범위 · `FilePicker::set_extra`(하단 부가 콤보 · 인코딩). → [journal](journal/2026-09-15.md)
 - **2026-09-15 (3차 · win)** — ★ **글리프 비트맵 캐시**(`Font.cache` · `GlyphBitmap` · `Surface::blend_mask` 정수 블렌드 · 서브픽셀 1/3 · 상한 8192) · `IconImage::resized` + 같은 크기 빠른 경로 — nexa-sql 탐색기 성능 조사(A·B). → [journal](journal/2026-09-15.md)
 - **2026-09-15 (2차 · win)** — ★ 새 크레이트 `nexa-fs`(파일시스템 중립 모델 · OS 분기 격리) · `nexa-dlg`(`FilePicker` 열기/저장 복합 컨트롤 · docs/20 F-1/F-4) · `EditState` 다중 선택/캐럿(Ctrl+D · 열 선택) · `TextBox` 붙여넣기 탭→공백 · 더블클릭 시간 판정 · 탭 폭 자기 주입. 소비자: nexa-sql T-74. → [journal](journal/2026-09-15.md)

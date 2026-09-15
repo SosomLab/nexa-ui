@@ -9,6 +9,8 @@
 //! 출처: nexa-dir2 `nexa-vfs`(`Entry`·`read_dir_entries`·`drive_entries`) · `nexa-tree`(정렬) · `nexa-app/pathinput.rs`(경로 입력) —
 //! 이름을 중립화해 **추출**한 것이다(재발명 아님 · docs/20 §7).
 
+pub mod shell;
+
 use std::cmp::Ordering;
 use std::fs;
 use std::io;
