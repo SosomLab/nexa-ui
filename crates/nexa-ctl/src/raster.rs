@@ -403,6 +403,14 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         }
     }
 
+    fn text_ascent(&mut self) -> i32 {
+        let size = self.px_size();
+        if (self.mono_mult - 1.0).abs() > f32::EPSILON {
+            return self.fonts.base.ascent(size).ceil() as i32;
+        }
+        self.font.ascent(size).ceil() as i32
+    }
+
     fn text_height(&mut self) -> i32 {
         if (self.mono_mult - 1.0).abs() > f32::EPSILON {
             // 고정폭 줄엔 한글 폴백(기본 얼굴·명목 크기)이 섞인다 — 그 기준으로 센터링.

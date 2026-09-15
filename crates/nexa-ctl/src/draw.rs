@@ -81,6 +81,12 @@ pub trait DrawCtx {
         16
     }
 
+    /// 현재 글꼴의 어센트(px · 줄 상단 → 기준선). 글리프의 **시각 중심**(대문자·한글 몸통 ≈ 기준선 − 어센트×0.38)에
+    /// 아이콘/셰브론을 맞출 때 쓴다(nexa-sql 탐색기 09-15). 기본 = 줄 높이의 3/4.
+    fn text_ascent(&mut self) -> i32 {
+        self.text_height() * 3 / 4
+    }
+
     /// 삼각형을 단색 AA로 채운다(말풍선 꼬리 등 — 08-10). 기본 = no-op.
     fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
         let _ = (a, b, c, color);
