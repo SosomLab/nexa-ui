@@ -636,12 +636,9 @@ impl FilePicker {
         // 정렬 배지 — ▲/▼ + 결합 순번(키가 둘 이상일 때) · 키가 비면 이름 ▲.
         let keys = &self.sort_keys;
         let mark = |k: SortKey| -> String {
+            // 키가 비면 배지 없음(기본 = 정렬 없음 · 사용자 09-15 — 이름 ▲가 보여 3단 해제가 안 되는 것처럼 보였다).
             if keys.is_empty() {
-                return if k == SortKey::Name {
-                    " ▲".into()
-                } else {
-                    String::new()
-                };
+                return String::new();
             }
             match keys.iter().position(|(kk, _)| *kk == k) {
                 Some(i) => {
