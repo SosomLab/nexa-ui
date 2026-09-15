@@ -1287,6 +1287,16 @@ impl Widget for TextBox {
                 self.edit.key(EditKey::SelectAll, false);
                 inv.push(self.base.bounds); // 선택 반전이 즉시 보여야 한다
             }
+            InputEvent::Undo if self.base.focused && self.edit.undo() => {
+                self.changed = true;
+                self.ml_user_scrolled = false;
+                inv.push(self.base.bounds);
+            }
+            InputEvent::Redo if self.base.focused && self.edit.redo() => {
+                self.changed = true;
+                self.ml_user_scrolled = false;
+                inv.push(self.base.bounds);
+            }
             _ => {}
         }
     }

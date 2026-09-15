@@ -29,13 +29,101 @@ pub struct EditState {
     buf: Vec<char>,
     caret: usize,
     anchor: Option<usize>,
+    /// ★ 되돌리기 히스토리(nexa-sql 사용자 09-15) — 변경 **직전** 스냅샷(버퍼·캐럿·앵커). 연속 타이핑/삭제는 한 묶음
+    /// (공백·개행·선택 대체·캐럿 이동이 경계). 상한 [`Self::HISTORY_MAX`] · `set_text`(프로그램 교체)는 히스토리를 비운다.
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
+    last_op: Option<EditOp>,
+    /// 직전에 삽입한 문자가 공백이었나 — 공백 뒤 첫 글자 = 새 단어 = 새 묶음(Sublime 단어 단위 되돌리기).
+    last_ws: bool,
     /// IME 조합 중 문자열(M3-1e ① — TextBox·대화 입력 공용). **표시 전용**:
     /// 편집 버퍼(`buf`)에 들어가지 않고, `display_text`가 캐럿 자리에 끼워 보인다.
     /// 확정 문자는 `insert`로 버퍼에 들어오고 조합은 끝난다(호출측이 preedit 비움).
     preedit: String,
 }
 
+/// 히스토리 스냅샷.
+#[derive(Clone, Debug)]
+struct Snap {
+    buf: Vec<char>,
+    caret: usize,
+    anchor: Option<usize>,
+}
+
+/// 편집 종류 — 같은 종류가 이어지면 한 묶음(경계가 없을 때).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditOp {
+    Insert,
+    Delete,
+    Other,
+}
+
 impl EditState {
+    /// 히스토리 상한(스냅샷 수).
+    pub const HISTORY_MAX: usize = 500;
+
+    fn snap(&self) -> Snap {
+        Snap {
+            buf: self.buf.clone(),
+            caret: self.caret,
+            anchor: self.anchor,
+        }
+    }
+
+    /// 변경 직전 호출 — `boundary`거나 종류가 바뀌면 새 스냅샷, 아니면 직전 묶음에 이어 붙인다. redo는 버린다.
+    fn record(&mut self, op: EditOp, boundary: bool) {
+        if self.last_op == Some(op) && !boundary {
+            return;
+        }
+        let s = self.snap();
+        self.undo.push(s);
+        if self.undo.len() > Self::HISTORY_MAX {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        self.last_op = Some(op);
+    }
+
+    fn restore(&mut self, s: Snap) {
+        self.buf = s.buf;
+        self.caret = s.caret.min(self.buf.len());
+        self.anchor = s.anchor.map(|a| a.min(self.buf.len()));
+    }
+
+    /// 실행 취소 — 되돌렸으면 `true`.
+    pub fn undo(&mut self) -> bool {
+        let Some(prev) = self.undo.pop() else {
+            return false;
+        };
+        let cur = self.snap();
+        self.redo.push(cur);
+        self.restore(prev);
+        self.last_op = None;
+        true
+    }
+
+    /// 다시 실행 — 되살렸으면 `true`.
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else {
+            return false;
+        };
+        let cur = self.snap();
+        self.undo.push(cur);
+        self.restore(next);
+        self.last_op = None;
+        true
+    }
+
+    #[must_use]
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    #[must_use]
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
     /// 빈 상태.
     #[must_use]
     pub fn new() -> Self {
@@ -53,6 +141,10 @@ impl EditState {
             caret,
             anchor,
             preedit: String::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            last_op: None,
+            last_ws: false,
         }
     }
 
@@ -137,6 +229,10 @@ impl EditState {
 
     /// 문자 하나 삽입(선택 있으면 대체).
     pub fn insert(&mut self, c: char) {
+        // 묶음 경계 = 공백 뒤 첫 글자(새 단어) · 개행 · 선택 대체 → 단어 단위로 되돌린다(Sublime 관례).
+        let boundary = (self.last_ws && !c.is_whitespace()) || c == '\n' || self.anchor.is_some();
+        self.record(EditOp::Insert, boundary);
+        self.last_ws = c.is_whitespace();
         self.delete_selection();
         self.buf.insert(self.caret, c);
         self.caret += 1;
@@ -144,6 +240,7 @@ impl EditState {
 
     /// 문자열 삽입(붙여넣기·IME 확정 — 선택 있으면 대체). 제어문자 필터는 호출자 몫.
     pub fn insert_str(&mut self, s: &str) {
+        self.record(EditOp::Other, true);
         self.delete_selection();
         for c in s.chars() {
             self.buf.insert(self.caret, c);
@@ -153,6 +250,10 @@ impl EditState {
 
     /// Backspace(선택 있으면 선택 삭제).
     pub fn backspace(&mut self) {
+        if self.anchor.is_none() && self.caret == 0 {
+            return;
+        }
+        self.record(EditOp::Delete, self.anchor.is_some());
         if !self.delete_selection() && self.caret > 0 {
             self.caret -= 1;
             self.buf.remove(self.caret);
@@ -162,12 +263,14 @@ impl EditState {
     /// 잘라내기(선택 텍스트 반환 후 삭제).
     pub fn cut(&mut self) -> Option<String> {
         let t = self.selected_text()?;
+        self.record(EditOp::Other, true);
         self.delete_selection();
         Some(t)
     }
 
     /// 캐럿을 옮긴다 — `extend`면 기존 앵커를 유지해 범위가 늘어난다(드래그·Shift 이동).
     pub fn set_caret(&mut self, idx: usize, extend: bool) {
+        self.last_op = None; // 캐럿 이동 = 타이핑 묶음 경계
         let i = idx.min(self.buf.len());
         if extend {
             if self.anchor.is_none() {
@@ -191,6 +294,10 @@ impl EditState {
         self.buf = text.chars().collect();
         self.caret = self.buf.len();
         self.anchor = None;
+        // 프로그램적 교체 = 새 문서(히스토리 초기화).
+        self.undo.clear();
+        self.redo.clear();
+        self.last_op = None;
     }
 
     /// 키 처리. 비Shift 이동 중 선택이 있으면 선택 가장자리로 접는다(표준 관례).
@@ -219,10 +326,17 @@ impl EditState {
                 self.caret = self.buf.len();
             }
             EditKey::DeleteForward => {
+                if self.anchor.is_none() && self.caret >= self.buf.len() {
+                    return;
+                }
+                self.record(EditOp::Delete, self.anchor.is_some());
                 if !self.delete_selection() && self.caret < self.buf.len() {
                     self.buf.remove(self.caret);
                 }
             }
+        }
+        if !matches!(k, EditKey::DeleteForward) {
+            self.last_op = None; // 이동 키 = 묶음 경계
         }
     }
 
@@ -323,5 +437,51 @@ mod tests {
         let mut e = EditState::with_text("world", true); // 전체 선택
         e.insert_str("hi"); // IME 확정 문자열이 선택 대체
         assert_eq!(e.text(), "hi");
+    }
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    #[test]
+    fn typing_groups_by_word_and_undo_redo_round_trip() {
+        let mut e = EditState::new();
+        for c in "ab cd".chars() {
+            e.insert(c);
+        }
+        assert_eq!(e.text(), "ab cd");
+        assert!(e.undo(), "마지막 단어 묶음(cd)");
+        assert_eq!(e.text(), "ab ");
+        assert!(e.undo(), "첫 단어 + 공백 묶음");
+        assert_eq!(e.text(), "");
+        assert!(!e.undo(), "더 없음");
+        assert!(e.redo());
+        assert_eq!(e.text(), "ab ");
+        assert!(e.redo());
+        assert_eq!(e.text(), "ab cd");
+        assert!(!e.redo());
+        // 새 편집은 redo를 버린다.
+        e.undo();
+        e.insert('!');
+        assert_eq!(e.text(), "ab !");
+        assert!(!e.can_redo());
+    }
+
+    #[test]
+    fn delete_paste_and_set_text_history_rules() {
+        let mut e = EditState::with_text("hello", false);
+        e.set_caret(5, false);
+        e.backspace();
+        e.backspace();
+        assert_eq!(e.text(), "hel");
+        assert!(e.undo(), "연속 백스페이스 = 한 묶음");
+        assert_eq!(e.text(), "hello");
+        e.insert_str(" world");
+        assert!(e.undo());
+        assert_eq!(e.text(), "hello");
+        e.set_text("fresh");
+        assert!(!e.can_undo(), "프로그램 교체 = 히스토리 초기화");
+        assert!(!e.can_redo());
     }
 }

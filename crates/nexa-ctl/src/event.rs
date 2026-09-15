@@ -69,6 +69,10 @@ pub enum InputEvent {
     },
     /// 전체 선택(⌘/Ctrl+A).
     SelectAll,
+    /// 실행 취소(⌘/Ctrl+Z) — 편집 히스토리([`crate::edit::EditState::undo`]).
+    Undo,
+    /// 다시 실행(⌘/Ctrl+Y · ⌘/Ctrl+⇧Z).
+    Redo,
     /// 좌클릭(클라이언트 좌표). `shift` = 범위, `primary` = 비연속 토글.
     MouseDown {
         /// x.
