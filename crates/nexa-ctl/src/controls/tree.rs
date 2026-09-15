@@ -259,7 +259,9 @@ pub trait TreeControl: Control {
         let rh = self.s(ROW_H).max(1);
         let top = self.tree_top();
         let (sx, sy) = self.scroll();
-        if y < top || y >= self.bounds().bottom() {
+        // ★ x·y 둘 다 검사(09-15 nexa-sql 설정 창: 오른쪽 카드 클릭이 왼쪽 트리 행을 선택하던 결함 — y만 보고 있었다).
+        let b = self.bounds();
+        if y < top || y >= b.bottom() || x < b.x || x >= b.right() {
             return None;
         }
         let i = ((y - top + sy) / rh) as usize;
@@ -794,6 +796,28 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].label, "Path Finder");
         assert!(!rows[0].expanded);
+    }
+
+    #[test]
+    fn click_outside_horizontal_bounds_is_ignored() {
+        let mut v = TreeView::new(TreeModel::new(vec![
+            TreeNode::branch("a", vec![TreeNode::leaf("a1")]),
+            TreeNode::leaf("b"),
+        ]));
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(10, 10, 200, 300), &mut inv);
+        let before = v.selected_row();
+        // 트리 오른쪽 바깥(x=500) · 둘째 행 높이 → 무시돼야 한다.
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: 500,
+                y: 10 + 24 + 5,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.selected_row(), before);
     }
 
     #[test]
