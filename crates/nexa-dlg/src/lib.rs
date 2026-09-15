@@ -10,7 +10,7 @@
 //! 파일명 상자 Enter = 확정 · 확장자 필터 · 숨김 표시 · 새 폴더 · 저장은 **덮어쓰기 2단 확인**(같은 이름으로 한 번 더) ·
 //! 확장자 자동 부여 · 파일명 규칙 즉시 검증.
 
-use nexa_ctl::controls::{ContextMenu, CtxItem, LabelSide};
+use nexa_ctl::controls::{glyph, ContextMenu, CtxItem, GlyphKind, LabelSide, MenuIcon};
 use nexa_ctl::IconImage;
 use nexa_ctl::{
     Button, Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, DrawCtx, FontSlot,
@@ -154,6 +154,8 @@ pub struct FilePicker {
     probes: HashMap<PathBuf, (bool, bool)>,
     /// 열거 끝난 뒤 선택할 이름(새 폴더·↑ 복귀).
     select_after: Option<String>,
+    /// 로딩 중 마지막 재구성 시각(docs/37 P-4 — 배치마다 전체를 다시 만들지 않는다).
+    last_rebuild: Option<Instant>,
     /// 우클릭 메뉴(열기 · 경로/이름 복사 · 새 폴더 · 새로 고침 · 숨김 표시).
     menu: ContextMenu,
     menu_row: Option<usize>,
@@ -330,6 +332,7 @@ impl FilePicker {
             probe: None,
             probes: HashMap::new(),
             select_after: None,
+            last_rebuild: None,
             labels,
         };
         p.rebuild_places();
@@ -568,11 +571,11 @@ impl FilePicker {
         let show_dot = self.show_dot;
         let folder_icon = self.kind_icon(true, "");
         let mut todo: Vec<Vec<usize>> = Vec::new();
-        for row in self.places_view.rows() {
+        for row in self.places_view.rows().iter() {
             if !row.expanded {
                 continue;
             }
-            if let Some(n) = Self::node_at(&self.places_view.model().roots, &row.path) {
+            if let Some(n) = Self::node_at(self.places_view.model().roots(), &row.path) {
                 let pending = n.children.len() == 1
                     && n.children[0].cells.first().map(String::as_str) == Some(PENDING);
                 if pending && n.cells.first().is_some_and(|c| !c.is_empty()) {
@@ -585,12 +588,12 @@ impl FilePicker {
         }
         let _ = (show_hidden, show_dot, folder_icon);
         for path in todo {
-            let Some(dir) = Self::node_at(&self.places_view.model().roots, &path)
+            let Some(dir) = Self::node_at(self.places_view.model().roots(), &path)
                 .and_then(|n| n.cells.first().cloned())
             else {
                 continue;
             };
-            if let Some(n) = Self::node_at_mut(&mut self.places_view.model_mut().roots, &path) {
+            if let Some(n) = Self::node_at_mut(self.places_view.model_mut().roots_mut(), &path) {
                 if let Some(c) = n.children.first_mut() {
                     c.cells = vec![LOADING.into()];
                 }
@@ -690,7 +693,7 @@ impl FilePicker {
             }
         }
         let mut combos = Vec::new();
-        collect(&self.grid.model().roots, &mut combos);
+        collect(self.grid.model().roots(), &mut combos);
         combos.sort();
         combos.dedup();
         let mut icons: HashMap<(bool, String), Rc<IconImage>> = HashMap::new();
@@ -740,7 +743,7 @@ impl FilePicker {
             }
         }
         apply(
-            &mut self.grid.model_mut().roots,
+            self.grid.model_mut().roots_mut(),
             &icons,
             &names,
             kind_pos,
@@ -845,6 +848,7 @@ impl FilePicker {
         self.entries.clear();
         self.probes.clear();
         self.sub_loaders.clear(); // Drop = 취소
+        self.last_rebuild = None;
         self.message = None;
         self.pending_overwrite = None;
         self.path_box.set_text(&nexa_fs::path::display(&self.dir));
@@ -904,9 +908,21 @@ impl FilePicker {
                 }
             }
         }
-        if got_batch || finished.is_some() {
+        // 재구성은 첫 배치 즉시 · 이후 150ms 간격 · Done에서 1회(누적 전체 재정렬·재복제 반복 방지 · docs/37 P-4).
+        const REBUILD_EVERY: Duration = Duration::from_millis(150);
+        let due = finished.is_some()
+            || (got_batch
+                && self
+                    .last_rebuild
+                    .is_none_or(|t| t.elapsed() >= REBUILD_EVERY));
+        if due {
             let sel = self.grid.selected_row();
             self.refresh_grid(sel);
+            self.last_rebuild = if finished.is_some() {
+                None
+            } else {
+                Some(Instant::now())
+            };
             changed = true;
         }
         if let Some(r) = finished {
@@ -1004,8 +1020,10 @@ impl FilePicker {
                 walk(&mut n.children, probes, sidebar);
             }
         }
-        walk(&mut self.grid.model_mut().roots, &self.probes, false);
-        walk(&mut self.places_view.model_mut().roots, &self.probes, true);
+        let probes = std::mem::take(&mut self.probes);
+        walk(self.grid.model_mut().roots_mut(), &probes, false);
+        walk(self.places_view.model_mut().roots_mut(), &probes, true);
+        self.probes = probes;
     }
 
     /// 지연 펼침 결과를 그 노드의 자식으로(도착할 때마다 정렬해 교체 · 접혔으면 버린다).
@@ -1027,9 +1045,9 @@ impl FilePicker {
             items.iter().map(|e| self.make_row(e)).collect()
         };
         let roots = if sidebar {
-            &mut self.places_view.model_mut().roots
+            self.places_view.model_mut().roots_mut()
         } else {
-            &mut self.grid.model_mut().roots
+            self.grid.model_mut().roots_mut()
         };
         if let Some(n) = Self::node_at_mut(roots, &path) {
             if n.expanded {
@@ -1194,11 +1212,11 @@ impl FilePicker {
     /// 펼쳐진 폴더 행 중 자리표시 자식만 가진 것을 지연 열거(사이드바와 같은 규약).
     fn lazy_load_grid(&mut self) {
         let mut todo: Vec<(Vec<usize>, PathBuf)> = Vec::new();
-        for row in self.grid.rows() {
+        for row in self.grid.rows().iter() {
             if !row.expanded {
                 continue;
             }
-            if let Some(n) = Self::node_at(&self.grid.model().roots, &row.path) {
+            if let Some(n) = Self::node_at(self.grid.model().roots(), &row.path) {
                 let pending = n.children.len() == 1
                     && n.children[0].cells.first().map(String::as_str) == Some(PENDING);
                 if pending {
@@ -1210,7 +1228,7 @@ impl FilePicker {
         }
         for (path, dir) in todo {
             // 자리표시를 "로딩"으로 바꿔 두 번 시작하지 않게 · 로더는 백그라운드 · 결과는 tick에서.
-            if let Some(n) = Self::node_at_mut(&mut self.grid.model_mut().roots, &path) {
+            if let Some(n) = Self::node_at_mut(self.grid.model_mut().roots_mut(), &path) {
                 if let Some(c) = n.children.first_mut() {
                     c.cells = vec![LOADING.into()];
                 }
@@ -1474,35 +1492,47 @@ impl FilePicker {
             rows.get(r)
                 .and_then(|rr| Self::row_item(&rr.cells, &rr.label))
         });
-        let hidden_label = format!(
-            "{} {}",
-            if self.show_hidden { "✓" } else { "  " },
-            self.labels.show_hidden
-        );
-        let dot_label = format!(
-            "{} {}",
-            if self.show_dot { "✓" } else { "  " },
-            self.labels.show_dot
-        );
+        // 아이콘: 새 폴더 = OS 폴더 아이콘(색 그대로 · 없으면 도형) · 나머지 = 코드 도형 · 토글 = 켜짐/꺼짐 도형(사용자 09-15).
+        let folder_icon = match IconService::global().icon(
+            &IconKey::Kind {
+                ext: String::new(),
+                is_dir: true,
+            },
+            false,
+        ) {
+            Lookup::Ready(Some(ic)) => MenuIcon::from_rgba(ic.w, ic.h, &ic.rgba),
+            _ => glyph(GlyphKind::FolderNew),
+        };
         // 항목 위 = 항목 메뉴(열기·복사 + 폴더 메뉴) · 빈 공간 = 폴더 메뉴(새 폴더·새로 고침·표시 토글)만.
         let mut items = Vec::new();
         if has.is_some() {
-            items.push(CtxItem::item("open", self.labels.menu_open.clone()));
-            items.push(CtxItem::item(
-                "copy_path",
-                self.labels.menu_copy_path.clone(),
-            ));
-            items.push(CtxItem::item(
-                "copy_name",
-                self.labels.menu_copy_name.clone(),
-            ));
+            items.push(
+                CtxItem::item("open", self.labels.menu_open.clone())
+                    .with_icon(Some(glyph(GlyphKind::Open))),
+            );
+            items.push(
+                CtxItem::item("copy_path", self.labels.menu_copy_path.clone())
+                    .with_icon(Some(glyph(GlyphKind::Link))),
+            );
+            items.push(
+                CtxItem::item("copy_name", self.labels.menu_copy_name.clone())
+                    .with_icon(Some(glyph(GlyphKind::Text))),
+            );
             items.push(CtxItem::Separator);
         }
-        items.push(CtxItem::item("new_folder", self.labels.new_folder.clone()));
-        items.push(CtxItem::item("refresh", self.labels.menu_refresh.clone()));
+        items.push(
+            CtxItem::item("new_folder", self.labels.new_folder.clone())
+                .with_icon(Some(folder_icon)),
+        );
+        items.push(
+            CtxItem::item("refresh", self.labels.menu_refresh.clone())
+                .with_icon(Some(glyph(GlyphKind::Refresh))),
+        );
         items.push(CtxItem::Separator);
-        items.push(CtxItem::item("hidden", hidden_label));
-        items.push(CtxItem::item("dot", dot_label));
+        items.push(
+            CtxItem::item("hidden", self.labels.show_hidden.clone()).with_checked(self.show_hidden),
+        );
+        items.push(CtxItem::item("dot", self.labels.show_dot.clone()).with_checked(self.show_dot));
         self.menu.set_scale(self.base.scale);
         self.menu
             .open_at(x, y, items, self.base.bounds, self.s(170));

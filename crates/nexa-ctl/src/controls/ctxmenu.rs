@@ -42,12 +42,14 @@ pub struct MenuIcon {
     pub w: u32,
     /// 높이(px).
     pub h: u32,
-    /// `w*h` 커버리지.
+    /// `w*h` 커버리지(틴트용 · 색 이미지도 알파는 여기 복사).
     pub alpha: Rc<[u8]>,
+    /// `w*h*4` RGBA — 있으면 **색 그대로**(OS 폴더 아이콘 등 · 09-15) · 없으면 상태색 틴트.
+    pub rgba: Option<Rc<[u8]>>,
 }
 
 impl MenuIcon {
-    /// 마스크로 만든다.
+    /// 마스크로 만든다(상태색 틴트).
     ///
     /// # Panics
     /// 길이가 `w*h`가 아니면 패닉(구성 오류).
@@ -58,6 +60,23 @@ impl MenuIcon {
             w,
             h,
             alpha: Rc::from(alpha),
+            rgba: None,
+        }
+    }
+
+    /// 색 이미지로 만든다(OS 아이콘 — 틴트하지 않는다).
+    ///
+    /// # Panics
+    /// 길이가 `w*h*4`가 아니면 패닉(구성 오류).
+    #[must_use]
+    pub fn from_rgba(w: u32, h: u32, rgba: &[u8]) -> Self {
+        assert_eq!(rgba.len(), (w * h * 4) as usize, "RGBA 길이 불일치");
+        let alpha: Vec<u8> = rgba.chunks(4).map(|p| p[3]).collect();
+        Self {
+            w,
+            h,
+            alpha: Rc::from(alpha),
+            rgba: Some(Rc::from(rgba)),
         }
     }
 }
@@ -79,6 +98,8 @@ pub enum CtxItem {
         shortcut: Option<String>,
         /// 하위 메뉴(비면 없음).
         children: Vec<CtxItem>,
+        /// 토글 상태(`Some` = 켜짐/꺼짐 아이콘을 아이콘 칸에 · 라벨은 다른 행과 같은 열에 정렬 · 09-15).
+        checked: Option<bool>,
     },
     /// 구분선.
     Separator,
@@ -95,6 +116,7 @@ impl CtxItem {
             icon: None,
             shortcut: None,
             children: Vec::new(),
+            checked: None,
         }
     }
     /// 활성 여부를 지정한 항목.
@@ -107,6 +129,7 @@ impl CtxItem {
             icon: None,
             shortcut: None,
             children: Vec::new(),
+            checked: None,
         }
     }
     /// 하위 메뉴 항목(라벨 + 자식 목록 · 활성 자식이 없으면 비활성).
@@ -126,6 +149,7 @@ impl CtxItem {
             icon: None,
             shortcut: None,
             children,
+            checked: None,
         }
     }
     /// 아이콘 붙이기(빌더).
@@ -142,6 +166,14 @@ impl CtxItem {
         if let Self::Item { shortcut, .. } = &mut self {
             let s: String = sc.into();
             *shortcut = (!s.is_empty()).then_some(s);
+        }
+        self
+    }
+    /// 토글 항목(켜짐/꺼짐 아이콘 · 빌더).
+    #[must_use]
+    pub fn with_checked(mut self, on: bool) -> Self {
+        if let Self::Item { checked, .. } = &mut self {
+            *checked = Some(on);
         }
         self
     }
@@ -258,9 +290,16 @@ impl ContextMenu {
     }
 
     fn has_icons(&self) -> bool {
-        self.items
-            .iter()
-            .any(|it| matches!(it, CtxItem::Item { icon: Some(_), .. }))
+        self.items.iter().any(|it| {
+            matches!(
+                it,
+                CtxItem::Item { icon: Some(_), .. }
+                    | CtxItem::Item {
+                        checked: Some(_),
+                        ..
+                    }
+            )
+        })
     }
 
     fn has_arrows(&self) -> bool {
@@ -633,6 +672,7 @@ impl ContextMenu {
                     icon,
                     shortcut,
                     children,
+                    checked,
                     ..
                 } => {
                     let h = self.row_h();
@@ -653,10 +693,26 @@ impl ContextMenu {
                     };
                     let mut x = r.x + self.s(PAD_H);
                     // 아이콘(상태색 틴트 · 세로 중앙) — 없는 행도 칸은 비워 둔다(글자 세로 정렬).
-                    if let Some(ic) = icon {
+                    // 토글 항목은 켜짐/꺼짐 도형이 아이콘 칸에(항목 아이콘이 따로 있으면 그것 우선).
+                    let toggle = match (icon.is_some(), checked) {
+                        (false, Some(on)) => Some(super::glyph(if *on {
+                            super::GlyphKind::ToggleOn
+                        } else {
+                            super::GlyphKind::ToggleOff
+                        })),
+                        _ => None,
+                    };
+                    if let Some(ic) = icon.as_ref().or(toggle.as_ref()) {
                         let sz = self.s(ICON_PX);
-                        let (cr, cg, cb) = fg.rgb();
-                        let img = IconImage::from_alpha_tinted(ic.w, ic.h, &ic.alpha, (cr, cg, cb));
+                        let img = match &ic.rgba {
+                            Some(rgba) if *enabled => {
+                                IconImage::from_rgba(ic.w, ic.h, rgba.to_vec())
+                            }
+                            _ => {
+                                let (cr, cg, cb) = fg.rgb();
+                                IconImage::from_alpha_tinted(ic.w, ic.h, &ic.alpha, (cr, cg, cb))
+                            }
+                        };
                         ctx.image_scaled(Rect::new(x, y + (h - sz) / 2, sz, sz), &img, row);
                     }
                     x += icon_col;

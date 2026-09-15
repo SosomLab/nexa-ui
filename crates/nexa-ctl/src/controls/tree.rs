@@ -96,23 +96,51 @@ pub struct FlatRow {
 /// 트리 계층 모델 — 노드 트리 + 펼침 상태(뷰와 무관 · TreeView/TreeGrid 공유).
 #[derive(Clone, Debug, Default)]
 pub struct TreeModel {
-    /// 루트 노드들.
-    pub roots: Vec<TreeNode>,
+    /// 루트 노드들 — 바깥에서는 [`Self::roots`]/[`Self::roots_mut`]로만(변경 = 평탄화 캐시 무효화 · docs/37 P-1).
+    roots: Vec<TreeNode>,
+    /// ★ 평탄화 캐시(09-15 nexa-sql docs/37 P-1) — 4,899행 `flatten()`이 프레임당 3회 × 4.3ms였다.
+    /// `Rc`로 돌려주므로 두 번째부터는 복사 0 · `roots_mut`/`toggle`/`set_expanded`가 비운다.
+    flat: std::cell::RefCell<Option<Rc<Vec<FlatRow>>>>,
 }
 
 impl TreeModel {
     /// 루트 목록으로 만든다.
     #[must_use]
     pub fn new(roots: Vec<TreeNode>) -> Self {
-        Self { roots }
+        Self {
+            roots,
+            flat: std::cell::RefCell::new(None),
+        }
     }
 
-    /// 현재 펼침 상태 기준 **보이는 행**을 평탄화한다(접힌 가지는 자식 제외).
+    /// 루트 노드들(읽기).
     #[must_use]
-    pub fn flatten(&self) -> Vec<FlatRow> {
+    pub fn roots(&self) -> &[TreeNode] {
+        &self.roots
+    }
+
+    /// 루트 노드들(변경 — 평탄화 캐시를 비운다).
+    pub fn roots_mut(&mut self) -> &mut Vec<TreeNode> {
+        self.invalidate();
+        &mut self.roots
+    }
+
+    /// 평탄화 캐시를 비운다(노드를 바깥에서 바꿨을 때).
+    pub fn invalidate(&self) {
+        *self.flat.borrow_mut() = None;
+    }
+
+    /// 현재 펼침 상태 기준 **보이는 행**을 평탄화한다(접힌 가지는 자식 제외 · 캐시).
+    #[must_use]
+    pub fn flatten(&self) -> Rc<Vec<FlatRow>> {
+        if let Some(f) = self.flat.borrow().as_ref() {
+            return Rc::clone(f);
+        }
         let mut out = Vec::new();
         Self::walk(&self.roots, &mut Vec::new(), 0, &mut out);
-        out
+        let rc = Rc::new(out);
+        *self.flat.borrow_mut() = Some(Rc::clone(&rc));
+        rc
     }
 
     fn walk(nodes: &[TreeNode], path: &mut Vec<usize>, depth: usize, out: &mut Vec<FlatRow>) {
@@ -148,6 +176,7 @@ impl TreeModel {
         if let Some(n) = self.node_at_mut(path) {
             if !n.children.is_empty() {
                 n.expanded = !n.expanded;
+                self.invalidate();
             }
         }
     }
@@ -157,6 +186,7 @@ impl TreeModel {
         if let Some(n) = self.node_at_mut(path) {
             if !n.children.is_empty() {
                 n.expanded = on;
+                self.invalidate();
             }
         }
     }
@@ -219,8 +249,8 @@ pub trait TreeControl: Control {
         (self.rows_viewport().w, h)
     }
 
-    /// 보이는 행.
-    fn rows(&self) -> Vec<FlatRow> {
+    /// 보이는 행(평탄화 캐시 · `Rc` 복사만).
+    fn rows(&self) -> Rc<Vec<FlatRow>> {
         self.model().flatten()
     }
 
@@ -494,8 +524,11 @@ impl Widget for TreeView {
         let rh = self.s(ROW_H);
         let top = self.tree_top();
         let bottom = b.bottom();
-        // 스크롤 오프셋 반영 · 뷰포트 안의 온전한 행만(수직 넘침 방지).
-        for (i, row) in self.rows().iter().enumerate() {
+        // 스크롤 오프셋 반영 · 뷰포트 안의 온전한 행만 — **첫 가시 행부터**(docs/37 P-2 · 전체 순회 금지).
+        let rows = self.rows();
+        let first = ((self.scroll_y / rh.max(1)).max(0) as usize).min(rows.len());
+        let count = ((bottom - top) / rh.max(1)).max(0) as usize + 2;
+        for (i, row) in rows.iter().enumerate().skip(first).take(count) {
             let ry = top - self.scroll_y + rh * i as i32;
             if ry < top || ry + rh > bottom {
                 continue;
@@ -735,7 +768,10 @@ impl Widget for TreeGrid {
         let tree_w = self.columns.first().map_or(b.w, |c| self.s(c.width));
         // 선택·hover 폭 — 열 합까지만(`fit_columns`) 또는 전폭.
         let row_w = self.hit_width();
-        for (i, row) in self.rows().iter().enumerate() {
+        let rows = self.rows();
+        let first = ((self.scroll_y / rh.max(1)).max(0) as usize).min(rows.len());
+        let count = ((bottom - top) / rh.max(1)).max(0) as usize + 2;
+        for (i, row) in rows.iter().enumerate().skip(first).take(count) {
             let y = top - self.scroll_y + rh * i as i32;
             if y < top || y + rh > bottom {
                 continue;
@@ -830,6 +866,22 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    #[test]
+    fn flatten_cache_is_reused_and_invalidated() {
+        // docs/37 P-1 — 두 번째 호출은 같은 Rc · toggle/roots_mut 뒤에는 새로 만든다.
+        let mut m = TreeModel::new(vec![TreeNode::branch("a", vec![TreeNode::leaf("b")])]);
+        let f1 = m.flatten();
+        let f2 = m.flatten();
+        assert!(Rc::ptr_eq(&f1, &f2), "캐시 재사용");
+        assert_eq!(f1.len(), 2, "branch는 기본 펼침(a, b)");
+        m.toggle(&[0]);
+        let f3 = m.flatten();
+        assert!(!Rc::ptr_eq(&f1, &f3), "toggle = 무효화");
+        assert_eq!(f3.len(), 1);
+        m.roots_mut().push(TreeNode::leaf("c"));
+        assert_eq!(m.flatten().len(), 2, "roots_mut = 무효화");
     }
 
     #[test]

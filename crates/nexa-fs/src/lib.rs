@@ -135,12 +135,20 @@ pub fn list_opts(dir: &Path, show_hidden: bool, show_dot: bool) -> io::Result<Ve
     Ok(out)
 }
 
+/// 메타데이터 — 보통은 `DirEntry::metadata()`(Windows = `FindNextFile`이 준 값 · syscall 0) · **링크일 때만** 경로 stat(대상 기준).
+fn link_aware_meta(de: &fs::DirEntry, path: &Path) -> io::Result<fs::Metadata> {
+    match de.file_type() {
+        Ok(t) if t.is_symlink() => fs::metadata(path).or_else(|_| de.metadata()),
+        _ => de.metadata(),
+    }
+}
+
 /// `DirEntry` → [`Entry`](숨김·점 규칙 적용 · 걸러지면 `None`). 동기 열거와 백그라운드 열거가 같은 규칙을 쓴다.
 pub(crate) fn entry_of(de: &fs::DirEntry, show_hidden: bool, show_dot: bool) -> Option<Entry> {
     let name = de.file_name().to_string_lossy().into_owned();
     let path = de.path();
-    // 링크는 대상 기준(폴더 링크는 폴더로 진입 가능해야 한다).
-    let meta = fs::metadata(&path).or_else(|_| de.metadata());
+    // 링크는 대상 기준(폴더 링크는 폴더로 진입 가능해야 한다) — 링크일 때만 경로 stat(docs/37 P-3 · 53×).
+    let meta = link_aware_meta(de, &path);
     let (is_dir, size, modified, hidden) = match &meta {
         Ok(m) => (
             m.is_dir(),
@@ -184,7 +192,7 @@ pub fn has_visible_child(dir: &Path, show_hidden: bool, show_dot: bool, exts: &[
     };
     for de in rd.flatten() {
         let name = de.file_name().to_string_lossy().into_owned();
-        let meta = fs::metadata(de.path()).or_else(|_| de.metadata());
+        let meta = link_aware_meta(&de, &de.path());
         let (is_dir, hidden) = match &meta {
             Ok(m) => (m.is_dir(), is_hidden_meta(m, &name)),
             Err(_) => (
@@ -226,7 +234,7 @@ pub fn has_subfolder(dir: &Path, show_hidden: bool, show_dot: bool) -> bool {
     };
     for de in rd.flatten() {
         let name = de.file_name().to_string_lossy().into_owned();
-        let meta = fs::metadata(de.path()).or_else(|_| de.metadata());
+        let meta = link_aware_meta(&de, &de.path());
         let (is_dir, hidden) = match &meta {
             Ok(m) => (m.is_dir(), is_hidden_meta(m, &name)),
             Err(_) => (false, name.starts_with('.')),
