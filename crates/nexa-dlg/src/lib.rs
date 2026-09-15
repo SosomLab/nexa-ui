@@ -250,6 +250,13 @@ const FILTER_W: i32 = 220;
 const BTN_W: i32 = 96;
 const HEADER_H: i32 = 26;
 
+impl Drop for FilePicker {
+    /// 대화상자가 사라지면 아이콘 워커 스레드도 지금 거둔다(캐시는 남는다 · 다음 열기가 새 워커를 만든다 · 사용자 09-15 "사용 후 회수").
+    fn drop(&mut self) {
+        IconService::global().release_worker();
+    }
+}
+
 impl FilePicker {
     /// 새 선택기 — `start`가 폴더가 아니면 홈(그마저 없으면 현재 작업 폴더).
     #[must_use]

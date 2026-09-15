@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (14차 · win · 마지막)** — 파일 대화상자 자원 회수 점검(nexa-sql docs/37 §6-5): 아이콘 워커 **COM 아파트먼트 = 스레드 수명**(`ComApartment` 진입/해제 짝) · `IconService::release_worker()`(FilePicker Drop → 즉시 회수 · 30초 대기 없음) · `clear()` · 자원 계측 테스트(`resource_tests` · GDI/핸들 5주기 평평). 선형 누수 0 · 남는 것은 셸 일회성 초기화. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (13차 · win)** — ★ 성능(nexa-sql docs/37): `TreeModel` **평탄화 캐시**(`Rc<Vec<FlatRow>>` · `roots` 비공개 · `roots_mut/toggle/set_expanded` = 무효화 · 4,899행 8.6ms/프레임 → 0) · 트리 페인트 **첫 가시 행부터** · `nexa-fs` 링크일 때만 경로 stat(53×) · 파일 대화상자 배치 재구성 150ms 간격 · `ContextMenu` 색 아이콘(`MenuIcon::from_rgba`)·토글(`with_checked` · 켜짐/꺼짐 도형) · `controls::glyphs`(코드 도형 9종 · 스레드 로컬 캐시) · `docs/bench/`(조사 세션 벤치 보존). → [journal](journal/2026-09-15.md)
 - **2026-09-15 (12차 · win)** — ★ `nexa-fs::lister`(**백그라운드 열거** · 256 배치 스트리밍 · 폴더 프로브 · `ListHandle` Drop = 취소) · `FilePicker` 동기 `list` 호출 0(이동·새로 고침·지연 펼침·사이드바 프로브 전부 로더 · 틱에서 8개 상한 소비) · 아이콘 워커 유휴 30초 종료 · docs/20 §2-2. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (11차 · win)** — `TreeGrid::set_fit_columns`(선택·hover·클릭 = 열 합 폭 · `TreeControl::hit_width`) · `FilePicker` 항목/빈 공간 우클릭 메뉴 분리. → [journal](journal/2026-09-15.md)

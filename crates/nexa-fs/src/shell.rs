@@ -138,8 +138,13 @@ impl IconService {
             let spawned = std::thread::Builder::new()
                 .name("nexa-fs-icons".into())
                 .spawn(move || {
+                    // ★ COM 아파트먼트는 이 스레드의 수명과 같다 — 진입에서 CoInitializeEx · 빠져나갈 때 CoUninitialize.
+                    //   (09-15 누수 점검: 초기화만 하고 스레드가 끝나면 STA 아파트먼트(셸 아이콘 캐시·핸들·GDI)가
+                    //   워커 수명마다 하나씩 남는다 → 대화상자 열고 닫을 때마다 핸들 +N.)
+                    let _com = imp::ComApartment::enter();
                     // ★ 유휴 30초면 스레드를 거둔다(사용자 09-15 "사용 후 회수") — tx를 None으로 되돌려 다음 요청이 새로 만든다.
                     //   종료 결정과 tx 해제는 같은 잠금 아래에서 · 그 사이 도착한 요청은 처리하고 계속 산다(유실 0).
+                    //   `release_worker()`가 tx를 떨어뜨리면 Disconnected로 즉시 빠져나간다.
                     loop {
                         let req = match r.recv_timeout(std::time::Duration::from_secs(30)) {
                             Ok(req) => req,
@@ -242,6 +247,27 @@ impl IconService {
             self.send(Req::Name(k.0, k.1));
         }
         Lookup::Pending
+    }
+
+    /// 워커 스레드를 지금 거둔다(대화상자가 닫힐 때 — 사용자 09-15 "사용 후 회수"). 캐시는 남는다(다음 열기 즉시 적중) ·
+    /// 처리 중이던 요청 하나는 끝까지 저장되고 큐에 남은 요청은 버려진다(호출자가 이미 사라졌다) · 다음 요청이 새 워커를 만든다.
+    pub fn release_worker(&self) {
+        let mut tx = self
+            .tx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *tx = None;
+        let mut g = self.lock();
+        g.pending_icons.clear();
+        g.pending_names.clear();
+    }
+
+    /// 캐시 비우기(진단·계측 — 앱은 상한 512로 그대로 둔다).
+    pub fn clear(&self) {
+        let mut g = self.lock();
+        g.icons.clear();
+        g.order.clear();
+        g.names.clear();
     }
 
     /// 캐시된 아이콘 수(진단).
@@ -417,7 +443,34 @@ mod imp {
     #[link(name = "ole32")]
     extern "system" {
         fn CoInitializeEx(reserved: *mut c_void, coinit: u32) -> i32;
+        fn CoUninitialize();
         fn CoTaskMemFree(p: *mut c_void);
+    }
+
+    /// 스레드 수명과 묶인 COM 아파트먼트(STA) — `enter()`에서 초기화 · Drop에서 해제(초기화가 성공했을 때만 짝을 맞춘다).
+    /// 워커 스레드 전용 · 다른 스레드(UI·테스트)는 `ensure_com`(스레드 로컬 1회)으로 충분하다.
+    pub(super) struct ComApartment {
+        owned: bool,
+    }
+
+    impl ComApartment {
+        pub(super) fn enter() -> Self {
+            // SAFETY: 인자 없음 · S_OK(0)/S_FALSE(1) = 우리가 참조를 하나 쥔다 · 음수(모드 충돌 등) = 남의 아파트먼트 · 해제 안 함.
+            let hr = unsafe { CoInitializeEx(std::ptr::null_mut(), 2) };
+            let owned = hr >= 0;
+            COM_READY.with(|c| c.set(true));
+            Self { owned }
+        }
+    }
+
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            if self.owned {
+                // SAFETY: enter()의 성공한 CoInitializeEx와 1:1.
+                unsafe { CoUninitialize() };
+            }
+            COM_READY.with(|c| c.set(false));
+        }
     }
     #[link(name = "shell32")]
     extern "system" {
@@ -644,6 +697,12 @@ mod imp {
     use super::RgbaIcon;
     use std::path::Path;
     pub(super) const SUPPORTED: bool = false;
+    pub(super) struct ComApartment;
+    impl ComApartment {
+        pub(super) fn enter() -> Self {
+            Self
+        }
+    }
     pub(super) fn shell_alias(_name: &str) -> Option<std::path::PathBuf> {
         None
     }
@@ -655,6 +714,97 @@ mod imp {
     }
     pub(super) fn kind_name(_ext: &str, _is_dir: bool) -> Option<String> {
         None
+    }
+}
+
+#[cfg(all(test, windows))]
+mod resource_tests {
+    use super::*;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetGuiResources(process: *mut std::ffi::c_void, flags: u32) -> u32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn GetProcessHandleCount(process: *mut std::ffi::c_void, count: *mut u32) -> i32;
+    }
+
+    fn counts() -> (u32, u32) {
+        // SAFETY: 현재 프로세스 의사 핸들 · 출력 포인터 유효.
+        unsafe {
+            let p = GetCurrentProcess();
+            let gdi = GetGuiResources(p, 0);
+            let mut h = 0u32;
+            GetProcessHandleCount(p, &mut h);
+            (gdi, h)
+        }
+    }
+
+    fn settle(svc: &IconService) {
+        let t = std::time::Instant::now();
+        while svc.pending() > 0 && t.elapsed() < std::time::Duration::from_secs(20) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// 대화상자 열기·닫기 한 번 = 워커 한 수명. 5주기 뒤 GDI 객체·핸들 수가 첫 주기(일회성 셸 초기화) 이후 평평해야 한다.
+    /// 09-15 실측(수정 전): 주기마다 핸들·GDI가 선형 증가(CoUninitialize 없음) → 수정 뒤 0.
+    #[test]
+    #[ignore = "자원 계측 — cargo test -p nexa-fs resource -- --ignored --nocapture"]
+    fn worker_cycles_do_not_leak_handles_or_gdi() {
+        let svc = IconService::global();
+        let exts = [
+            "sql", "txt", "docx", "pptx", "zip", "jpg", "png", "pdf", "xlsx", "md", "json", "csv",
+            "exe", "dll", "log", "ini", "xml", "html", "rs", "toml",
+        ];
+        let home = std::path::PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
+        let mut trail = Vec::new();
+        let c0 = counts();
+        eprintln!("before: gdi={} handles={}", c0.0, c0.1);
+        for cycle in 0..5 {
+            svc.clear();
+            for e in exts {
+                let _ = svc.icon(
+                    &IconKey::Kind {
+                        ext: e.into(),
+                        is_dir: false,
+                    },
+                    false,
+                );
+                let _ = svc.kind_name(e, false);
+            }
+            let _ = svc.icon(
+                &IconKey::Kind {
+                    ext: String::new(),
+                    is_dir: true,
+                },
+                false,
+            );
+            let _ = svc.icon(&IconKey::Path(home.clone()), false);
+            let _ = svc.icon(&IconKey::Path(home.join("Desktop")), true);
+            settle(svc);
+            assert!(svc.cached() >= exts.len(), "워커가 실제로 돌았다");
+            svc.release_worker();
+            std::thread::sleep(std::time::Duration::from_millis(300)); // 워커 종료(CoUninitialize) 대기
+            let c = counts();
+            eprintln!("cycle {cycle}: gdi={} handles={}", c.0, c.1);
+            trail.push(c);
+        }
+        // 첫 주기는 셸/COM 일회성 초기화를 포함 → 2번째 이후로 판정.
+        let base = trail[1];
+        let last = trail[4];
+        assert!(
+            last.0 <= base.0 + 2,
+            "GDI 객체가 주기마다 늘어난다: {:?}",
+            trail
+        );
+        assert!(
+            last.1 <= base.1 + 8,
+            "핸들이 주기마다 늘어난다: {:?}",
+            trail
+        );
     }
 }
 
