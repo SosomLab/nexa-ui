@@ -1089,7 +1089,7 @@ impl FilePicker {
             .collect()
     }
 
-    /// 경로 편집 시작(우클릭 · 빈 곳 클릭) — 전체 경로를 상자에 넣고 전체 선택.
+    /// 경로 편집 시작(우클릭 전용) — 전체 경로를 상자에 넣고 전체 선택.
     fn begin_path_edit(&mut self, inv: &mut Invalidations) {
         self.path_editing = true;
         self.path_box.set_text(&self.dir.to_string_lossy());
@@ -2055,8 +2055,8 @@ impl Widget for FilePicker {
                             let target = crumbs[i].1.clone();
                             self.go(&target);
                         }
-                        Some(_) => {}
-                        None => self.begin_path_edit(inv),
+                        // 좌클릭은 이동만 — 빈 곳/현재 조각 클릭은 아무것도 하지 않는다(편집은 우클릭 전용 · 사용자 09-15).
+                        Some(_) | None => {}
                     }
                 }
                 InputEvent::RightDown { .. } => self.begin_path_edit(inv),
