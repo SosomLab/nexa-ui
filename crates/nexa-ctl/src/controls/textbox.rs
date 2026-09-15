@@ -514,6 +514,22 @@ impl TextBox {
         self.edit.selection()
     }
 
+    /// 프로그램 선택(찾기 결과 강조 · nexa-sql 09-15) — 문자 인덱스 `from..to` · 캐럿은 `to` · 캐럿 추종 스크롤 재개.
+    pub fn select_range(&mut self, from: usize, to: usize, inv: &mut Invalidations) {
+        self.edit.set_selection(from, to);
+        self.ml_user_scrolled = false;
+        inv.push(self.base.bounds);
+    }
+
+    /// 범위 교체(바꾸기) — 되돌리기 히스토리에 남는다(`set_text`와 달리).
+    pub fn replace_range(&mut self, from: usize, to: usize, text: &str, inv: &mut Invalidations) {
+        self.edit.set_selection(from, to);
+        self.edit.insert_str(text);
+        self.changed = true;
+        self.ml_user_scrolled = false;
+        inv.push(self.base.bounds);
+    }
+
     /// 선택 텍스트(복사 — ① 08-13). 위젯은 OS 클립보드를 모른다 — 호스트가 잇는다.
     #[must_use]
     pub fn copy_selection(&self) -> Option<String> {
