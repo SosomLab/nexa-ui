@@ -150,6 +150,32 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     (ac.len() - i).cmp(&(bc.len() - j))
 }
 
+/// 결합 정렬(Shift+클릭으로 모은 키 순서 · 폴더 먼저 · 키가 비면 이름 오름차순 · 마지막 동률은 이름).
+pub fn sort_by(entries: &mut [Entry], keys: &[(SortKey, bool)]) {
+    entries.sort_by(|a, b| {
+        if a.is_dir != b.is_dir {
+            return if a.is_dir {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        for &(key, desc) in keys {
+            let ord = match key {
+                SortKey::Name => natural_cmp(&a.name, &b.name),
+                SortKey::Modified => a.modified.cmp(&b.modified),
+                SortKey::Size => a.size.cmp(&b.size),
+                SortKey::Kind => natural_cmp(&a.ext(), &b.ext()),
+            };
+            let ord = if desc { ord.reverse() } else { ord };
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
+        natural_cmp(&a.name, &b.name)
+    });
+}
+
 /// 정렬 — 폴더 먼저 · `key` 기준 · `desc`면 역순(폴더 우선은 유지).
 pub fn sort(entries: &mut [Entry], key: SortKey, desc: bool) {
     entries.sort_by(|a, b| {

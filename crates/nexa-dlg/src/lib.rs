@@ -132,7 +132,12 @@ pub struct FilePicker {
     entries: Vec<Entry>,
     /// 필터·정렬을 거친 표시 목록(그리드 행 ↔ 인덱스).
     shown: Vec<usize>,
-    sort: (SortKey, bool),
+    /// 결합 정렬 키(클릭 = 단일 3단 ▲→▼→해제 · Shift+클릭 = 키 추가/방향/제거 · 비면 이름 ▲ · 결과 그리드와 같은 규약).
+    sort_keys: Vec<(SortKey, bool)>,
+    /// 표시 순서(논리 컬럼 1=수정 · 2=크기 · 3=유형 · 이름은 항상 첫 열) — 헤더 드래그로 바꾼다.
+    col_order: Vec<usize>,
+    /// 헤더 드래그(표시 위치 · 시작 x · 현재 x · 4px 이상 움직임 · Shift).
+    hdr_drag: Option<(usize, i32, i32, bool, bool)>,
     show_hidden: bool,
     places: Vec<Place>,
     recent: Vec<PathBuf>,
@@ -214,7 +219,9 @@ impl FilePicker {
             dir: dir.clone(),
             entries: Vec::new(),
             shown: Vec::new(),
-            sort: (SortKey::Name, false),
+            sort_keys: Vec::new(),
+            col_order: vec![2, 1, 3],
+            hdr_drag: None,
             show_hidden: false,
             places: nexa_fs::places(),
             recent: Vec::new(),
@@ -556,8 +563,7 @@ impl FilePicker {
 
     /// 필터·정렬 적용 → 그리드 모델 재구성(정렬 표시는 헤더 제목에).
     fn refresh_grid(&mut self, select: usize) {
-        let (key, desc) = self.sort;
-        nexa_fs::sort(&mut self.entries, key, desc);
+        nexa_fs::sort_by(&mut self.entries, &self.sort_keys);
         let exts = self.current_filter().exts.clone();
         self.shown = self
             .entries
@@ -614,42 +620,56 @@ impl FilePicker {
                         }
                     });
                 let icon = icons.get(&(e.is_dir, ext)).cloned();
-                let node = TreeNode::leaf(e.name.clone()).with_cells(vec![modified, size, kind]);
+                let logical = [modified, size, kind];
+                let cells: Vec<String> = self
+                    .col_order
+                    .iter()
+                    .map(|&c| logical[c - 1].clone())
+                    .collect();
+                let node = TreeNode::leaf(e.name.clone()).with_cells(cells);
                 match icon {
                     Some(img) => node.with_image(img),
                     None => node,
                 }
             })
             .collect();
-        let mark = |k: SortKey| -> &'static str {
-            if k == key {
-                if desc {
-                    " ▼"
+        // 정렬 배지 — ▲/▼ + 결합 순번(키가 둘 이상일 때) · 키가 비면 이름 ▲.
+        let keys = &self.sort_keys;
+        let mark = |k: SortKey| -> String {
+            if keys.is_empty() {
+                return if k == SortKey::Name {
+                    " ▲".into()
                 } else {
-                    " ▲"
+                    String::new()
+                };
+            }
+            match keys.iter().position(|(kk, _)| *kk == k) {
+                Some(i) => {
+                    let arrow = if keys[i].1 { "▼" } else { "▲" };
+                    if keys.len() > 1 {
+                        format!(" {arrow}{}", i + 1)
+                    } else {
+                        format!(" {arrow}")
+                    }
                 }
-            } else {
-                ""
+                None => String::new(),
             }
         };
-        let cols = vec![
-            GridColumn::new(
-                format!("{}{}", self.labels.col_name, mark(SortKey::Name)),
-                self.col_w[0],
-            ),
-            GridColumn::new(
-                format!("{}{}", self.labels.col_modified, mark(SortKey::Modified)),
-                self.col_w[1],
-            ),
-            GridColumn::new(
-                format!("{}{}", self.labels.col_size, mark(SortKey::Size)),
-                self.col_w[2],
-            ),
-            GridColumn::new(
-                format!("{}{}", self.labels.col_kind, mark(SortKey::Kind)),
-                self.col_w[3],
-            ),
-        ];
+        let mut cols = vec![GridColumn::new(
+            format!("{}{}", self.labels.col_name, mark(SortKey::Name)),
+            self.col_w[0],
+        )];
+        for &c in &self.col_order {
+            let (label, k) = match c {
+                1 => (&self.labels.col_modified, SortKey::Modified),
+                2 => (&self.labels.col_size, SortKey::Size),
+                _ => (&self.labels.col_kind, SortKey::Kind),
+            };
+            cols.push(GridColumn::new(
+                format!("{label}{}", mark(k)),
+                self.col_w[c],
+            ));
+        }
         let focused = self.grid.is_focused();
         let mut grid = TreeGrid::new(TreeModel::new(nodes), cols);
         grid.set_scale(self.base.scale);
@@ -803,26 +823,80 @@ impl FilePicker {
     }
 
     /// 헤더 클릭 → 정렬 열/방향.
-    fn header_hit(&self, x: i32, y: i32) -> Option<SortKey> {
+    /// 표시 위치 → 논리 컬럼(0 = 이름 · 1 = 수정 · 2 = 크기 · 3 = 유형).
+    fn logical_col(&self, pos: usize) -> usize {
+        if pos == 0 {
+            0
+        } else {
+            self.col_order.get(pos - 1).copied().unwrap_or(0)
+        }
+    }
+
+    fn sort_key_of(col: usize) -> SortKey {
+        match col {
+            0 => SortKey::Name,
+            1 => SortKey::Modified,
+            2 => SortKey::Size,
+            _ => SortKey::Kind,
+        }
+    }
+
+    /// 헤더 표시 위치별 x 범위(가로 스크롤 반영).
+    fn header_cells(&self) -> Vec<(i32, i32)> {
+        let g = self.grid_rect;
+        let (sx, _) = self.grid.scroll();
+        let mut cx = g.x - sx;
+        let mut out = Vec::with_capacity(4);
+        for pos in 0..=self.col_order.len() {
+            let w = self.s(self.col_w[self.logical_col(pos)]);
+            out.push((cx, cx + w));
+            cx += w;
+        }
+        out
+    }
+
+    /// 헤더 클릭 → 표시 위치.
+    fn header_hit(&self, x: i32, y: i32) -> Option<usize> {
         let g = self.grid_rect;
         if y < g.y || y >= g.y + self.s(HEADER_H) || x < g.x || x >= g.right() {
             return None;
         }
-        let (sx, _) = self.grid.scroll();
-        let mut cx = g.x - sx;
-        for (i, w) in self.col_w.iter().enumerate() {
-            let w = self.s(*w);
-            if x >= cx && x < cx + w {
-                return Some(match i {
-                    0 => SortKey::Name,
-                    1 => SortKey::Modified,
-                    2 => SortKey::Size,
-                    _ => SortKey::Kind,
-                });
+        self.header_cells()
+            .iter()
+            .position(|&(x0, x1)| x >= x0 && x < x1)
+    }
+
+    /// 드래그 목표 위치(현재 x 기준 · 컬럼 중앙을 넘으면 그 다음 · 이름 열 앞으로는 못 간다).
+    fn drop_pos_at(&self, x: i32) -> usize {
+        let cells = self.header_cells();
+        for (pos, &(x0, x1)) in cells.iter().enumerate().skip(1) {
+            if x < (x0 + x1) / 2 {
+                return pos;
             }
-            cx += w;
         }
-        None
+        cells.len()
+    }
+
+    /// 정렬 토글(결과 그리드 규약): 클릭 = 그 키만 ▲→▼→해제 · Shift = 키 추가 / 방향 순환 / 제거.
+    fn toggle_sort(&mut self, k: SortKey, shift: bool) {
+        let pos = self.sort_keys.iter().position(|(kk, _)| *kk == k);
+        if shift && !self.sort_keys.is_empty() {
+            match pos {
+                None => self.sort_keys.push((k, false)),
+                Some(i) if !self.sort_keys[i].1 => self.sort_keys[i].1 = true,
+                Some(i) => {
+                    self.sort_keys.remove(i);
+                }
+            }
+        } else {
+            self.sort_keys = match pos {
+                Some(i) if self.sort_keys.len() == 1 && !self.sort_keys[i].1 => vec![(k, true)],
+                Some(i) if self.sort_keys.len() == 1 && self.sort_keys[i].1 => Vec::new(),
+                _ => vec![(k, false)],
+            };
+        }
+        let sel = self.grid.selected_row();
+        self.refresh_grid(sel);
     }
 
     // ───────────────────────── 배치 ─────────────────────────
@@ -1058,16 +1132,51 @@ impl Widget for FilePicker {
         ) {
             self.own_focus(p);
         }
-        // 헤더 클릭 = 정렬.
-        if let InputEvent::MouseDown { x, y, .. } = *ev {
-            if let Some(k) = self.header_hit(x, y) {
-                let (key, desc) = self.sort;
-                self.sort = if key == k { (k, !desc) } else { (k, false) };
-                let sel = self.grid.selected_row();
-                self.refresh_grid(sel);
+        // 헤더: 클릭 = 정렬(Shift = 결합) · 드래그 = 컬럼 이동(이름 열은 고정 · 사용자 09-15).
+        match *ev {
+            InputEvent::MouseDown { x, y, shift, .. } => {
+                if let Some(pos) = self.header_hit(x, y) {
+                    self.hdr_drag = Some((pos, x, x, false, shift));
+                    inv.push(self.base.bounds);
+                    return;
+                }
+            }
+            InputEvent::MouseMove { x, .. } if self.hdr_drag.is_some() => {
+                let thresh = self.s(4);
+                if let Some(d) = self.hdr_drag.as_mut() {
+                    d.2 = x;
+                    if (x - d.1).abs() > thresh && d.0 > 0 {
+                        d.3 = true;
+                    }
+                }
                 inv.push(self.base.bounds);
                 return;
             }
+            InputEvent::MouseUp { x, .. } if self.hdr_drag.is_some() => {
+                let (pos, _, _, moved, shift) =
+                    self.hdr_drag.take().unwrap_or((0, 0, 0, false, false));
+                if moved {
+                    let to = self.drop_pos_at(x).max(1);
+                    // 표시 위치(1..) ↔ col_order 인덱스(0..)
+                    let from_i = pos - 1;
+                    let mut to_i = to - 1;
+                    if from_i < self.col_order.len() {
+                        let c = self.col_order.remove(from_i);
+                        if to_i > from_i {
+                            to_i -= 1;
+                        }
+                        self.col_order.insert(to_i.min(self.col_order.len()), c);
+                        let sel = self.grid.selected_row();
+                        self.refresh_grid(sel);
+                    }
+                } else {
+                    let k = Self::sort_key_of(self.logical_col(pos));
+                    self.toggle_sort(k, shift);
+                }
+                inv.push(self.base.bounds);
+                return;
+            }
+            _ => {}
         }
         // 마우스/휠 = 커서 아래 컨트롤 · 키 = 포커스 컨트롤.
         let route = |r: Rect, focused: bool| -> bool {
@@ -1180,6 +1289,24 @@ impl Widget for FilePicker {
         self.path_box.paint(ctx, theme);
         self.places_view.paint(ctx, theme);
         self.grid.paint(ctx, theme);
+        // 헤더 드래그 피드백 — 끄는 컬럼은 선택색 · 놓일 자리는 accent 세로선.
+        if let Some((pos, _, x, true, _)) = self.hdr_drag {
+            let cells = self.header_cells();
+            let hh = self.s(HEADER_H);
+            let g = self.grid_rect;
+            if let Some(&(x0, x1)) = cells.get(pos) {
+                let r = Rect::new(x0, g.y, x1 - x0, hh).intersection(&g);
+                ctx.fill_rect_alpha(r, theme.sel_bg, 0.6);
+            }
+            let to = self.drop_pos_at(x);
+            let lx = cells
+                .get(to)
+                .map_or(cells.last().map_or(g.x, |c| c.1), |c| c.0);
+            ctx.fill_rect(
+                Rect::new(lx - 1, g.y, 2, g.h).intersection(&g),
+                theme.accent,
+            );
+        }
         self.name_box.paint(ctx, theme);
         self.hidden_chk.paint(ctx, theme);
         self.ok_btn.paint(ctx, theme);
