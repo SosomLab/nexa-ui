@@ -87,6 +87,54 @@ impl IconImage {
         Self { w, h, rgba }
     }
 
+    /// 표시 크기로 **미리 스케일**한 사본(bilinear · 09-15 사전 스케일 캐시) — 매 프레임 스케일 샘플링 대신
+    /// 한 번 만들어 두고 [`Surface::blend_image`]로 그대로 찍는다.
+    #[must_use]
+    pub fn resized(&self, w: u32, h: u32) -> Self {
+        if w == 0 || h == 0 || self.w == 0 || self.h == 0 {
+            return Self {
+                w,
+                h,
+                rgba: vec![0; (w * h * 4) as usize],
+            };
+        }
+        if w == self.w && h == self.h {
+            return self.clone();
+        }
+        let (iw, ih) = (self.w as i32, self.h as i32);
+        let at = |x: i32, y: i32| -> [u8; 4] {
+            let i = ((y.clamp(0, ih - 1) * iw + x.clamp(0, iw - 1)) * 4) as usize;
+            [
+                self.rgba[i],
+                self.rgba[i + 1],
+                self.rgba[i + 2],
+                self.rgba[i + 3],
+            ]
+        };
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        for row in 0..h as i32 {
+            for col in 0..w as i32 {
+                let fx = (col as f32 + 0.5) * iw as f32 / w as f32 - 0.5;
+                let fy = (row as f32 + 0.5) * ih as f32 / h as f32 - 0.5;
+                let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
+                let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+                let (p00, p10, p01, p11) = (
+                    at(x0, y0),
+                    at(x0 + 1, y0),
+                    at(x0, y0 + 1),
+                    at(x0 + 1, y0 + 1),
+                );
+                for k in 0..4 {
+                    let top = f32::from(p00[k]) * (1.0 - tx) + f32::from(p10[k]) * tx;
+                    let bot = f32::from(p01[k]) * (1.0 - tx) + f32::from(p11[k]) * tx;
+                    out.push((top * (1.0 - ty) + bot * ty + 0.5) as u8);
+                }
+            }
+        }
+        Self { w, h, rgba: out }
+    }
+
     /// 데모용 — **투명 배경의 라운드 사각형** 아이콘(앱 아이콘 느낌). 모서리는 알파 0.
     #[must_use]
     pub fn swatch(size: u32, (r, g, b): (u8, u8, u8)) -> Self {
@@ -243,6 +291,63 @@ impl<'a> Surface<'a> {
         self.buf[idx] = (mix(bg.0, fg.0) << 16) | (mix(bg.1, fg.1) << 8) | mix(bg.2, fg.2);
     }
 
+    /// ★ 캐시된 글리프 비트맵을 `(x, y)`(좌상단)에 블렌드한다 — 글리프 그리기의 **타이트 루프**
+    /// (행 단위 인덱스 계산 · 커버리지 255는 덮어쓰기 · 0은 건너뜀). `slant`가 있으면 faux 이탤릭(베이스라인 위 거리 비례 전단).
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_mask(
+        &mut self,
+        x: i32,
+        y: i32,
+        bm: &crate::text::GlyphBitmap,
+        color: Color,
+        clip: (i32, i32, i32, i32),
+        slant: f32,
+        baseline_y: i32,
+    ) {
+        let (w, h) = (i32::from(bm.w), i32::from(bm.h));
+        let x1 = clip.2.min(self.width as i32);
+        let y1 = clip.3.min(self.height as i32);
+        let x0 = clip.0.max(0);
+        let y0 = clip.1.max(0);
+        let (fr, fg, fb) = color.rgb();
+        for row in 0..h {
+            let py = y + row;
+            if py < y0 || py >= y1 {
+                continue;
+            }
+            let shear = if slant != 0.0 {
+                ((baseline_y - py) as f32 * slant) as i32
+            } else {
+                0
+            };
+            let src = (row * w) as usize;
+            let line = py as usize * self.width;
+            for col in 0..w {
+                let a = bm.cov[src + col as usize];
+                if a == 0 {
+                    continue;
+                }
+                let px = x + col + shear;
+                if px < x0 || px >= x1 {
+                    continue;
+                }
+                let idx = line + px as usize;
+                if a == 255 {
+                    self.buf[idx] = (u32::from(fr) << 16) | (u32::from(fg) << 8) | u32::from(fb);
+                    continue;
+                }
+                let bg = self.buf[idx];
+                let a32 = u32::from(a);
+                let ia = 255 - a32;
+                let mix = |b: u32, f: u8| -> u32 { (b * ia + u32::from(f) * a32 + 127) / 255 };
+                let r = mix((bg >> 16) & 0xFF, fr);
+                let g = mix((bg >> 8) & 0xFF, fg);
+                let b = mix(bg & 0xFF, fb);
+                self.buf[idx] = (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
     /// RGBA 이미지를 `dst`(x,y,w,h)로 **스케일**해 알파 블렌드한다(★ bilinear ·
     /// 09-02 실기 "픽셀 깨짐" — nearest 계단 해소). `clip`(반열림) 밖은 건너뛴다.
     #[allow(clippy::too_many_arguments)]
@@ -256,6 +361,11 @@ impl<'a> Surface<'a> {
         clip: (i32, i32, i32, i32),
     ) {
         if dw <= 0 || dh <= 0 || img.w == 0 || img.h == 0 {
+            return;
+        }
+        // 같은 크기면 스케일 샘플링 없이 그대로(사전 스케일 캐시가 이 경로를 탄다).
+        if dw == img.w as i32 && dh == img.h as i32 {
+            self.blend_image(dx, dy, img, clip);
             return;
         }
         let (iw, ih) = (img.w as i32, img.h as i32);

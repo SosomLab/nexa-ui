@@ -24,6 +24,37 @@ pub fn tab_cols() -> u32 {
 
 use crate::surface::{Color, Surface};
 use ab_glyph::{Font as _, FontRef, ScaleFont as _};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+/// ★ 글리프 비트맵 캐시 키(09-15 사용자 "글리프 캐시가 없다") — (폴백 face · 글리프 id · 크기 비트 · 가로 서브픽셀 1/3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GlyphKey {
+    face: u8,
+    gid: u16,
+    size: u32,
+    sub: u8,
+}
+
+/// 래스터된 글리프 — 원점(펜 정수 x · 베이스라인 정수 y) 기준 오프셋 + 8비트 커버리지.
+#[derive(Debug)]
+pub struct GlyphBitmap {
+    /// 폭·높이(px).
+    pub w: u16,
+    /// 폭·높이(px).
+    pub h: u16,
+    /// 원점 기준 좌상단 오프셋.
+    pub ox: i16,
+    /// 원점 기준 좌상단 오프셋.
+    pub oy: i16,
+    /// `w*h` 커버리지(0~255).
+    pub cov: Vec<u8>,
+}
+
+/// 캐시 상한(항목 수) — 넘으면 비우고 다시 채운다(글꼴 크기를 여러 번 바꿔도 메모리가 제자리).
+const GLYPH_CACHE_MAX: usize = 8192;
+/// 가로 서브픽셀 단계(1/3 px — 비례 글꼴의 자간 떨림을 막으면서 캐시 적중을 높인다).
+const SUBPX: f32 = 3.0;
 
 /// 로드된 폰트 — **프로세스 수명 자원**(로드 1회 · 앱 종료까지 사용).
 ///
@@ -33,12 +64,15 @@ pub struct Font {
     /// ★ 폴백 체인(09-01 사용자 요청 "두부 예방") — [0] = 주 폰트, 이후 = 대체.
     /// 글자마다 글리프가 있는 첫 보을 쓴다(JetBrains Mono + 한글 = 시스템 본이 받는다).
     faces: Vec<FontRef<'static>>,
+    /// ★ 글리프 비트맵 캐시 — 외곽선 추출+래스터(글리프당 ≈1.4µs)를 **처음 한 번만**. 복제본끼리 공유(Arc).
+    cache: Arc<Mutex<HashMap<GlyphKey, Arc<GlyphBitmap>>>>,
 }
 
 impl Clone for Font {
     fn clone(&self) -> Self {
         Self {
             faces: self.faces.clone(),
+            cache: Arc::clone(&self.cache),
         }
     }
 }
@@ -77,7 +111,10 @@ impl Font {
     /// 파싱 불가·인덱스 범위 밖이면 [`FontError`].
     pub fn from_static(data: &'static [u8], index: u32) -> Result<Self, FontError> {
         FontRef::try_from_slice_and_index(data, index)
-            .map(|f| Self { faces: vec![f] })
+            .map(|f| Self {
+                faces: vec![f],
+                cache: Arc::new(Mutex::new(HashMap::new())),
+            })
             .map_err(|_| FontError)
     }
 
@@ -89,6 +126,7 @@ impl Font {
     pub fn push_fallback(&mut self, data: &'static [u8], index: u32) -> Result<(), FontError> {
         let f = FontRef::try_from_slice_and_index(data, index).map_err(|_| FontError)?;
         self.faces.push(f);
+        self.clear_glyph_cache();
         Ok(())
     }
 
@@ -96,6 +134,20 @@ impl Font {
     /// ★ 다른 글꼴의 얼굴 전부를 폴백으로 잇는다(09-04 — 고정폭 글꼴에 주 글꼴 체인을 통째로).
     pub fn push_fallback_font(&mut self, other: &Font) {
         self.faces.extend(other.faces.iter().cloned());
+        self.clear_glyph_cache();
+    }
+
+    /// 글리프 캐시를 비운다(face 목록이 바뀔 때).
+    pub fn clear_glyph_cache(&self) {
+        if let Ok(mut c) = self.cache.lock() {
+            c.clear();
+        }
+    }
+
+    /// 캐시된 글리프 수(진단·테스트).
+    #[must_use]
+    pub fn glyph_cache_len(&self) -> usize {
+        self.cache.lock().map(|c| c.len()).unwrap_or(0)
     }
 
     fn face_for(&self, ch: char) -> &FontRef<'static> {
@@ -103,6 +155,66 @@ impl Font {
             .iter()
             .find(|f| f.glyph_id(ch).0 != 0)
             .unwrap_or(&self.faces[0])
+    }
+
+    /// 글자가 있는 face의 **인덱스**(캐시 키용).
+    fn face_index_for(&self, ch: char) -> usize {
+        self.faces
+            .iter()
+            .position(|f| f.glyph_id(ch).0 != 0)
+            .unwrap_or(0)
+    }
+
+    /// 글리프 비트맵 — 캐시 적중이면 그대로, 아니면 래스터해 넣는다. 외곽선이 없는 글자(공백)는 `None`.
+    fn glyph_bitmap(
+        &self,
+        face_i: usize,
+        ch: char,
+        size: f32,
+        sub: u8,
+    ) -> Option<Arc<GlyphBitmap>> {
+        let face = &self.faces[face_i];
+        let gid = face.glyph_id(ch);
+        let key = GlyphKey {
+            face: face_i as u8,
+            gid: gid.0,
+            size: size.to_bits(),
+            sub,
+        };
+        if let Ok(c) = self.cache.lock() {
+            if let Some(bm) = c.get(&key) {
+                return Some(Arc::clone(bm));
+            }
+        }
+        let scaled = face.as_scaled(size);
+        let glyph = gid.with_scale_and_position(size, ab_glyph::point(f32::from(sub) / SUBPX, 0.0));
+        let outlined = scaled.outline_glyph(glyph)?;
+        let b = outlined.px_bounds();
+        let (w, h) = (
+            (b.max.x - b.min.x).ceil().max(0.0) as usize + 1,
+            (b.max.y - b.min.y).ceil().max(0.0) as usize + 1,
+        );
+        let mut cov = vec![0u8; w * h];
+        outlined.draw(|gx, gy, c| {
+            let (gx, gy) = (gx as usize, gy as usize);
+            if gx < w && gy < h {
+                cov[gy * w + gx] = (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            }
+        });
+        let bm = Arc::new(GlyphBitmap {
+            w: w as u16,
+            h: h as u16,
+            ox: b.min.x.floor() as i16,
+            oy: b.min.y.floor() as i16,
+            cov,
+        });
+        if let Ok(mut c) = self.cache.lock() {
+            if c.len() >= GLYPH_CACHE_MAX {
+                c.clear();
+            }
+            c.insert(key, Arc::clone(&bm));
+        }
+        Some(bm)
     }
 
     /// 소유 바이트에서 로드 — **의도적 누수**로 `'static`화(폰트는 프로세스 수명 자원).
@@ -217,34 +329,29 @@ impl Font {
         let slant = if style.italic { 0.22 } else { 0.0 };
         let bold_pass = if style.bold { 2 } else { 1 };
         let mut pen = x;
+        // 베이스라인은 정수로 스냅(캐시 비트맵은 y 서브픽셀을 갖지 않는다 — 한 줄 안에서 일관).
+        let base_y = y.round() as i32;
         for ch in text.chars() {
             // ★ 제어 문자 = 폭만 옮기고 글리프 없음(탭 두부 차단 · 09-03).
             if let Some(adv) = self.control_advance(ch, size) {
                 pen += adv;
                 continue;
             }
-            let face = self.face_for(ch);
+            let face_i = self.face_index_for(ch);
+            let face = &self.faces[face_i];
             let scaled = face.as_scaled(size);
             let gid = face.glyph_id(ch);
-            let glyph = gid.with_scale_and_position(size, ab_glyph::point(pen, y));
-            if let Some(outlined) = scaled.outline_glyph(glyph) {
-                let bounds = outlined.px_bounds();
-                if bounds.min.x as i32 >= clip.2 {
+            let pen_i = pen.floor();
+            let sub = ((pen - pen_i) * SUBPX).floor().clamp(0.0, SUBPX - 1.0) as u8;
+            if let Some(bm) = self.glyph_bitmap(face_i, ch, size, sub) {
+                let gx0 = pen_i as i32 + i32::from(bm.ox);
+                if gx0 >= clip.2 {
                     break;
                 }
-                let (ox, oy) = (bounds.min.x as i32, bounds.min.y as i32);
-                outlined.draw(|gx, gy, cov| {
-                    let py = oy + i32::try_from(gy).unwrap_or(i32::MAX);
-                    // faux 이탤릭: 베이스라인 위로 갈수록 오른쪽으로 전단.
-                    let shear = ((y - py as f32) * slant) as i32;
-                    let base_px = ox + i32::try_from(gx).unwrap_or(i32::MAX) + shear;
-                    for dx in 0..bold_pass {
-                        let px = base_px + dx;
-                        if px >= clip.0 && px < clip.2 && py >= clip.1 && py < clip.3 {
-                            surface.blend_px(px, py, color, cov);
-                        }
-                    }
-                });
+                let gy0 = base_y + i32::from(bm.oy);
+                for dx in 0..bold_pass {
+                    surface.blend_mask(gx0 + dx, gy0, &bm, color, clip, slant, base_y);
+                }
             }
             pen += scaled.h_advance(gid);
         }
@@ -263,28 +370,7 @@ impl Font {
         color: Color,
         text: &str,
     ) -> f32 {
-        let mut pen = x;
-        for ch in text.chars() {
-            if let Some(adv) = self.control_advance(ch, size) {
-                pen += adv;
-                continue;
-            }
-            let face = self.face_for(ch);
-            let scaled = face.as_scaled(size);
-            let gid = face.glyph_id(ch);
-            let glyph = gid.with_scale_and_position(size, ab_glyph::point(pen, y));
-            if let Some(outlined) = scaled.outline_glyph(glyph) {
-                let bounds = outlined.px_bounds();
-                let (ox, oy) = (bounds.min.x as i32, bounds.min.y as i32);
-                outlined.draw(|gx, gy, cov| {
-                    // 좌표 상한은 표면 클립이 보장 — i32 변환만 안전하게.
-                    let px = ox + i32::try_from(gx).unwrap_or(i32::MAX);
-                    let py = oy + i32::try_from(gy).unwrap_or(i32::MAX);
-                    surface.blend_px(px, py, color, cov);
-                });
-            }
-            pen += scaled.h_advance(gid);
-        }
-        pen - x
+        let clip = (0, 0, surface.width() as i32, surface.height() as i32);
+        self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN)
     }
 }

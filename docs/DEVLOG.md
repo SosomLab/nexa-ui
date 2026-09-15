@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (3차 · win)** — ★ **글리프 비트맵 캐시**(`Font.cache` · `GlyphBitmap` · `Surface::blend_mask` 정수 블렌드 · 서브픽셀 1/3 · 상한 8192) · `IconImage::resized` + 같은 크기 빠른 경로 — nexa-sql 탐색기 성능 조사(A·B). → [journal](journal/2026-09-15.md)
 - **2026-09-15 (2차 · win)** — ★ 새 크레이트 `nexa-fs`(파일시스템 중립 모델 · OS 분기 격리) · `nexa-dlg`(`FilePicker` 열기/저장 복합 컨트롤 · docs/20 F-1/F-4) · `EditState` 다중 선택/캐럿(Ctrl+D · 열 선택) · `TextBox` 붙여넣기 탭→공백 · 더블클릭 시간 판정 · 탭 폭 자기 주입. 소비자: nexa-sql T-74. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (1차 · win)** — `tokens::set_intent_ms/set_fade_out_ms`(hover 의도·나감 시간 전역 · nexa-sql 비노출 설정 연동) · `TextBox` 멀티라인 Tab 문자 삽입(단일 행은 포커스 이동 유지).
 - **2026-09-14 (16차 · win)** — `Button::clear_transient`(hover·눌림·포커스 초기화 — 가려지거나 교체될 때 호스트가 부른다).
