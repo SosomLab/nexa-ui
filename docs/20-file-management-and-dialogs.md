@@ -2,7 +2,7 @@
 
 > **요청**(사용자 09-14 · nexa-sql 세션): *"다른 앱들과 동일하게 OS별 차이를 주지 않고 동일한 UI로 개발. 지금까지 크게 신경 쓰지 않았던 파일 관리 기능과 파일 Dialog는 크게 개선. 컨트롤 라이브러리(nexa-ui)를 만들었으니 일관성 있고 계층 구조로 기능이 확장되도록 구성."*
 > **선행**: [01 아키텍처](01-architecture.md) · nexa-beep DR-6(커스텀 렌더링 — 플랫폼 테마가 시각 동일성을 못 깨게) · DR-16(look = macOS · feel = host OS) · nexa-clip [25 디자인 시스템](../../nexa-clip/docs/25-design-system.md) · nexa-dir2 `nexa-gui/widgets`(columns · rows · dock · tabbar · menubar) · dir2 `fsprobe.rs`/`shellnotify.rs`(감시) · nexa-sql [15 외부 변경](../../nexa-sql/docs/15-external-file-changes.md) · [18 프로젝트](../../nexa-sql/docs/18-session-and-projects.md).
-> **상태**: 📐 설계. 결정 **D-4~D-9**(§8) · 작업 **F-1~F-7**(§9).
+> **상태**: 🚧 1차 구현(09-15 · nexa-sql T-74) — `crates/nexa-fs`(F-1) + `crates/nexa-dlg::FilePicker`(F-4 · Open/Save) · nexa-sql `file_win.rs`(F-6). **모달 방식은 1차로 별도 소유 창**(nexa-sql 접속/설정 창과 같은 틀 · D-4 오버레이는 `Overlay` 부품(F-2) 뒤 전환 가능 — 선택기는 창 방식과 무관한 복합 컨트롤이라 코드 변경 없이 옮겨진다). 결정 **D-4~D-9**(§8) · 작업 **F-1~F-7**(§9).
 > ⚠️ **충돌 1건**: nexa-beep [ADR-0014](../../nexa-beep/docs/35-adr-0014-native-file-dialog.md)(D-30 · 2026-08-18 Accepted)는 *"창 안은 우리가 그리고, OS 네임스페이스를 여는 문(파일 선택·저장)은 OS 것을 쓴다"* — Windows `IFileOpenDialog` · macOS `NSOpenPanel` · Linux만 자체 피커(구현은 아직 0). 이번 요청(*"OS별 차이 없이 동일 UI · 파일 Dialog 대폭 개선"*)은 그 경계를 **앱 안으로 당긴다**. 이 문서는 사용자 요청을 따르되 beep ADR-0014의 정정 여부를 **D-9**로 남긴다(beep 저장소 결정 · DR-4).
 
 ---

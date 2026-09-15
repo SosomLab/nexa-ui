@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-15 (2차 · win) — `nexa-fs` + `nexa-dlg::FilePicker` ✅(docs/20 1차) · 편집기 다중 선택 ✅
+
+워크스페이스 6크레이트(gfx · ctl · conf · font · **fs** · **dlg**). `FilePicker`는 기존 컨트롤 조립(TextBox·TreeView·TreeGrid·Combo·Checkbox·Button) + `nexa-fs` 모델 · 문자열 주입 · OS 분기 0. `EditState.extra` 다중 선택(전 구간 편집 · Esc 접기). 테스트 211 green · clippy 0. **다음**: F-2 Overlay(창 안 모달) · F-3 PathBar/FileList 가상화 · F-5 ops. → [journal](journal/2026-09-15.md)
+
 ## 2026-09-14 (3·4차 · win) — TabBar 이식 ✅ · 블록 선택 ✅ · ★ 구문 강조 엔진(highlight) ✅ · 안내선·공백 표시 ✅
 
 `TabBar`(single ◀▶/드래그 · multiline · `TabAction`) · TextBox 선택 연결 블록 · **`highlight.rs`**(데이터 주도 `SyntaxSpec` · `.nexa-syntax` 파서 · 내장 SQL · `to_html` 서식 복사) · `Theme.syn_*` 4색 · TextBox `set_highlighter/set_rulers/set_whitespace`. 186 테스트 green · clippy 0. 정규식 엔진(자체 NFA)은 후속 — `.sublime-syntax` 호환·찾기 패널·인텔리전스가 같이 쓴다. → [journal](journal/2026-09-14.md)

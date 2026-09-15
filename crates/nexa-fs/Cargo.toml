@@ -1,0 +1,16 @@
+[package]
+name = "nexa-fs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa UI 파일시스템 층 — 장소·열거·정렬·이름 규칙·경로 표시·로컬 시각 (UI 0 · 도메인 0 · OS 차이는 여기에만)"
+
+[lints]
+workspace = true
+
+# ⚠️ UI·앱 도메인 의존 금지 — 파일 대화상자·파일 관리 컨트롤이 보는 **중립 모델**만 제공한다(docs/20 §2).
+# OS 분기(`cfg(target_os)`)는 이 크레이트 안에만 산다 — 컨트롤·대화상자·앱에 나오면 설계 위반.
+[dependencies]

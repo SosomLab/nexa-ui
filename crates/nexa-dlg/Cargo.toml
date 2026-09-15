@@ -1,0 +1,17 @@
+[package]
+name = "nexa-dlg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa UI 대화상자 조립층 — 파일 열기/저장 선택기(FilePicker) · 3-OS 동일 · 네이티브 대화상자 0 (nexa-ctl 컨트롤 + nexa-fs 모델)"
+
+[lints]
+workspace = true
+
+# 조립만 한다 — 새 원자 컨트롤을 만들지 않고 nexa-ctl 컨트롤을 놓는다(docs/20 §6). 문자열은 앱이 라벨로 주입.
+[dependencies]
+nexa-ctl.workspace = true
+nexa-fs.workspace = true

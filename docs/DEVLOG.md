@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (2차 · win)** — ★ 새 크레이트 `nexa-fs`(파일시스템 중립 모델 · OS 분기 격리) · `nexa-dlg`(`FilePicker` 열기/저장 복합 컨트롤 · docs/20 F-1/F-4) · `EditState` 다중 선택/캐럿(Ctrl+D · 열 선택) · `TextBox` 붙여넣기 탭→공백 · 더블클릭 시간 판정 · 탭 폭 자기 주입. 소비자: nexa-sql T-74. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (1차 · win)** — `tokens::set_intent_ms/set_fade_out_ms`(hover 의도·나감 시간 전역 · nexa-sql 비노출 설정 연동) · `TextBox` 멀티라인 Tab 문자 삽입(단일 행은 포커스 이동 유지).
 - **2026-09-14 (16차 · win)** — `Button::clear_transient`(hover·눌림·포커스 초기화 — 가려지거나 교체될 때 호스트가 부른다).
 - **2026-09-14 (15차 · win)** — `ControlBase.enabled` + `Control::set_enabled/is_enabled`(전 컨트롤 상속) · `Button` 비활성 = 입력·hover·포커스 무시 · 흐린 글자 + 바탕 한 겹.

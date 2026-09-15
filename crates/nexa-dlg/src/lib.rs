@@ -1,0 +1,1104 @@
+//! nexa-dlg — 대화상자 **조립층**(docs/20 §1·§3). 1차 = [`FilePicker`](파일 열기·저장).
+//!
+//! - 새 원자 컨트롤 없이 nexa-ctl 컨트롤(Button · TextBox · Combo · Checkbox · TreeView · TreeGrid)을 놓는다.
+//! - I/O·OS 차이는 [`nexa_fs`]에만 — 여기에는 `cfg(target_os)`가 없다.
+//! - 문자열은 전부 앱이 [`PickerLabels`]로 주입(i18n) · 색·간격은 테마/배율만.
+//! - 호스트(앱)가 창을 만들고 `set_bounds`/`on_event`/`paint`를 부른다 — 창 안 오버레이든 별도 창이든 같은 코드.
+//!
+//! 동작(docs/20 §3 교집합): 경로 상자 편집(Enter = 이동/확정 · `~`·환경변수·상대 경로) · ↑ 상위 · 장소 사이드바 ·
+//! 목록 헤더 클릭 정렬(자연 정렬 · 폴더 먼저) · 더블클릭/Enter = 폴더 진입·파일 확정 · Backspace = 상위 ·
+//! 파일명 상자 Enter = 확정 · 확장자 필터 · 숨김 표시 · 새 폴더 · 저장은 **덮어쓰기 2단 확인**(같은 이름으로 한 번 더) ·
+//! 확장자 자동 부여 · 파일명 규칙 즉시 검증.
+
+use nexa_ctl::controls::LabelSide;
+use nexa_ctl::{
+    Button, Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, DrawCtx, FontSlot,
+    GridColumn, InputEvent, Invalidations, Key, Point, Rect, TextBox, Theme, TreeControl, TreeGrid,
+    TreeModel, TreeNode, TreeView, Widget,
+};
+use nexa_fs::{Entry, Place, PlaceKind, SortKey};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// 열기 / 저장.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickerMode {
+    /// 기존 파일 열기.
+    Open,
+    /// 파일 저장(이름 입력 · 덮어쓰기 확인).
+    Save,
+}
+
+/// 확장자 필터 한 줄(`exts`는 점 없는 소문자 · 비면 전체).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileFilter {
+    /// 표시 라벨(예 `SQL (*.sql)`).
+    pub label: String,
+    /// 확장자 목록.
+    pub exts: Vec<String>,
+}
+
+impl FileFilter {
+    /// 라벨 + 확장자.
+    #[must_use]
+    pub fn new(label: impl Into<String>, exts: &[&str]) -> Self {
+        Self {
+            label: label.into(),
+            exts: exts.iter().map(|e| e.to_lowercase()).collect(),
+        }
+    }
+}
+
+/// 앱이 주입하는 문자열(전부 i18n 키의 번역 결과).
+#[derive(Clone, Debug, Default)]
+pub struct PickerLabels {
+    /// "File name:".
+    pub file_name: String,
+    /// "File type:".
+    pub file_type: String,
+    /// 확정 버튼(열기).
+    pub ok_open: String,
+    /// 확정 버튼(저장).
+    pub ok_save: String,
+    /// 취소.
+    pub cancel: String,
+    /// 새 폴더 버튼.
+    pub new_folder: String,
+    /// 새 폴더 기본 이름.
+    pub new_folder_name: String,
+    /// 숨김 파일 표시.
+    pub show_hidden: String,
+    /// 열 제목.
+    pub col_name: String,
+    /// 열 제목.
+    pub col_modified: String,
+    /// 열 제목.
+    pub col_size: String,
+    /// 열 제목.
+    pub col_kind: String,
+    /// 종류 셀 — 폴더.
+    pub kind_folder: String,
+    /// 종류 셀 — 파일(`{EXT} File`의 뒷말).
+    pub kind_file: String,
+    /// 장소 라벨.
+    pub place_home: String,
+    /// 장소 라벨.
+    pub place_desktop: String,
+    /// 장소 라벨.
+    pub place_documents: String,
+    /// 장소 라벨.
+    pub place_downloads: String,
+    /// 장소 그룹.
+    pub place_drives: String,
+    /// 장소 그룹.
+    pub place_recent: String,
+    /// 경로 상자 placeholder.
+    pub path_hint: String,
+    /// 오류 — 파일 없음.
+    pub err_not_found: String,
+    /// 안내 — 같은 이름 존재(한 번 더 누르면 덮어씀).
+    pub err_exists: String,
+    /// 오류 — 파일명 규칙 위반.
+    pub err_bad_name: String,
+    /// 오류 — 폴더를 읽을 수 없음.
+    pub err_list: String,
+    /// 오류 — 새 폴더 실패.
+    pub err_mkdir: String,
+}
+
+/// 선택기 결과(1회성 · [`FilePicker::take_action`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickerAction {
+    /// 없음.
+    None,
+    /// 확정(열기·저장 경로).
+    Confirm(PathBuf),
+    /// 취소.
+    Cancel,
+}
+
+/// 파일 선택기 — 컨트롤 6개를 한 패널에 조립한 **복합 컨트롤**.
+#[derive(Debug)]
+pub struct FilePicker {
+    base: ControlBase,
+    mode: PickerMode,
+    labels: PickerLabels,
+    filters: Vec<FileFilter>,
+    dir: PathBuf,
+    entries: Vec<Entry>,
+    /// 필터·정렬을 거친 표시 목록(그리드 행 ↔ 인덱스).
+    shown: Vec<usize>,
+    sort: (SortKey, bool),
+    show_hidden: bool,
+    places: Vec<Place>,
+    recent: Vec<PathBuf>,
+    // 컨트롤
+    up_btn: Button,
+    path_box: TextBox,
+    new_folder_btn: Button,
+    places_view: TreeView,
+    grid: TreeGrid,
+    name_box: TextBox,
+    filter_combo: Combo,
+    hidden_chk: Checkbox,
+    ok_btn: Button,
+    cancel_btn: Button,
+    // 상태
+    cursor: (i32, i32),
+    message: Option<(String, bool)>, // (본문, 오류인가)
+    pending_overwrite: Option<PathBuf>,
+    last_row_click: Option<(usize, Instant)>,
+    last_place_row: usize,
+    action: PickerAction,
+    /// 헤더 열 폭(논리 px) — 정렬 히트테스트 근거.
+    col_w: [i32; 4],
+    grid_rect: Rect,
+}
+
+/// 더블클릭 간격.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
+const PLACES_W: i32 = 190;
+const ROW: i32 = 30;
+const GAP: i32 = 8;
+const PAD: i32 = 12;
+const LABEL_W: i32 = 90;
+const FILTER_W: i32 = 220;
+const BTN_W: i32 = 96;
+const HEADER_H: i32 = 26;
+
+impl FilePicker {
+    /// 새 선택기 — `start`가 폴더가 아니면 홈(그마저 없으면 현재 작업 폴더).
+    #[must_use]
+    pub fn new(
+        mode: PickerMode,
+        start: Option<&Path>,
+        filters: Vec<FileFilter>,
+        labels: PickerLabels,
+    ) -> Self {
+        let dir = start
+            .filter(|p| p.is_dir())
+            .map(Path::to_path_buf)
+            .or_else(nexa_fs::home_dir)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let filters = if filters.is_empty() {
+            vec![FileFilter::new("*.*", &[])]
+        } else {
+            filters
+        };
+        let items: Vec<ComboItem> = filters
+            .iter()
+            .enumerate()
+            .map(|(i, f)| ComboItem::new(i.to_string(), f.label.clone()))
+            .collect();
+        let ok_label = match mode {
+            PickerMode::Open => labels.ok_open.clone(),
+            PickerMode::Save => labels.ok_save.clone(),
+        };
+        let mut p = FilePicker {
+            base: ControlBase::default(),
+            mode,
+            filters,
+            dir: dir.clone(),
+            entries: Vec::new(),
+            shown: Vec::new(),
+            sort: (SortKey::Name, false),
+            show_hidden: false,
+            places: nexa_fs::places(),
+            recent: Vec::new(),
+            up_btn: Button::new("↑"),
+            path_box: TextBox::new(labels.path_hint.clone()),
+            new_folder_btn: Button::new(labels.new_folder.clone()),
+            places_view: TreeView::new(TreeModel::new(Vec::new())),
+            grid: TreeGrid::new(TreeModel::new(Vec::new()), Vec::new()),
+            name_box: TextBox::new(String::new()),
+            filter_combo: Combo::new(items, 0),
+            hidden_chk: Checkbox::new(labels.show_hidden.clone(), false)
+                .with_label_side(LabelSide::Right),
+            ok_btn: Button::new(ok_label),
+            cancel_btn: Button::new(labels.cancel.clone()),
+            cursor: (0, 0),
+            message: None,
+            pending_overwrite: None,
+            last_row_click: None,
+            last_place_row: usize::MAX,
+            action: PickerAction::None,
+            col_w: [320, 150, 90, 110],
+            grid_rect: Rect::default(),
+            labels,
+        };
+        p.rebuild_places();
+        p.go(&dir);
+        p
+    }
+
+    /// 저장 기본 파일명(저장 모드).
+    pub fn set_default_name(&mut self, name: &str) {
+        self.name_box.set_text(name);
+    }
+
+    /// 최근 폴더(앱이 기억 · 사이드바 아래에 표시).
+    pub fn set_recent(&mut self, recent: Vec<PathBuf>) {
+        self.recent = recent.into_iter().filter(|p| p.is_dir()).take(8).collect();
+        self.rebuild_places();
+    }
+
+    /// 숨김 파일 표시 초기값(앱 설정).
+    pub fn set_show_hidden(&mut self, on: bool) {
+        self.show_hidden = on;
+        self.hidden_chk.set_checked(on);
+        self.reload();
+    }
+
+    /// 현재 폴더.
+    #[must_use]
+    pub fn current_dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// 숨김 표시 상태(앱이 설정에 되돌려 저장).
+    #[must_use]
+    pub fn show_hidden(&self) -> bool {
+        self.show_hidden
+    }
+
+    /// 1회성 결과.
+    pub fn take_action(&mut self) -> PickerAction {
+        std::mem::replace(&mut self.action, PickerAction::None)
+    }
+
+    /// 콤보 드롭다운·편집 메뉴가 열려 있는가(호스트 Esc 가드).
+    #[must_use]
+    pub fn popup_open(&self) -> bool {
+        self.filter_combo.is_open()
+    }
+
+    /// 프레임 틱 — 다시 그려야 하면 true.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.up_btn.tick(now_ms)
+            | self.new_folder_btn.tick(now_ms)
+            | self.ok_btn.tick(now_ms)
+            | self.cancel_btn.tick(now_ms)
+            | self.path_box.tick(now_ms)
+            | self.name_box.tick(now_ms)
+            | self.places_view.tick(now_ms)
+            | self.grid.tick(now_ms)
+            | self.filter_combo.tick_hover(now_ms)
+    }
+
+    /// 애니메이션 진행 중(호스트가 타이머를 유지할 근거).
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.up_btn.is_animating()
+            || self.new_folder_btn.is_animating()
+            || self.ok_btn.is_animating()
+            || self.cancel_btn.is_animating()
+            || self.path_box.is_animating()
+            || self.name_box.is_animating()
+            || self.filter_combo.hover_animating()
+    }
+
+    /// 포커스 텍스트 박스(IME 배선).
+    pub fn focused_textbox(&mut self) -> Option<&mut TextBox> {
+        if self.path_box.is_focused() {
+            Some(&mut self.path_box)
+        } else if self.name_box.is_focused() {
+            Some(&mut self.name_box)
+        } else {
+            None
+        }
+    }
+
+    // ───────────────────────── 데이터 ─────────────────────────
+
+    fn rebuild_places(&mut self) {
+        let mut nodes: Vec<TreeNode> = Vec::new();
+        let label_of = |p: &Place, l: &PickerLabels| -> String {
+            match p.kind {
+                PlaceKind::Home => l.place_home.clone(),
+                PlaceKind::Desktop => l.place_desktop.clone(),
+                PlaceKind::Documents => l.place_documents.clone(),
+                PlaceKind::Downloads => l.place_downloads.clone(),
+                PlaceKind::Drive | PlaceKind::Recent => p.name.clone(),
+            }
+        };
+        let std_places: Vec<TreeNode> = self
+            .places
+            .iter()
+            .filter(|p| p.kind != PlaceKind::Drive)
+            .map(|p| TreeNode::leaf(label_of(p, &self.labels)))
+            .collect();
+        nodes.extend(std_places);
+        let drives: Vec<TreeNode> = self
+            .places
+            .iter()
+            .filter(|p| p.kind == PlaceKind::Drive)
+            .map(|p| TreeNode::leaf(p.name.clone()))
+            .collect();
+        if !drives.is_empty() {
+            let mut b = TreeNode::branch(self.labels.place_drives.clone(), drives);
+            b.expanded = true;
+            nodes.push(b);
+        }
+        if !self.recent.is_empty() {
+            let kids: Vec<TreeNode> = self
+                .recent
+                .iter()
+                .map(|p| TreeNode::leaf(nexa_fs::path::display(p)))
+                .collect();
+            let mut b = TreeNode::branch(self.labels.place_recent.clone(), kids);
+            b.expanded = true;
+            nodes.push(b);
+        }
+        *self.places_view.model_mut() = TreeModel::new(nodes);
+        self.places_view.set_selected_row(usize::MAX);
+        self.last_place_row = usize::MAX;
+    }
+
+    /// 장소 가시 행 → 경로(그룹 행은 None).
+    fn place_path(&self, row: usize) -> Option<PathBuf> {
+        let rows = self.places_view.rows();
+        let r = rows.get(row)?;
+        if r.has_children {
+            return None;
+        }
+        let std: Vec<&Place> = self
+            .places
+            .iter()
+            .filter(|p| p.kind != PlaceKind::Drive)
+            .collect();
+        let drives: Vec<&Place> = self
+            .places
+            .iter()
+            .filter(|p| p.kind == PlaceKind::Drive)
+            .collect();
+        match r.path.as_slice() {
+            [i] if *i < std.len() => Some(std[*i].path.clone()),
+            [g, j] => {
+                let group = *g - std.len();
+                if group == 0 && !drives.is_empty() {
+                    drives.get(*j).map(|p| p.path.clone())
+                } else {
+                    self.recent.get(*j).cloned()
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn current_filter(&self) -> &FileFilter {
+        let i = self
+            .filter_combo
+            .value()
+            .parse::<usize>()
+            .unwrap_or(0)
+            .min(self.filters.len() - 1);
+        &self.filters[i]
+    }
+
+    /// 폴더 이동(읽기 실패 = 메시지 · 현재 폴더 유지).
+    fn go(&mut self, dir: &Path) {
+        match nexa_fs::list(dir, self.show_hidden) {
+            Ok(entries) => {
+                self.dir = dir.to_path_buf();
+                self.entries = entries;
+                self.message = None;
+                self.pending_overwrite = None;
+                self.path_box.set_text(&nexa_fs::path::display(&self.dir));
+                self.refresh_grid(0);
+            }
+            Err(e) => {
+                self.message = Some((format!("{} — {e}", self.labels.err_list), true));
+            }
+        }
+    }
+
+    fn reload(&mut self) {
+        let sel = self.grid.selected_row();
+        if let Ok(entries) = nexa_fs::list(&self.dir, self.show_hidden) {
+            self.entries = entries;
+        }
+        self.refresh_grid(sel);
+    }
+
+    /// 필터·정렬 적용 → 그리드 모델 재구성(정렬 표시는 헤더 제목에).
+    fn refresh_grid(&mut self, select: usize) {
+        let (key, desc) = self.sort;
+        nexa_fs::sort(&mut self.entries, key, desc);
+        let exts = self.current_filter().exts.clone();
+        self.shown = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
+            .map(|(i, _)| i)
+            .collect();
+        let nodes: Vec<TreeNode> = self
+            .shown
+            .iter()
+            .map(|&i| {
+                let e = &self.entries[i];
+                let modified = e
+                    .modified
+                    .map(|t| nexa_fs::local_time(t).short())
+                    .unwrap_or_default();
+                let size = if e.is_dir {
+                    String::new()
+                } else {
+                    nexa_fs::fmt_size(e.size)
+                };
+                let kind = if e.is_dir {
+                    self.labels.kind_folder.clone()
+                } else {
+                    let ext = e.ext();
+                    if ext.is_empty() {
+                        self.labels.kind_file.clone()
+                    } else {
+                        format!("{} {}", ext.to_uppercase(), self.labels.kind_file)
+                    }
+                };
+                TreeNode::leaf(e.name.clone()).with_cells(vec![modified, size, kind])
+            })
+            .collect();
+        let mark = |k: SortKey| -> &'static str {
+            if k == key {
+                if desc {
+                    " ▼"
+                } else {
+                    " ▲"
+                }
+            } else {
+                ""
+            }
+        };
+        let cols = vec![
+            GridColumn::new(
+                format!("{}{}", self.labels.col_name, mark(SortKey::Name)),
+                self.col_w[0],
+            ),
+            GridColumn::new(
+                format!("{}{}", self.labels.col_modified, mark(SortKey::Modified)),
+                self.col_w[1],
+            ),
+            GridColumn::new(
+                format!("{}{}", self.labels.col_size, mark(SortKey::Size)),
+                self.col_w[2],
+            ),
+            GridColumn::new(
+                format!("{}{}", self.labels.col_kind, mark(SortKey::Kind)),
+                self.col_w[3],
+            ),
+        ];
+        let focused = self.grid.is_focused();
+        let mut grid = TreeGrid::new(TreeModel::new(nodes), cols);
+        grid.set_scale(self.base.scale);
+        grid.set_focused(focused);
+        grid.set_selected_row(select.min(self.shown.len().saturating_sub(1)));
+        let mut inv = Invalidations::default();
+        grid.set_bounds(self.grid_rect, &mut inv);
+        self.grid = grid;
+        self.last_row_click = None;
+    }
+
+    fn selected_entry(&self) -> Option<&Entry> {
+        let row = self.grid.selected_row();
+        self.shown.get(row).and_then(|&i| self.entries.get(i))
+    }
+
+    fn select_name(&mut self, name: &str) {
+        if let Some(row) = self
+            .shown
+            .iter()
+            .position(|&i| self.entries[i].name == name)
+        {
+            self.grid.set_selected_row(row);
+        }
+    }
+
+    /// 행 활성화(더블클릭·Enter) — 폴더 진입 / 파일 확정.
+    fn activate_row(&mut self, row: usize) {
+        let Some(&i) = self.shown.get(row) else {
+            return;
+        };
+        let e = self.entries[i].clone();
+        if e.is_dir {
+            self.go(&e.path);
+        } else {
+            self.name_box.set_text(&e.name);
+            self.confirm();
+        }
+    }
+
+    fn go_up(&mut self) {
+        if let Some(parent) = self.dir.parent().map(Path::to_path_buf) {
+            let child = self
+                .dir
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned());
+            self.go(&parent);
+            if let Some(c) = child {
+                self.select_name(&c);
+            }
+        }
+    }
+
+    /// 경로 상자 Enter — 폴더면 이동 · 파일이면 확정 · 없으면 오류.
+    fn commit_path(&mut self, text: &str) {
+        let p = nexa_fs::path::resolve(text, &self.dir);
+        if p.is_dir() {
+            self.go(&p);
+        } else if p.is_file() {
+            if let Some(parent) = p.parent() {
+                self.go(parent);
+            }
+            if let Some(n) = p.file_name() {
+                self.name_box.set_text(&n.to_string_lossy());
+            }
+            self.confirm();
+        } else {
+            self.message = Some((self.labels.err_not_found.clone(), true));
+        }
+    }
+
+    /// 확정 — 파일명 상자 → 경로. 저장은 덮어쓰기 2단 확인 · 확장자 자동 부여 · 이름 검증.
+    fn confirm(&mut self) {
+        let mut name = self.name_box.text().trim().to_string();
+        if name.is_empty() {
+            if let Some(e) = self.selected_entry().cloned() {
+                if e.is_dir {
+                    self.go(&e.path);
+                    return;
+                }
+                name = e.name;
+            } else {
+                return;
+            }
+        }
+        // 폴더 이름(또는 경로)을 치면 그리로 이동.
+        let as_path = nexa_fs::path::resolve(&name, &self.dir);
+        if as_path.is_dir() {
+            self.go(&as_path);
+            self.name_box.set_text("");
+            return;
+        }
+        // 경로가 섞여 있으면 폴더 부분은 이동, 이름만 남긴다.
+        let (dir, leaf) = match (as_path.parent(), as_path.file_name()) {
+            (Some(d), Some(f)) if d != self.dir && d.is_dir() => {
+                (d.to_path_buf(), f.to_string_lossy().into_owned())
+            }
+            _ => (self.dir.clone(), name),
+        };
+        if dir != self.dir {
+            self.go(&dir);
+        }
+        match self.mode {
+            PickerMode::Open => {
+                let p = dir.join(&leaf);
+                if p.is_file() {
+                    self.action = PickerAction::Confirm(p);
+                } else {
+                    self.message = Some((self.labels.err_not_found.clone(), true));
+                }
+            }
+            PickerMode::Save => {
+                if nexa_fs::naming::validate(&leaf).is_err() {
+                    self.message = Some((self.labels.err_bad_name.clone(), true));
+                    return;
+                }
+                let mut leaf = leaf;
+                let exts = self.current_filter().exts.clone();
+                if !leaf.contains('.') {
+                    if let Some(first) = exts.first() {
+                        leaf = format!("{leaf}.{first}");
+                    }
+                }
+                let p = dir.join(&leaf);
+                if p.exists() && self.pending_overwrite.as_deref() != Some(p.as_path()) {
+                    self.pending_overwrite = Some(p);
+                    self.message = Some((self.labels.err_exists.clone(), false));
+                    return;
+                }
+                self.action = PickerAction::Confirm(p);
+            }
+        }
+    }
+
+    fn make_new_folder(&mut self) {
+        let base = self.labels.new_folder_name.clone();
+        let mut name = base.clone();
+        let mut n = 2;
+        while self.dir.join(&name).exists() {
+            name = format!("{base} ({n})");
+            n += 1;
+        }
+        match std::fs::create_dir(self.dir.join(&name)) {
+            Ok(()) => {
+                self.reload();
+                self.select_name(&name);
+                self.message = None;
+            }
+            Err(e) => self.message = Some((format!("{} — {e}", self.labels.err_mkdir), true)),
+        }
+    }
+
+    /// 헤더 클릭 → 정렬 열/방향.
+    fn header_hit(&self, x: i32, y: i32) -> Option<SortKey> {
+        let g = self.grid_rect;
+        if y < g.y || y >= g.y + self.s(HEADER_H) || x < g.x || x >= g.right() {
+            return None;
+        }
+        let (sx, _) = self.grid.scroll();
+        let mut cx = g.x - sx;
+        for (i, w) in self.col_w.iter().enumerate() {
+            let w = self.s(*w);
+            if x >= cx && x < cx + w {
+                return Some(match i {
+                    0 => SortKey::Name,
+                    1 => SortKey::Modified,
+                    2 => SortKey::Size,
+                    _ => SortKey::Kind,
+                });
+            }
+            cx += w;
+        }
+        None
+    }
+
+    // ───────────────────────── 배치 ─────────────────────────
+
+    fn layout(&mut self) {
+        let b = self.base.bounds;
+        let s = self.base.scale;
+        let mut inv = Invalidations::default();
+        for c in [
+            &mut self.up_btn,
+            &mut self.new_folder_btn,
+            &mut self.ok_btn,
+            &mut self.cancel_btn,
+        ] {
+            c.set_scale(s);
+        }
+        self.path_box.set_scale(s);
+        self.name_box.set_scale(s);
+        self.places_view.set_scale(s);
+        self.grid.set_scale(s);
+        self.filter_combo.set_scale(s);
+        self.hidden_chk.set_scale(s);
+        let pad = self.s(PAD);
+        let gap = self.s(GAP);
+        let row = self.s(ROW);
+        let x0 = b.x + pad;
+        let x1 = b.right() - pad;
+        // 1행: ↑ · 경로 · 새 폴더
+        let y = b.y + pad;
+        let up_w = row;
+        let nf_w = self.s(BTN_W + 20);
+        self.up_btn
+            .set_bounds(Rect::new(x0, y, up_w, row), &mut inv);
+        self.new_folder_btn
+            .set_bounds(Rect::new(x1 - nf_w, y, nf_w, row), &mut inv);
+        self.path_box.set_bounds(
+            Rect::new(
+                x0 + up_w + gap,
+                y,
+                (x1 - nf_w - gap) - (x0 + up_w + gap),
+                row,
+            ),
+            &mut inv,
+        );
+        // 하단 2행(아래에서 위로)
+        let y_btn = b.bottom() - pad - row;
+        let y_name = y_btn - gap - row;
+        let bw = self.s(BTN_W);
+        self.cancel_btn
+            .set_bounds(Rect::new(x1 - bw, y_btn, bw, row), &mut inv);
+        self.ok_btn
+            .set_bounds(Rect::new(x1 - bw * 2 - gap, y_btn, bw, row), &mut inv);
+        self.hidden_chk
+            .set_bounds(Rect::new(x0, y_btn, self.s(220), row), &mut inv);
+        let lw = self.s(LABEL_W);
+        let fw = self.s(FILTER_W);
+        self.filter_combo
+            .set_bounds(Rect::new(x1 - fw, y_name, fw, row), &mut inv);
+        self.name_box.set_bounds(
+            Rect::new(x0 + lw, y_name, (x1 - fw - gap) - (x0 + lw), row),
+            &mut inv,
+        );
+        // 가운데: 장소 | 목록
+        let y_mid = y + row + gap;
+        let h_mid = (y_name - gap - y_mid).max(self.s(80));
+        let pw = self.s(PLACES_W);
+        self.places_view
+            .set_bounds(Rect::new(x0, y_mid, pw, h_mid), &mut inv);
+        self.grid_rect = Rect::new(x0 + pw + gap, y_mid, x1 - (x0 + pw + gap), h_mid);
+        self.grid.set_bounds(self.grid_rect, &mut inv);
+    }
+
+    /// 포커스 규칙 — MouseDown마다 누른 곳 하나만.
+    fn own_focus(&mut self, p: Point) {
+        let up = self.up_btn.bounds().contains(p);
+        let nf = self.new_folder_btn.bounds().contains(p);
+        let ok = self.ok_btn.bounds().contains(p);
+        let cancel = self.cancel_btn.bounds().contains(p);
+        let path = self.path_box.bounds().contains(p);
+        let name = self.name_box.bounds().contains(p);
+        let places = self.places_view.bounds().contains(p);
+        let grid = self.grid.bounds().contains(p);
+        let combo = self.filter_combo.bounds().contains(p);
+        let chk = self.hidden_chk.bounds().contains(p);
+        self.up_btn.set_focused(up);
+        self.new_folder_btn.set_focused(nf);
+        self.ok_btn.set_focused(ok);
+        self.cancel_btn.set_focused(cancel);
+        self.path_box.set_focused(path);
+        self.name_box.set_focused(name);
+        self.places_view.set_focused(places);
+        self.grid.set_focused(grid);
+        self.filter_combo.set_focused(combo);
+        self.hidden_chk.set_focused(chk);
+    }
+
+    fn any_focused(&self) -> bool {
+        self.path_box.is_focused()
+            || self.name_box.is_focused()
+            || self.places_view.is_focused()
+            || self.grid.is_focused()
+            || self.filter_combo.is_focused()
+    }
+
+    /// 사건 뒤 1회성 신호 수거(버튼 클릭 · 콤보 변경 · 체크 · Enter).
+    fn collect(&mut self) {
+        if self.cancel_btn.take_clicked() {
+            self.action = PickerAction::Cancel;
+        }
+        if self.ok_btn.take_clicked() {
+            self.confirm();
+        }
+        if self.up_btn.take_clicked() {
+            self.go_up();
+        }
+        if self.new_folder_btn.take_clicked() {
+            self.make_new_folder();
+        }
+        if let Some(text) = self.path_box.take_committed() {
+            self.commit_path(&text);
+        }
+        if self.name_box.take_committed().is_some() {
+            self.confirm();
+        }
+        if self.name_box.take_changed().is_some() {
+            // 이름을 고치면 덮어쓰기 확인은 무효.
+            self.pending_overwrite = None;
+            if matches!(self.message, Some((_, false))) {
+                self.message = None;
+            }
+        }
+        if self.filter_combo.take_changed().is_some() {
+            let sel = self.grid.selected_row();
+            self.refresh_grid(sel);
+        }
+        if let Some(on) = self.hidden_chk.take_toggled() {
+            self.show_hidden = on;
+            self.reload();
+        }
+        // 장소 선택 변화 → 이동.
+        let pr = self.places_view.selected_row();
+        if pr != self.last_place_row {
+            self.last_place_row = pr;
+            if let Some(p) = self.place_path(pr) {
+                self.go(&p);
+            }
+        }
+    }
+}
+
+impl Control for FilePicker {
+    fn base(&self) -> &ControlBase {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut ControlBase {
+        &mut self.base
+    }
+}
+
+impl Widget for FilePicker {
+    fn bounds(&self) -> Rect {
+        self.base.bounds
+    }
+
+    fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
+        self.base.bounds = bounds;
+        self.layout();
+        inv.push(bounds);
+    }
+
+    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        if let InputEvent::MouseMove { x, y }
+        | InputEvent::MouseDown { x, y, .. }
+        | InputEvent::MouseUp { x, y }
+        | InputEvent::RightDown { x, y } = *ev
+        {
+            self.cursor = (x, y);
+        }
+        let p = Point {
+            x: self.cursor.0,
+            y: self.cursor.1,
+        };
+        let is_mouse = matches!(
+            ev,
+            InputEvent::MouseDown { .. }
+                | InputEvent::MouseUp { .. }
+                | InputEvent::MouseMove { .. }
+                | InputEvent::RightDown { .. }
+        );
+        let is_wheel = matches!(ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. });
+        // 열린 콤보 = 모달(바깥 클릭은 닫고 그 클릭을 계속 진행 — 팝업 UX 규칙).
+        if self.filter_combo.is_open() {
+            self.filter_combo.on_event(ev, inv);
+            self.collect();
+            if self.filter_combo.is_open() || !matches!(ev, InputEvent::MouseDown { .. }) {
+                inv.push(self.base.bounds);
+                return;
+            }
+        }
+        if matches!(
+            ev,
+            InputEvent::MouseDown { .. } | InputEvent::RightDown { .. }
+        ) {
+            self.own_focus(p);
+        }
+        // 헤더 클릭 = 정렬.
+        if let InputEvent::MouseDown { x, y, .. } = *ev {
+            if let Some(k) = self.header_hit(x, y) {
+                let (key, desc) = self.sort;
+                self.sort = if key == k { (k, !desc) } else { (k, false) };
+                let sel = self.grid.selected_row();
+                self.refresh_grid(sel);
+                inv.push(self.base.bounds);
+                return;
+            }
+        }
+        // 마우스/휠 = 커서 아래 컨트롤 · 키 = 포커스 컨트롤.
+        let route = |r: Rect, focused: bool| -> bool {
+            if is_mouse || is_wheel {
+                r.contains(p)
+            } else {
+                focused
+            }
+        };
+        // 버튼은 마우스 사건을 항상 받는다(hover 정리).
+        if is_mouse {
+            self.up_btn.on_event(ev, inv);
+            self.new_folder_btn.on_event(ev, inv);
+            self.ok_btn.on_event(ev, inv);
+            self.cancel_btn.on_event(ev, inv);
+            self.hidden_chk.on_event(ev, inv);
+            self.filter_combo.on_event(ev, inv);
+        } else if self.hidden_chk.is_focused() {
+            self.hidden_chk.on_event(ev, inv);
+        } else if self.filter_combo.is_focused() {
+            self.filter_combo.on_event(ev, inv);
+        } else if self.ok_btn.is_focused() || self.cancel_btn.is_focused() {
+            self.ok_btn.on_event(ev, inv);
+            self.cancel_btn.on_event(ev, inv);
+        }
+        if route(self.path_box.bounds(), self.path_box.is_focused()) {
+            self.path_box.on_event(ev, inv);
+        }
+        if route(self.name_box.bounds(), self.name_box.is_focused()) {
+            self.name_box.on_event(ev, inv);
+        }
+        if route(self.places_view.bounds(), self.places_view.is_focused()) {
+            self.places_view.on_event(ev, inv);
+        }
+        if route(self.grid.bounds(), self.grid.is_focused()) {
+            match *ev {
+                InputEvent::Key {
+                    key: Key::Enter, ..
+                } => {
+                    let row = self.grid.selected_row();
+                    self.activate_row(row);
+                }
+                InputEvent::Char { c: '\u{8}', .. } => self.go_up(),
+                InputEvent::MouseDown { x, y, .. } => {
+                    self.grid.on_event(ev, inv);
+                    if let Some((row, _)) = self.grid.row_hit(x, y) {
+                        let now = Instant::now();
+                        let dbl = matches!(self.last_row_click, Some((r, t)) if r == row && now.duration_since(t) <= DOUBLE_CLICK);
+                        self.last_row_click = Some((row, now));
+                        if let Some(e) = self.selected_entry().cloned() {
+                            if !e.is_dir {
+                                self.name_box.set_text(&e.name);
+                                self.pending_overwrite = None;
+                            }
+                        }
+                        if dbl {
+                            self.last_row_click = None;
+                            self.activate_row(row);
+                        }
+                    }
+                }
+                _ => self.grid.on_event(ev, inv),
+            }
+        }
+        // 어디에도 포커스가 없을 때 Enter = 확정(OS 대화상자 관례).
+        if !self.any_focused()
+            && matches!(
+                ev,
+                InputEvent::Key {
+                    key: Key::Enter,
+                    ..
+                }
+            )
+        {
+            self.confirm();
+        }
+        self.collect();
+        inv.push(self.base.bounds);
+    }
+
+    fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let b = self.base.bounds;
+        ctx.fill_rect(b, theme.window_bg);
+        ctx.select_font(FontSlot::Base, false);
+        let th = ctx.text_height();
+        // 라벨
+        let nb = self.name_box.bounds();
+        ctx.text(
+            b.x + self.s(PAD),
+            nb.y + (nb.h - th) / 2,
+            b,
+            &self.labels.file_name,
+            theme.text,
+        );
+        let fb = self.filter_combo.bounds();
+        // 필터 라벨은 콤보 왼쪽에 작게(자리가 있을 때만).
+        let ft_w = ctx.text_width(&self.labels.file_type);
+        if fb.x - self.s(GAP) - ft_w > nb.x + self.s(120) {
+            let _ = ft_w;
+        }
+        self.up_btn.paint(ctx, theme);
+        self.new_folder_btn.paint(ctx, theme);
+        self.path_box.paint(ctx, theme);
+        self.places_view.paint(ctx, theme);
+        self.grid.paint(ctx, theme);
+        self.name_box.paint(ctx, theme);
+        self.hidden_chk.paint(ctx, theme);
+        self.ok_btn.paint(ctx, theme);
+        self.cancel_btn.paint(ctx, theme);
+        // 메시지(체크박스 오른쪽 · 버튼 왼쪽).
+        if let Some((msg, err)) = &self.message {
+            let cb = self.hidden_chk.bounds();
+            let x = cb.right() + self.s(GAP);
+            let clip = Rect::new(
+                x,
+                cb.y,
+                (self.ok_btn.bounds().x - self.s(GAP) - x).max(0),
+                cb.h,
+            );
+            ctx.text(
+                x,
+                cb.y + (cb.h - th) / 2,
+                clip,
+                msg,
+                if *err { theme.danger } else { theme.warn },
+            );
+        }
+        // 팝업은 맨 마지막(콤보 드롭다운 · 텍스트박스 편집 메뉴).
+        self.filter_combo.paint(ctx, theme);
+        self.path_box.paint_popup(ctx, theme);
+        self.name_box.paint_popup(ctx, theme);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels() -> PickerLabels {
+        PickerLabels {
+            file_name: "File name:".into(),
+            ok_open: "Open".into(),
+            ok_save: "Save".into(),
+            cancel: "Cancel".into(),
+            new_folder: "New folder".into(),
+            new_folder_name: "New folder".into(),
+            kind_folder: "Folder".into(),
+            kind_file: "File".into(),
+            err_exists: "exists".into(),
+            err_not_found: "not found".into(),
+            ..PickerLabels::default()
+        }
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("nexa-dlg-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).unwrap_or(());
+        std::fs::write(d.join("a.sql"), b"select 1").unwrap_or(());
+        std::fs::write(d.join("b.txt"), b"x").unwrap_or(());
+        d
+    }
+
+    #[test]
+    fn filter_hides_other_extensions_and_keeps_folders() {
+        let d = temp_dir("filter");
+        let p = FilePicker::new(
+            PickerMode::Open,
+            Some(&d),
+            vec![
+                FileFilter::new("SQL", &["sql"]),
+                FileFilter::new("All", &[]),
+            ],
+            labels(),
+        );
+        let names: Vec<String> = p.shown.iter().map(|&i| p.entries[i].name.clone()).collect();
+        assert_eq!(names, vec!["sub", "a.sql"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn save_confirms_twice_when_file_exists_and_appends_ext() {
+        let d = temp_dir("save");
+        let mut p = FilePicker::new(
+            PickerMode::Save,
+            Some(&d),
+            vec![FileFilter::new("SQL", &["sql"])],
+            labels(),
+        );
+        p.set_default_name("a");
+        p.confirm();
+        assert_eq!(
+            p.take_action(),
+            PickerAction::None,
+            "첫 확정 = 덮어쓰기 안내"
+        );
+        assert!(p.pending_overwrite.is_some());
+        p.confirm();
+        assert_eq!(p.take_action(), PickerAction::Confirm(d.join("a.sql")));
+        // 새 이름은 바로 확정 + 확장자 부여.
+        p.set_default_name("new");
+        p.confirm();
+        assert_eq!(p.take_action(), PickerAction::Confirm(d.join("new.sql")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn open_rejects_missing_and_enters_folder_by_name() {
+        let d = temp_dir("open");
+        let mut p = FilePicker::new(PickerMode::Open, Some(&d), Vec::new(), labels());
+        p.set_default_name("nope.sql");
+        p.confirm();
+        assert_eq!(p.take_action(), PickerAction::None);
+        assert!(matches!(p.message, Some((_, true))));
+        p.set_default_name("sub");
+        p.confirm();
+        assert_eq!(p.current_dir(), d.join("sub"));
+        p.go_up();
+        assert_eq!(p.current_dir(), d);
+        p.set_default_name("b.txt");
+        p.confirm();
+        assert_eq!(p.take_action(), PickerAction::Confirm(d.join("b.txt")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
