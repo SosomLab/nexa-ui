@@ -141,6 +141,8 @@ pub struct FilePicker {
     name_box: TextBox,
     filter_combo: Combo,
     hidden_chk: Checkbox,
+    /// 하단 부가 콤보(앱이 주입 · 예: 인코딩 — Golden/DBeaver 하단 줄 · 사용자 09-15) — (라벨, 콤보).
+    extra: Option<(String, Combo)>,
     ok_btn: Button,
     cancel_btn: Button,
     // 상태
@@ -215,6 +217,7 @@ impl FilePicker {
             filter_combo: Combo::new(items, 0),
             hidden_chk: Checkbox::new(labels.show_hidden.clone(), false)
                 .with_label_side(LabelSide::Right),
+            extra: None,
             ok_btn: Button::new(ok_label),
             cancel_btn: Button::new(labels.cancel.clone()),
             cursor: (0, 0),
@@ -250,6 +253,25 @@ impl FilePicker {
         self.reload();
     }
 
+    /// 하단 부가 콤보(예: 인코딩) — `(값, 라벨)` 목록과 초기 선택. 확정 뒤 [`Self::extra_value`]로 읽는다.
+    pub fn set_extra(&mut self, label: impl Into<String>, items: &[(&str, &str)], selected: usize) {
+        let items: Vec<ComboItem> = items.iter().map(|(v, l)| ComboItem::new(*v, *l)).collect();
+        let mut c = Combo::new(items, selected);
+        c.set_scale(self.base.scale);
+        self.extra = Some((label.into(), c));
+        self.layout();
+    }
+
+    /// 부가 콤보의 현재 값(없으면 None).
+    #[must_use]
+    pub fn extra_value(&self) -> Option<String> {
+        self.extra.as_ref().map(|(_, c)| c.value())
+    }
+
+    fn extra_open(&self) -> bool {
+        self.extra.as_ref().is_some_and(|(_, c)| c.is_open())
+    }
+
     /// 현재 폴더.
     #[must_use]
     pub fn current_dir(&self) -> &Path {
@@ -270,7 +292,7 @@ impl FilePicker {
     /// 콤보 드롭다운·편집 메뉴가 열려 있는가(호스트 Esc 가드).
     #[must_use]
     pub fn popup_open(&self) -> bool {
-        self.filter_combo.is_open()
+        self.filter_combo.is_open() || self.extra_open()
     }
 
     /// 프레임 틱 — 다시 그려야 하면 true.
@@ -284,6 +306,10 @@ impl FilePicker {
             | self.places_view.tick(now_ms)
             | self.grid.tick(now_ms)
             | self.filter_combo.tick_hover(now_ms)
+            | self
+                .extra
+                .as_mut()
+                .is_some_and(|(_, c)| c.tick_hover(now_ms))
     }
 
     /// 애니메이션 진행 중(호스트가 타이머를 유지할 근거).
@@ -296,6 +322,10 @@ impl FilePicker {
             || self.path_box.is_animating()
             || self.name_box.is_animating()
             || self.filter_combo.hover_animating()
+            || self
+                .extra
+                .as_ref()
+                .is_some_and(|(_, c)| c.hover_animating())
     }
 
     /// 포커스 텍스트 박스(IME 배선).
@@ -716,6 +746,14 @@ impl FilePicker {
             .set_bounds(Rect::new(x1 - bw * 2 - gap, y_btn, bw, row), &mut inv);
         self.hidden_chk
             .set_bounds(Rect::new(x0, y_btn, self.s(220), row), &mut inv);
+        let ew = self.s(170);
+        if let Some((_, c)) = &mut self.extra {
+            c.set_scale(s);
+            c.set_bounds(
+                Rect::new(x1 - bw * 2 - gap * 2 - ew, y_btn, ew, row),
+                &mut inv,
+            );
+        }
         let lw = self.s(LABEL_W);
         let fw = self.s(FILTER_W);
         self.filter_combo
@@ -746,6 +784,13 @@ impl FilePicker {
         let grid = self.grid.bounds().contains(p);
         let combo = self.filter_combo.bounds().contains(p);
         let chk = self.hidden_chk.bounds().contains(p);
+        let ex = self
+            .extra
+            .as_ref()
+            .is_some_and(|(_, c)| c.bounds().contains(p));
+        if let Some((_, c)) = &mut self.extra {
+            c.set_focused(ex);
+        }
         self.up_btn.set_focused(up);
         self.new_folder_btn.set_focused(nf);
         self.ok_btn.set_focused(ok);
@@ -764,6 +809,7 @@ impl FilePicker {
             || self.places_view.is_focused()
             || self.grid.is_focused()
             || self.filter_combo.is_focused()
+            || self.extra.as_ref().is_some_and(|(_, c)| c.is_focused())
     }
 
     /// 사건 뒤 1회성 신호 수거(버튼 클릭 · 콤보 변경 · 체크 · Enter).
@@ -861,6 +907,15 @@ impl Widget for FilePicker {
                 return;
             }
         }
+        if self.extra_open() {
+            if let Some((_, c)) = &mut self.extra {
+                c.on_event(ev, inv);
+            }
+            if self.extra_open() || !matches!(ev, InputEvent::MouseDown { .. }) {
+                inv.push(self.base.bounds);
+                return;
+            }
+        }
         if matches!(
             ev,
             InputEvent::MouseDown { .. } | InputEvent::RightDown { .. }
@@ -894,6 +949,13 @@ impl Widget for FilePicker {
             self.cancel_btn.on_event(ev, inv);
             self.hidden_chk.on_event(ev, inv);
             self.filter_combo.on_event(ev, inv);
+            if let Some((_, c)) = &mut self.extra {
+                c.on_event(ev, inv);
+            }
+        } else if self.extra.as_ref().is_some_and(|(_, c)| c.is_focused()) {
+            if let Some((_, c)) = &mut self.extra {
+                c.on_event(ev, inv);
+            }
         } else if self.hidden_chk.is_focused() {
             self.hidden_chk.on_event(ev, inv);
         } else if self.filter_combo.is_focused() {
@@ -990,12 +1052,13 @@ impl Widget for FilePicker {
         if let Some((msg, err)) = &self.message {
             let cb = self.hidden_chk.bounds();
             let x = cb.right() + self.s(GAP);
-            let clip = Rect::new(
-                x,
-                cb.y,
-                (self.ok_btn.bounds().x - self.s(GAP) - x).max(0),
-                cb.h,
-            );
+            let left_edge = self
+                .extra
+                .as_ref()
+                .map_or(self.ok_btn.bounds().x, |(label, c)| {
+                    c.bounds().x - self.s(GAP) * 2 - ctx.text_width(label)
+                });
+            let clip = Rect::new(x, cb.y, (left_edge - self.s(GAP) - x).max(0), cb.h);
             ctx.text(
                 x,
                 cb.y + (cb.h - th) / 2,
@@ -1004,7 +1067,21 @@ impl Widget for FilePicker {
                 if *err { theme.danger } else { theme.warn },
             );
         }
+        if let Some((label, c)) = &self.extra {
+            let cb = c.bounds();
+            let lw = ctx.text_width(label);
+            ctx.text(
+                cb.x - self.s(GAP) - lw,
+                cb.y + (cb.h - th) / 2,
+                b,
+                label,
+                theme.text,
+            );
+        }
         // 팝업은 맨 마지막(콤보 드롭다운 · 텍스트박스 편집 메뉴).
+        if let Some((_, c)) = &self.extra {
+            c.paint(ctx, theme);
+        }
         self.filter_combo.paint(ctx, theme);
         self.path_box.paint_popup(ctx, theme);
         self.name_box.paint_popup(ctx, theme);
