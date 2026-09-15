@@ -370,7 +370,7 @@ impl Widget for ListEditor {
         let (fg, dim) = (theme.text, theme.text_dim);
         let rh = self.s(ROW_H);
         let pad = self.s(PAD_X);
-        let ty = (rh - ctx.text_height()) / 2;
+        let ty = ctx.text_center_y(0, rh);
         for vi in 0..VISIBLE {
             let i = self.top + vi;
             let Some(item) = self.items.get(i) else { break };

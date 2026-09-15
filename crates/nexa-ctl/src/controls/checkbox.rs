@@ -144,7 +144,7 @@ impl Widget for Checkbox {
         if self.side != LabelSide::None && !self.label.is_empty() {
             let lr = self.label_rect();
             ctx.select_font(FontSlot::Base, false);
-            let ty = lr.y + (lr.h - ctx.text_height()) / 2;
+            let ty = ctx.text_center_y(lr.y, lr.h);
             ctx.text(lr.x, ty, lr, &self.label, theme.text);
         }
 

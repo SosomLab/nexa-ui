@@ -418,20 +418,14 @@ pub trait Control: crate::widget::Widget {
         }
         ctx.select_font(FontSlot::Status, false);
         let qw = ctx.text_width("?");
-        let th = ctx.text_height();
         let fg = if open {
             Color::from_rgb(255, 255, 255)
         } else {
             theme.text_dim
         };
         // "?"를 배지 정중앙에(가로·세로) — 상태 글꼴 높이 기준으로 세로 중앙 정렬.
-        ctx.text(
-            badge.x + (badge.w - qw) / 2,
-            badge.y + (badge.h - th) / 2,
-            badge,
-            "?",
-            fg,
-        );
+        let ty = ctx.text_center_y(badge.y, badge.h);
+        ctx.text(badge.x + (badge.w - qw) / 2, ty, badge, "?", fg);
     }
 
     /// "?" 클릭 처리 — 배지를 눌렀으면 툴팁 토글 후 `true`(소비). 배지 밖을 누르면 **열린 툴팁을

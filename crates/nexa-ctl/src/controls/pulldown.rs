@@ -356,13 +356,8 @@ impl Widget for MenuBar {
                 ctx.fill_rect(slot, theme.panel_bg_alt);
             }
             let tw = ctx.text_width(&d.label);
-            ctx.text(
-                lr.x + (lr.w - tw) / 2,
-                lr.y + (lr.h - th) / 2,
-                lr,
-                &d.label,
-                theme.text,
-            );
+            let ty = ctx.text_center_y(lr.y, lr.h);
+            ctx.text(lr.x + (lr.w - tw) / 2, ty, lr, &d.label, theme.text);
         }
 
         // 드롭다운 — 직각에 가까운 패널(1px 테두리), 항목 전체폭 하이라이트.

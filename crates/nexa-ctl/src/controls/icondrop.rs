@@ -197,7 +197,7 @@ impl IconDropdown {
             };
             let img = self.tinted(i, color);
             ctx.image_scaled(icon, &img, p);
-            let ty = r.y + (r.h - ctx.text_height()) / 2;
+            let ty = ctx.text_center_y(r.y, r.h);
             ctx.text(icon.right() + self.s(8), ty, p, &it.label, color);
         }
     }

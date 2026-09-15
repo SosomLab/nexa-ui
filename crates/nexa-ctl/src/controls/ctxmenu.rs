@@ -660,7 +660,6 @@ impl ContextMenu {
         ctx.fill_round_rect(r, self.s(RADIUS), theme.panel_bg);
         ctx.stroke_round_rect(r, self.s(RADIUS), theme.border, 1.0);
         ctx.select_font(FontSlot::Base, false);
-        let th = ctx.text_height();
         let icon_col = self.icon_col();
         let arrows = self.has_arrows();
         let mut y = at.y + self.s(PAD_V);
@@ -726,14 +725,15 @@ impl ContextMenu {
                     }
                     x += icon_col;
                     // 세로 정확히 가운데 — 글자 높이를 재서 놓는다(눈대중 상수 금지 · 08-09).
-                    ctx.text(x, y + (h - th) / 2, row, label, fg);
+                    let ty = ctx.text_center_y(y, h);
+                    ctx.text(x, ty, row, label, fg);
                     // 단축키 — 오른쪽 정렬 · 흐리게(hover면 본문색).
                     let right =
                         r.right() - self.s(PAD_H) - if arrows { self.s(ARROW_W) } else { 0 };
                     if let Some(sc) = shortcut {
                         let w = ctx.text_width(sc);
                         let scfg = if hot { fg } else { theme.text_dim };
-                        ctx.text(right - w, y + (h - th) / 2, row, sc, scfg);
+                        ctx.text(right - w, ty, row, sc, scfg);
                     }
                     // 하위 메뉴 화살표.
                     if !children.is_empty() {

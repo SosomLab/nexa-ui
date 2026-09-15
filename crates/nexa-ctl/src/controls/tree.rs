@@ -364,7 +364,7 @@ pub trait TreeControl: Control {
             tx += isz + self.s(4);
         }
         ctx.select_font(FontSlot::Base, false);
-        let ty = cell.y + (cell.h - ctx.text_height()) / 2;
+        let ty = ctx.text_center_y(cell.y, cell.h);
         ctx.text(tx, ty, cell_vis, &row.label, theme.text);
     }
 }
@@ -750,7 +750,7 @@ impl Widget for TreeGrid {
         ctx.fill_rect(header, theme.chrome_bg);
         let mut cx = b.x - ox;
         ctx.select_font(FontSlot::Status, false);
-        let hty = header.y + (header.h - ctx.text_height()) / 2; // 상·하 여백 동일(실측)
+        let hty = ctx.text_center_y(header.y, header.h); // 잉크 기준 세로 가운데(09-16)
         for col in &self.columns {
             let w = self.s(col.width);
             let cell = Rect::new(cx, header.y, w, header.h).intersection(&header);
@@ -810,10 +810,10 @@ impl Widget for TreeGrid {
                 let w = self.s(col.width);
                 if let Some(val) = row.cells.get(ci - 1) {
                     ctx.select_font(FontSlot::Base, false);
-                    let th = ctx.text_height();
+                    let ty = ctx.text_center_y(y, rh);
                     ctx.text(
                         colx + self.s(8),
-                        y + (rh - th) / 2,
+                        ty,
                         Rect::new(colx, y, w, rh).intersection(&body),
                         val,
                         theme.text,

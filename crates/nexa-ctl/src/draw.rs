@@ -87,6 +87,15 @@ pub trait DrawCtx {
         self.text_height() * 3 / 4
     }
 
+    /// 높이 `h`인 행(위 `y`) 안에서 글자를 **잉크 기준**으로 세로 가운데에 둘 때의 텍스트 top.
+    /// 상자(어센트+디센트) 가운데가 아니라 대문자·숫자·한글 몸통(≈ 숫자 높이)의 가운데를 행 가운데에 맞춘다 —
+    /// 맥 Apple SD Gothic Neo(어센트 0.75em · 디센트 0.25em · 어센트 안 여백 없음)는 상자 가운데로 놓으면 글자가
+    /// 위로 치우치고, Windows 맑은 고딕(어센트 안 여백 큼)은 우연히 맞아 보였다(09-16 사용자 캡처 비교).
+    /// 기본 구현 = 상자 가운데(측정 전용 백엔드).
+    fn text_center_y(&mut self, y: i32, h: i32) -> i32 {
+        y + (h - self.text_height()) / 2
+    }
+
     /// 삼각형을 단색 AA로 채운다(말풍선 꼬리 등 — 08-10). 기본 = no-op.
     fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
         let _ = (a, b, c, color);

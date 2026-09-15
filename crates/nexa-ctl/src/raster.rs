@@ -419,6 +419,18 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.font.text_box_height(self.px_size()).ceil() as i32
     }
 
+    fn text_center_y(&mut self, y: i32, h: i32) -> i32 {
+        // 잉크 가운데: 기준선 = 행 가운데 + 숫자 높이/2 → top = 기준선 − 어센트. 글꼴·OS가 달라도 같은 자리.
+        let size = self.px_size();
+        let f = if (self.mono_mult - 1.0).abs() > f32::EPSILON {
+            self.fonts.base
+        } else {
+            self.font
+        };
+        let (asc, cap) = (f.ascent(size), f.digit_height(size));
+        (y as f32 + h as f32 / 2.0 + cap / 2.0 - asc).round() as i32
+    }
+
     fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
         self.surface.blend_image(x, y, img, Self::clip_of(clip));
     }

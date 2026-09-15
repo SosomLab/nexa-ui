@@ -776,8 +776,7 @@ impl FilePicker {
         ctx.fill_round_rect(b, self.s(6), theme.field_bg);
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
         ctx.select_font(FontSlot::Base, false);
-        let th = ctx.text_height();
-        let ty = b.y + (b.h - th) / 2;
+        let ty = ctx.text_center_y(b.y, b.h);
         let crumbs = self.crumbs();
         let seg_pad = self.s(6);
         let sep = " › ";
@@ -2233,16 +2232,10 @@ impl Widget for FilePicker {
         let b = self.base.bounds;
         ctx.fill_rect(b, theme.window_bg);
         ctx.select_font(FontSlot::Base, false);
-        let th = ctx.text_height();
         // 라벨
         let nb = self.name_box.bounds();
-        ctx.text(
-            b.x + self.s(PAD),
-            nb.y + (nb.h - th) / 2,
-            b,
-            &self.labels.file_name,
-            theme.text,
-        );
+        let ty = ctx.text_center_y(nb.y, nb.h);
+        ctx.text(b.x + self.s(PAD), ty, b, &self.labels.file_name, theme.text);
         let fb = self.filter_combo.bounds();
         // 필터 라벨은 콤보 왼쪽에 작게(자리가 있을 때만).
         let ft_w = ctx.text_width(&self.labels.file_type);
@@ -2297,9 +2290,10 @@ impl Widget for FilePicker {
                     c.bounds().x - self.s(GAP) * 2 - ctx.text_width(label)
                 });
             let clip = Rect::new(x, cb.y, (left_edge - self.s(GAP) - x).max(0), cb.h);
+            let ty = ctx.text_center_y(cb.y, cb.h);
             ctx.text(
                 x,
-                cb.y + (cb.h - th) / 2,
+                ty,
                 clip,
                 msg,
                 if *err { theme.danger } else { theme.warn },
@@ -2308,13 +2302,8 @@ impl Widget for FilePicker {
         if let Some((label, c)) = &self.extra {
             let cb = c.bounds();
             let lw = ctx.text_width(label);
-            ctx.text(
-                cb.x - self.s(GAP) - lw,
-                cb.y + (cb.h - th) / 2,
-                b,
-                label,
-                theme.text,
-            );
+            let ty = ctx.text_center_y(cb.y, cb.h);
+            ctx.text(cb.x - self.s(GAP) - lw, ty, b, label, theme.text);
         }
         // 팝업은 맨 마지막(콤보 드롭다운 · 텍스트박스 편집 메뉴).
         if let Some((_, c)) = &self.extra {

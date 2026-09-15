@@ -171,7 +171,7 @@ impl Widget for RadioGroup {
             draw_radio_glyph(ctx, theme, g, i == self.selected, self.base.active);
             let lx = g.right() + self.s(GAP);
             ctx.select_font(FontSlot::Base, false);
-            let ty = g.y + (g.h - ctx.text_height()) / 2;
+            let ty = ctx.text_center_y(g.y, g.h);
             let lr = Rect::new(
                 lx,
                 self.base.bounds.y,

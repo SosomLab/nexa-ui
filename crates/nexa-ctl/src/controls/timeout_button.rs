@@ -298,8 +298,8 @@ impl Widget for TimeoutButton {
             self.label.clone()
         };
         let tw = ctx.text_width(&text);
-        let th = ctx.text_height();
-        ctx.text(b.x + (b.w - tw) / 2, b.y + (b.h - th) / 2, b, &text, fg);
+        let ty = ctx.text_center_y(b.y, b.h);
+        ctx.text(b.x + (b.w - tw) / 2, ty, b, &text, fg);
     }
 }
 

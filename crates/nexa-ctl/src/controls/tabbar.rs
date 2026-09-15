@@ -708,7 +708,6 @@ impl Widget for TabBar {
         let pad = self.s(self.pad_x);
         let gap = self.s(space::XS);
         let mark = self.s(PIN_MARK);
-        let th = ctx.text_height();
         let drag_idx = self.dragging();
         let hover_tab = match self.hover {
             Some(Zone::Tab(i, c)) => Some((i, c)),
@@ -759,13 +758,8 @@ impl Widget for TabBar {
             let text_clip = Rect::new(tx, cell.y, cr.x - gap - tx, cell.h).intersection(&clip);
             if !text_clip.is_empty() {
                 let fg = if active { theme.text } else { theme.text_dim };
-                ctx.text(
-                    tx,
-                    cell.y + (cell.h - th) / 2,
-                    text_clip,
-                    &self.titles[i],
-                    fg,
-                );
+                let ty = ctx.text_center_y(cell.y, cell.h);
+                ctx.text(tx, ty, text_clip, &self.titles[i], fg);
             }
             // 닫기 상자: 잠김 = 자물쇠 · hover/활성 = ×(상자 hover 시 상태 레이어).
             if fully_inside(cr, clip) {
