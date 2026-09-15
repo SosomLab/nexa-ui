@@ -47,8 +47,8 @@ pub use controls::{
 pub use controls::{
     BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, ColorPanel, ColorPicker, Combo,
     ComboControl, ComboItem, Control, ControlBase, CtlMsg, EditCtxAction, FlatRow, GridColumn,
-    ImageFit, LabelSide, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl,
-    TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
+    ImageFit, LabelSide, MenuIcon, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox,
+    TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};

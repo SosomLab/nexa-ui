@@ -1130,13 +1130,15 @@ impl TextBox {
                 let (ls, le) = (*start_idx, *start_idx + line_len);
                 let s0 = a.max(ls);
                 let s1 = e.min(le);
-                // 줄 넘김까지 선택에 들면(다음 행으로 이어짐) 뷰포트 오른쪽 끝까지 채우고,
-                // 높이는 행 피치(lh) 전체 — 행끼리 붙은 **한 블록**으로 보인다(09-14 사용자: DBeaver·Sublime식).
+                // 줄 넘김까지 선택에 들면(다음 행으로 이어짐) **글자 끝 + 한 칸**(줄바꿈 자리)까지만 채운다 —
+                // 전폭이 아니라 텍스트 범위만 반전(Golden식 · 사용자 09-15 "끝의 공백이 더 선명히 보인다").
+                // 높이는 행 피치(lh) 전체 — 행끼리 붙은 한 블록.
                 let spans_next = e > le && li + 1 < lines.len() && a <= le;
                 if s1 > s0 || spans_next {
                     let x0 = (dx + w.get(s0 - ls).copied().unwrap_or(0)).max(vx0);
                     let x1 = if spans_next {
-                        vx1
+                        let end = dx + w.get(line_len).copied().unwrap_or(0);
+                        (end + ctx.text_width(" ")).min(vx1)
                     } else {
                         (dx + w.get(s1 - ls).copied().unwrap_or(0)).min(vx1)
                     };

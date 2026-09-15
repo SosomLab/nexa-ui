@@ -8,12 +8,17 @@
 //! (클립보드 접근은 `<app>-plat`에 있고 UI 크레이트는 그걸 모른다 — 이음새 유지).
 //!
 //! 화면 밖으로 나가지 않도록 **경계 안으로 접어 넣는다**(오른쪽·아래에서 열면 위/왼쪽으로).
+//!
+//! ★ 09-15(nexa-sql 사용자 "DBeaver처럼"): 항목에 **아이콘**(알파 마스크 · 상태색으로 틴트) · **단축키 문구**(오른쪽 정렬 · 흐리게) ·
+//! **하위 메뉴**(`children` · 오른쪽 `›` · hover/→/클릭으로 펼침 · Esc/←로 접힘). 아이콘이 하나라도 있으면 **아이콘 칸을 전 행에
+//! 예약**해 아이콘 없는 항목의 글자도 세로로 정렬된다.
 
 use crate::draw::DrawCtx;
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
-use crate::theme::Theme;
+use crate::theme::{IconImage, Theme};
 use crate::FontSlot;
+use std::rc::Rc;
 
 // 레이아웃 상수(논리 px).
 const PAD_H: i32 = 12;
@@ -22,9 +27,43 @@ const ROW_EXTRA: i32 = 10;
 const SEP_H: i32 = 7;
 const MIN_W: i32 = 120;
 const RADIUS: i32 = 6;
+/// 아이콘 칸(아이콘 한 변 + 오른쪽 여백).
+const ICON_PX: i32 = 16;
+const ICON_GAP: i32 = 8;
+/// 라벨과 단축키 사이 최소 간격.
+const SC_GAP: i32 = 28;
+/// 하위 메뉴 화살표 칸.
+const ARROW_W: i32 = 14;
 
-/// 메뉴 한 줄.
-#[derive(Clone, Debug)]
+/// 메뉴 아이콘 — **알파 마스크만**(색은 그릴 때 행 상태색으로 틴트 · 테마 전환에 다시 만들 필요 없음).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuIcon {
+    /// 폭(px).
+    pub w: u32,
+    /// 높이(px).
+    pub h: u32,
+    /// `w*h` 커버리지.
+    pub alpha: Rc<[u8]>,
+}
+
+impl MenuIcon {
+    /// 마스크로 만든다.
+    ///
+    /// # Panics
+    /// 길이가 `w*h`가 아니면 패닉(구성 오류).
+    #[must_use]
+    pub fn from_alpha(w: u32, h: u32, alpha: &[u8]) -> Self {
+        assert_eq!(alpha.len(), (w * h) as usize, "알파 마스크 길이 불일치");
+        Self {
+            w,
+            h,
+            alpha: Rc::from(alpha),
+        }
+    }
+}
+
+/// 메뉴 항목.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CtxItem {
     /// 고를 수 있는 항목 — `(id, 라벨, 활성)`. 비활성은 흐리게 표시되고 골라지지 않는다.
     Item {
@@ -34,6 +73,12 @@ pub enum CtxItem {
         label: String,
         /// `false`면 흐리게 · 선택 불가(선택할 게 없는데 "복사"가 멀쩡히 보이면 거짓말이다).
         enabled: bool,
+        /// 아이콘(옵션).
+        icon: Option<MenuIcon>,
+        /// 단축키 문구(옵션 · 오른쪽 정렬 · 표시 전용 — 키 처리는 호스트 키맵 몫).
+        shortcut: Option<String>,
+        /// 하위 메뉴(비면 없음).
+        children: Vec<CtxItem>,
     },
     /// 구분선.
     Separator,
@@ -47,6 +92,9 @@ impl CtxItem {
             id: id.into(),
             label: label.into(),
             enabled: true,
+            icon: None,
+            shortcut: None,
+            children: Vec::new(),
         }
     }
     /// 활성 여부를 지정한 항목.
@@ -56,7 +104,49 @@ impl CtxItem {
             id: id.into(),
             label: label.into(),
             enabled,
+            icon: None,
+            shortcut: None,
+            children: Vec::new(),
         }
+    }
+    /// 하위 메뉴 항목(라벨 + 자식 목록 · 활성 자식이 없으면 비활성).
+    #[must_use]
+    pub fn submenu(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        children: Vec<CtxItem>,
+    ) -> Self {
+        let enabled = children
+            .iter()
+            .any(|c| matches!(c, CtxItem::Item { enabled: true, .. }));
+        Self::Item {
+            id: id.into(),
+            label: label.into(),
+            enabled,
+            icon: None,
+            shortcut: None,
+            children,
+        }
+    }
+    /// 아이콘 붙이기(빌더).
+    #[must_use]
+    pub fn with_icon(mut self, ic: Option<MenuIcon>) -> Self {
+        if let Self::Item { icon, .. } = &mut self {
+            *icon = ic;
+        }
+        self
+    }
+    /// 단축키 문구 붙이기(빌더 · 빈 문자열 = 없음).
+    #[must_use]
+    pub fn with_shortcut(mut self, sc: impl Into<String>) -> Self {
+        if let Self::Item { shortcut, .. } = &mut self {
+            let s: String = sc.into();
+            *shortcut = (!s.is_empty()).then_some(s);
+        }
+        self
+    }
+    fn has_children(&self) -> bool {
+        matches!(self, Self::Item { children, .. } if !children.is_empty())
     }
 }
 
@@ -77,6 +167,11 @@ pub struct ContextMenu {
     /// 라벨 최대 폭(px) — 열 때는 호스트 근사, paint가 실측으로 올려친다(08-14
     /// 실기: 자당 근사가 글꼴 크기에 뒤처져 "소유자만 초대로 전환"이 잘렸다).
     fit_w: std::cell::Cell<i32>,
+    /// 단축키 문구 최대 폭(px · paint 실측).
+    sc_w: std::cell::Cell<i32>,
+    /// 열린 하위 메뉴(+ 어느 항목의 것인가).
+    child: Option<Box<ContextMenu>>,
+    child_of: Option<usize>,
 }
 
 impl ContextMenu {
@@ -104,20 +199,25 @@ impl ContextMenu {
         self.at.get().is_some()
     }
 
-    /// 현재 팝업 영역(닫혀 있으면 빈 rect) — 호스트의 무효화 범위 계산용.
+    /// 현재 팝업 영역(닫혀 있으면 빈 rect · 하위 메뉴까지 합집합) — 호스트의 무효화 범위 계산용.
     #[must_use]
     pub fn bounds(&self) -> Rect {
-        if self.is_open() {
-            self.rect.get()
-        } else {
-            Rect::new(0, 0, 0, 0)
+        if !self.is_open() {
+            return Rect::new(0, 0, 0, 0);
+        }
+        let r = self.rect.get();
+        match &self.child {
+            Some(c) if c.is_open() => r.union(&c.bounds()),
+            _ => r,
         }
     }
 
-    /// 닫는다.
+    /// 닫는다(하위 메뉴 포함).
     pub fn close(&mut self) {
         self.at.set(None);
         self.hover = None;
+        self.child = None;
+        self.child_of = None;
     }
 
     /// **`(x, y)`에 연다** — `host`는 팝업이 넘어가면 안 되는 영역(보통 창 전체).
@@ -130,9 +230,12 @@ impl ContextMenu {
         }
         self.items = items;
         self.fit_w.set(text_w);
+        self.sc_w.set(0);
         self.host = host;
         self.hover = None;
         self.picked = None;
+        self.child = None;
+        self.child_of = None;
         let (w, h) = self.size_px();
         // 경계 접기 — 오른쪽/아래로 넘치면 커서 반대쪽으로 편다.
         let px = if x + w > host.right() {
@@ -154,6 +257,25 @@ impl ContextMenu {
         self.s(16 + ROW_EXTRA)
     }
 
+    fn has_icons(&self) -> bool {
+        self.items
+            .iter()
+            .any(|it| matches!(it, CtxItem::Item { icon: Some(_), .. }))
+    }
+
+    fn has_arrows(&self) -> bool {
+        self.items.iter().any(CtxItem::has_children)
+    }
+
+    /// 아이콘 칸 폭(아이콘이 하나라도 있으면 전 행 예약 — 글자 세로 정렬).
+    fn icon_col(&self) -> i32 {
+        if self.has_icons() {
+            self.s(ICON_PX + ICON_GAP)
+        } else {
+            0
+        }
+    }
+
     fn size_px(&self) -> (i32, i32) {
         let mut h = self.s(PAD_V) * 2;
         for it in &self.items {
@@ -162,7 +284,14 @@ impl ContextMenu {
                 CtxItem::Separator => self.s(SEP_H),
             };
         }
-        let w = (self.fit_w.get() + self.s(PAD_H) * 2).max(self.s(MIN_W));
+        let sc = self.sc_w.get();
+        let extra = if sc > 0 { self.s(SC_GAP) + sc } else { 0 }
+            + if self.has_arrows() {
+                self.s(ARROW_W)
+            } else {
+                0
+            };
+        let w = (self.icon_col() + self.fit_w.get() + extra + self.s(PAD_H) * 2).max(self.s(MIN_W));
         (w, h)
     }
 
@@ -219,6 +348,63 @@ impl ContextMenu {
         self.hover = Some(sel[next]);
     }
 
+    /// 항목 `i`의 하위 메뉴를 연다(오른쪽 · 넘치면 왼쪽). 이미 그 항목의 것이 열려 있으면 그대로.
+    fn open_child(&mut self, i: usize, hover_first: bool) {
+        if self.child_of == Some(i) && self.child.as_ref().is_some_and(|c| c.is_open()) {
+            if hover_first {
+                if let Some(c) = &mut self.child {
+                    if c.hover.is_none() {
+                        c.move_hover(true);
+                    }
+                }
+            }
+            return;
+        }
+        let Some(CtxItem::Item { children, .. }) = self.items.get(i) else {
+            return;
+        };
+        if children.is_empty() {
+            return;
+        }
+        let Some(row) = self.row_rect(i) else { return };
+        let mut c = ContextMenu::new();
+        c.set_scale(self.scale);
+        // 라벨 폭 근사(부모와 같은 근사 · paint가 실측으로 보정).
+        let approx = children
+            .iter()
+            .map(|it| match it {
+                CtxItem::Item { label, .. } => label
+                    .chars()
+                    .map(|ch| if ch.is_ascii() { 8 } else { 15 })
+                    .sum::<i32>(),
+                CtxItem::Separator => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        let x = row.right() - self.s(4);
+        let y = row.y - self.s(PAD_V);
+        c.open_at(x, y, children.clone(), self.host, self.s(approx));
+        // 오른쪽에 자리가 없으면(open_at이 왼쪽으로 접었으면) 부모 왼쪽에 붙인다.
+        let cw = c.rect.get().w;
+        if x + cw > self.host.right() {
+            let nx = (row.x - cw + self.s(4)).max(self.host.x);
+            let cy = c.rect.get().y;
+            c.at.set(Some(Point { x: nx, y: cy }));
+            c.rect.set(Rect::new(nx, cy, cw, c.rect.get().h));
+        }
+        if hover_first {
+            c.move_hover(true);
+        }
+        self.child = Some(Box::new(c));
+        self.child_of = Some(i);
+        self.hover = Some(i);
+    }
+
+    fn close_child(&mut self) {
+        self.child = None;
+        self.child_of = None;
+    }
+
     /// 이벤트 처리 — `true`면 **소비**(호스트는 그 이벤트를 아래 콘텐츠에 쓰지 않는다).
     ///
     /// 열려 있는 동안은 바깥 클릭·Esc로 닫히며, 그 클릭도 소비한다
@@ -227,16 +413,73 @@ impl ContextMenu {
         if !self.is_open() {
             return false;
         }
+        // ── 하위 메뉴가 열려 있으면: 그 안의 사건은 자식이 · 부모 행 위 이동은 부모가(다른 항목 = 자식 교체).
+        let child_open = self.child.as_ref().is_some_and(|c| c.is_open());
+        if child_open {
+            let child_rect = self
+                .child
+                .as_ref()
+                .map_or(Rect::default(), |c| c.rect.get());
+            match *ev {
+                InputEvent::MouseMove { x, y } => {
+                    let p = Point { x, y };
+                    if child_rect.contains(p) {
+                        return self.forward_child(ev);
+                    }
+                    if let Some(i) = self.hit(p) {
+                        if Some(i) != self.child_of {
+                            self.close_child();
+                            self.hover = Some(i);
+                            if self.items[i].has_children() {
+                                self.open_child(i, false);
+                            }
+                        }
+                        return true;
+                    }
+                    // 부모·자식 어디도 아님 — 자식 hover만 지운다.
+                    return self.forward_child(ev);
+                }
+                InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y } => {
+                    let p = Point { x, y };
+                    if child_rect.contains(p) {
+                        return self.forward_child(ev);
+                    }
+                    // 부모 항목(하위 메뉴 있는 것) 클릭 = 유지 · 다른 부모 항목 = 일반 처리 · 바깥 = 전부 닫기.
+                    if self.hit(p) == self.child_of {
+                        return true;
+                    }
+                    self.close_child();
+                    // 아래 일반 처리로 이어진다.
+                }
+                InputEvent::Key {
+                    key: Key::Left | Key::Escape,
+                    ..
+                } => {
+                    self.close_child();
+                    return true;
+                }
+                _ => return self.forward_child(ev),
+            }
+        }
         match *ev {
             InputEvent::MouseMove { x, y } => {
                 let h = self.hit(Point { x, y });
                 let changed = h != self.hover;
                 self.hover = h;
+                if let Some(i) = h {
+                    if self.items[i].has_children() {
+                        self.open_child(i, false);
+                    }
+                }
                 changed
             }
             InputEvent::MouseDown { x, y, .. } => {
                 let p = Point { x, y };
                 if let Some(i) = self.hit(p) {
+                    if self.items[i].has_children() {
+                        self.open_child(i, false);
+                        return true;
+                    }
                     if let CtxItem::Item { id, .. } = &self.items[i] {
                         self.picked = Some(id.clone());
                     }
@@ -259,12 +502,25 @@ impl ContextMenu {
             InputEvent::MouseUp { .. } | InputEvent::Wheel { .. } | InputEvent::HWheel { .. } => {
                 true
             }
-            // 키보드 — ↑/↓ 이동 · Enter 선택 · 그 외(Esc 포함)는 메뉴만 닫는다.
+            // 키보드 — ↑/↓ 이동 · → 하위 열기 · Enter 선택(하위 있으면 열기) · 그 외(Esc 포함)는 메뉴만 닫는다.
             InputEvent::Key { key, .. } => {
                 match key {
                     Key::Down => self.move_hover(true),
                     Key::Up => self.move_hover(false),
+                    Key::Right => {
+                        if let Some(i) = self.hover {
+                            if self.items[i].has_children() {
+                                self.open_child(i, true);
+                            }
+                        }
+                    }
                     Key::Enter => {
+                        if let Some(i) = self.hover {
+                            if self.items[i].has_children() {
+                                self.open_child(i, true);
+                                return true;
+                            }
+                        }
                         if let Some(CtxItem::Item {
                             id, enabled: true, ..
                         }) = self.hover.map(|i| &self.items[i])
@@ -285,6 +541,26 @@ impl ContextMenu {
         }
     }
 
+    /// 자식에게 넘기고 결과를 거둔다(선택 = 전부 닫기 · 자식이 바깥 클릭으로 닫혔으면 부모도 닫는다).
+    fn forward_child(&mut self, ev: &InputEvent) -> bool {
+        let Some(c) = &mut self.child else {
+            return false;
+        };
+        let consumed = c.on_event(ev);
+        if let Some(id) = c.take_picked() {
+            self.picked = Some(id);
+            self.close();
+            return true;
+        }
+        if !c.is_open() {
+            match ev {
+                InputEvent::MouseDown { .. } | InputEvent::RightDown { .. } => self.close(),
+                _ => self.close_child(),
+            }
+        }
+        consumed
+    }
+
     /// 현재 항목 목록(테스트·검증용) — 활성 여부까지 그대로 본다.
     #[must_use]
     pub fn items_for_test(&self) -> &[CtxItem] {
@@ -295,6 +571,12 @@ impl ContextMenu {
     #[must_use]
     pub fn row_rect_of(&self, idx: usize) -> Option<Rect> {
         self.row_rect(idx)
+    }
+
+    /// 열린 하위 메뉴(테스트).
+    #[must_use]
+    pub fn child_for_test(&self) -> Option<&ContextMenu> {
+        self.child.as_deref().filter(|c| c.is_open())
     }
 
     /// 고른 항목 id를 **가져간다**(한 번만).
@@ -309,17 +591,22 @@ impl ContextMenu {
         // 여기서만 글자를 잴 수 있으므로 첫 paint가 진짜 폭으로 올려치고, 넓어져서
         // 호스트 오른쪽을 넘으면 경계 접기를 다시 한다(히트 판정 rect·at 동기 갱신).
         ctx.select_font(FontSlot::Base, false);
-        let real = self
-            .items
-            .iter()
-            .map(|it| match it {
-                CtxItem::Item { label, .. } => ctx.text_width(label),
-                CtxItem::Separator => 0,
-            })
-            .max()
-            .unwrap_or(0);
-        if real > self.fit_w.get() {
-            self.fit_w.set(real);
+        let mut real = 0;
+        let mut sc_real = 0;
+        for it in &self.items {
+            if let CtxItem::Item {
+                label, shortcut, ..
+            } = it
+            {
+                real = real.max(ctx.text_width(label));
+                if let Some(sc) = shortcut {
+                    sc_real = sc_real.max(ctx.text_width(sc));
+                }
+            }
+        }
+        if real > self.fit_w.get() || sc_real > self.sc_w.get() {
+            self.fit_w.set(real.max(self.fit_w.get()));
+            self.sc_w.set(sc_real.max(self.sc_w.get()));
             let (w, h) = self.size_px();
             let mut x = at.x;
             if x + w > self.host.right() {
@@ -335,21 +622,22 @@ impl ContextMenu {
         ctx.stroke_round_rect(r, self.s(RADIUS), theme.border, 1.0);
         ctx.select_font(FontSlot::Base, false);
         let th = ctx.text_height();
+        let icon_col = self.icon_col();
+        let arrows = self.has_arrows();
         let mut y = at.y + self.s(PAD_V);
-        for it in &self.items {
+        for (i, it) in self.items.iter().enumerate() {
             match it {
                 CtxItem::Item {
-                    id: _,
                     label,
                     enabled,
+                    icon,
+                    shortcut,
+                    children,
+                    ..
                 } => {
                     let h = self.row_h();
                     let row = Rect::new(r.x, y, r.w, h);
-                    let hot = *enabled
-                        && self
-                            .hover
-                            .and_then(|i| self.row_rect(i))
-                            .is_some_and(|hr| hr.y == y);
+                    let hot = *enabled && (self.hover == Some(i) || self.child_of == Some(i));
                     if hot {
                         ctx.fill_rect(
                             Rect::new(r.x + self.s(2), y, r.w - self.s(4), h),
@@ -363,8 +651,35 @@ impl ContextMenu {
                     } else {
                         theme.text
                     };
+                    let mut x = r.x + self.s(PAD_H);
+                    // 아이콘(상태색 틴트 · 세로 중앙) — 없는 행도 칸은 비워 둔다(글자 세로 정렬).
+                    if let Some(ic) = icon {
+                        let sz = self.s(ICON_PX);
+                        let (cr, cg, cb) = fg.rgb();
+                        let img = IconImage::from_alpha_tinted(ic.w, ic.h, &ic.alpha, (cr, cg, cb));
+                        ctx.image_scaled(Rect::new(x, y + (h - sz) / 2, sz, sz), &img, row);
+                    }
+                    x += icon_col;
                     // 세로 정확히 가운데 — 글자 높이를 재서 놓는다(눈대중 상수 금지 · 08-09).
-                    ctx.text(r.x + self.s(PAD_H), y + (h - th) / 2, row, label, fg);
+                    ctx.text(x, y + (h - th) / 2, row, label, fg);
+                    // 단축키 — 오른쪽 정렬 · 흐리게(hover면 본문색).
+                    let right =
+                        r.right() - self.s(PAD_H) - if arrows { self.s(ARROW_W) } else { 0 };
+                    if let Some(sc) = shortcut {
+                        let w = ctx.text_width(sc);
+                        let scfg = if hot { fg } else { theme.text_dim };
+                        ctx.text(right - w, y + (h - th) / 2, row, sc, scfg);
+                    }
+                    // 하위 메뉴 화살표.
+                    if !children.is_empty() {
+                        let a = Rect::new(
+                            r.right() - self.s(PAD_H) - self.s(ARROW_W) + self.s(4),
+                            y + (h - self.s(10)) / 2,
+                            self.s(10),
+                            self.s(10),
+                        );
+                        super::draw_chevron_right(ctx, a, fg);
+                    }
                     y += h;
                 }
                 CtxItem::Separator => {
@@ -376,6 +691,9 @@ impl ContextMenu {
                     y += h;
                 }
             }
+        }
+        if let Some(c) = &self.child {
+            c.paint(ctx, theme);
         }
     }
 }
@@ -519,5 +837,106 @@ mod tests {
         let mut m = ContextMenu::new();
         m.open_at(10, 10, vec![], host(), 60);
         assert!(!m.is_open());
+    }
+
+    fn nested() -> Vec<CtxItem> {
+        vec![
+            CtxItem::item("copy", "Copy").with_shortcut("Ctrl+C"),
+            CtxItem::submenu(
+                "adv",
+                "Advanced Copy",
+                vec![
+                    CtxItem::item("csv", "CSV"),
+                    CtxItem::submenu("sql", "SQL", vec![CtxItem::item("ins", "INSERT")]),
+                ],
+            ),
+            CtxItem::Separator,
+            CtxItem::item("all", "Select All"),
+        ]
+    }
+
+    #[test]
+    fn submenu_opens_on_click_and_pick_bubbles_up() {
+        // 09-15 — DBeaver식 하위 메뉴: 부모 항목 클릭 = 펼침(선택 아님) · 자식 선택 = 전체 닫힘 + id 전달.
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, nested(), host(), 100);
+        let adv = m.row_rect(1).unwrap();
+        assert!(m.on_event(&down(adv.x + 5, adv.y + 2)));
+        assert!(m.is_open(), "하위 메뉴 항목 클릭은 닫지 않는다");
+        assert_eq!(m.take_picked(), None);
+        let child = m.child_for_test().expect("하위 메뉴가 열린다");
+        let csv = child.row_rect(0).unwrap();
+        assert!(
+            csv.x >= adv.right() - 10,
+            "오른쪽에 붙는다: {csv:?} vs {adv:?}"
+        );
+        m.on_event(&down(csv.x + 5, csv.y + 2));
+        assert_eq!(m.take_picked().as_deref(), Some("csv"));
+        assert!(!m.is_open(), "자식 선택 = 전부 닫힘");
+    }
+
+    #[test]
+    fn submenu_keyboard_right_enter_and_left() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, nested(), host(), 100);
+        m.on_event(&key(Key::Down)); // copy
+        m.on_event(&key(Key::Down)); // adv
+        m.on_event(&key(Key::Right)); // 열고 첫 항목 hover
+        assert!(m.child_for_test().is_some());
+        m.on_event(&key(Key::Left));
+        assert!(m.child_for_test().is_none(), "←는 하위 메뉴만 닫는다");
+        assert!(m.is_open());
+        m.on_event(&key(Key::Enter)); // 하위 있는 항목의 Enter = 열기
+        assert!(m.child_for_test().is_some());
+        m.on_event(&key(Key::Down)); // csv → sql
+        m.on_event(&key(Key::Right)); // sql 하위 열기(2단)
+        m.on_event(&key(Key::Enter)); // INSERT
+        assert_eq!(m.take_picked().as_deref(), Some("ins"));
+        assert!(!m.is_open());
+    }
+
+    #[test]
+    fn hover_moves_submenu_to_other_parent_row() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, nested(), host(), 100);
+        let adv = m.row_rect(1).unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: adv.x + 5,
+            y: adv.y + 2,
+        });
+        assert!(m.child_for_test().is_some(), "hover로 열린다");
+        let copy = m.row_rect(0).unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: copy.x + 5,
+            y: copy.y + 2,
+        });
+        assert!(
+            m.child_for_test().is_none(),
+            "다른 부모 행 hover = 하위 메뉴 닫힘"
+        );
+        // 바깥 클릭은 전부 닫는다.
+        m.on_event(&InputEvent::MouseMove {
+            x: adv.x + 5,
+            y: adv.y + 2,
+        });
+        assert!(m.on_event(&down(390, 290)));
+        assert!(!m.is_open());
+    }
+
+    #[test]
+    fn icon_column_is_reserved_for_all_rows_when_any_has_icon() {
+        let mut plain = ContextMenu::new();
+        plain.open_at(10, 10, items(), host(), 160);
+        let w0 = plain.bounds().w;
+        let mut with_icon = ContextMenu::new();
+        let mut it = items();
+        it[0] =
+            CtxItem::item("copy", "복사").with_icon(Some(MenuIcon::from_alpha(2, 2, &[255; 4])));
+        with_icon.open_at(10, 10, it, host(), 160);
+        assert!(
+            with_icon.bounds().w > w0,
+            "아이콘 칸만큼 넓어진다(전 행 공통)"
+        );
+        assert!(with_icon.icon_col() > 0);
     }
 }

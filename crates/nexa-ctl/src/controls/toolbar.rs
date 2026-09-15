@@ -398,12 +398,9 @@ impl Widget for Toolbar {
             let slot = self.slot_rect(i);
             let is_pressed = self.pressed == Some(i);
             let is_hover = self.hover == Some(i);
-            // 기준색 반투명 배경 — 다크/라이트 모두 "선택된 느낌".
-            if is_pressed {
-                ctx.fill_round_rect_alpha(slot, self.s(6), theme.text, PRESS_BG_ALPHA);
-            } else if is_hover {
-                ctx.fill_round_rect_alpha(slot, self.s(6), theme.text, HOVER_BG_ALPHA);
-            }
+            // hover/pressed 배경은 그리지 않는다(09-15 nexa-sql 사용자 — 슬롯 아래가 밑줄처럼 보였다) ·
+            // 식별은 아이콘 색(accent)과 눌림 1px 내림으로.
+            let _ = (PRESS_BG_ALPHA, HOVER_BG_ALPHA);
             let pad = self.s(SLOT_PAD);
             // 눌림 식별 — 아이콘을 1px 내려 그린다.
             let dy = i32::from(is_pressed);

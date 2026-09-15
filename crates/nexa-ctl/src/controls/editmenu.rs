@@ -8,7 +8,30 @@
 //! [`EditMenuAction`]으로 요청만 남긴다. `extra` 항목(풍선 "메시지 복사" 등
 //! 호출측 고유 메뉴)은 앞에 끼워 넣고 픽을 `Extra(id)`로 돌려준다.
 
-use super::{ctl_label, ContextMenu, CtlMsg, CtxItem};
+use super::{ctl_label, ContextMenu, CtlMsg, CtxItem, MenuIcon};
+use std::cell::RefCell;
+
+/// 편집 메뉴 4종의 아이콘·단축키 문구(호스트 주입 · 09-15 nexa-sql "기본 기능에도 이미지").
+#[derive(Clone, Debug, Default)]
+pub struct EditMenuDecor {
+    /// 복사 · 잘라내기 · 붙여넣기 · 전체 선택 아이콘.
+    pub icons: [Option<MenuIcon>; 4],
+    /// 같은 순서의 단축키 문구(빈 = 없음).
+    pub shortcuts: [String; 4],
+}
+
+thread_local! {
+    static EDIT_DECOR: RefCell<EditMenuDecor> = RefCell::new(EditMenuDecor::default());
+}
+
+/// 편집 메뉴 아이콘·단축키 주입(UI 스레드 · 언제든 다시 불러 갱신 가능 — 키맵 변경 시).
+pub fn set_edit_menu_decor(d: EditMenuDecor) {
+    EDIT_DECOR.with(|c| *c.borrow_mut() = d);
+}
+
+fn decor() -> EditMenuDecor {
+    EDIT_DECOR.with(|c| c.borrow().clone())
+}
 use crate::draw::DrawCtx;
 use crate::event::InputEvent;
 use crate::geom::Rect;
@@ -67,27 +90,28 @@ impl EditMenu {
         if !items.is_empty() {
             items.push(CtxItem::Separator);
         }
-        items.push(CtxItem::maybe(
-            "copy",
-            ctl_label(CtlMsg::CtxCopy),
-            caps.has_sel,
-        ));
-        items.push(CtxItem::maybe(
-            "cut",
-            ctl_label(CtlMsg::CtxCut),
-            caps.has_sel,
-        ));
-        items.push(CtxItem::maybe(
-            "paste",
-            ctl_label(CtlMsg::CtxPaste),
-            caps.clip_has_text,
-        ));
+        let d = decor();
+        items.push(
+            CtxItem::maybe("copy", ctl_label(CtlMsg::CtxCopy), caps.has_sel)
+                .with_icon(d.icons[0].clone())
+                .with_shortcut(d.shortcuts[0].clone()),
+        );
+        items.push(
+            CtxItem::maybe("cut", ctl_label(CtlMsg::CtxCut), caps.has_sel)
+                .with_icon(d.icons[1].clone())
+                .with_shortcut(d.shortcuts[1].clone()),
+        );
+        items.push(
+            CtxItem::maybe("paste", ctl_label(CtlMsg::CtxPaste), caps.clip_has_text)
+                .with_icon(d.icons[2].clone())
+                .with_shortcut(d.shortcuts[2].clone()),
+        );
         items.push(CtxItem::Separator);
-        items.push(CtxItem::maybe(
-            "select_all",
-            ctl_label(CtlMsg::CtxSelectAll),
-            caps.has_text,
-        ));
+        items.push(
+            CtxItem::maybe("select_all", ctl_label(CtlMsg::CtxSelectAll), caps.has_text)
+                .with_icon(d.icons[3].clone())
+                .with_shortcut(d.shortcuts[3].clone()),
+        );
         // 폭 힌트 — 자당 근사(ASCII 8 · 그 외 15). 실측 보정은 ContextMenu 몫(08-14).
         let widest = items
             .iter()
