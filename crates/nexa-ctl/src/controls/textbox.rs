@@ -45,6 +45,9 @@ impl Default for WhitespaceStyle {
     }
 }
 
+/// 연속 클릭(더블·트리플) 최대 간격(ms · OS 기본 500).
+pub const DOUBLE_CLICK_MS: u64 = 500;
+
 #[derive(Debug)]
 pub struct TextBox {
     base: ControlBase,
@@ -64,10 +67,17 @@ pub struct TextBox {
     caret_xs: std::cell::RefCell<Vec<i32>>,
     /// 드래그 선택 중.
     dragging: bool,
+    /// 열(블록) 선택 모드 — 호스트가 Alt+Shift 상태를 밀어 준다(`set_column_mode`).
+    column_mode: bool,
+    /// 열 선택 드래그 시작점(위젯 좌표) — 드래그 동안 줄마다 같은 x 구간을 선택한다.
+    col_anchor: Option<(i32, i32)>,
     /// 마지막 클릭 (캐럿 인덱스, 연속 횟수) — 더블·트리플 판정.
     /// `MouseDown`에는 시각이 없어 **같은 위치 + 무개입**(사이에 키 입력 없음)으로
     /// 연속을 판정한다(시각 주입은 M3-1e). 위치가 다르면 새 체인 = 캐럿 이동만.
     last_click: (usize, u8),
+    /// 마지막 MouseDown 시각 — 연속 클릭은 [`DOUBLE_CLICK_MS`] 안에서만 잇는다(nexa-sql 09-15:
+    /// 같은 자리를 한참 뒤에 다시 누르면 더블클릭(단어 선택)이 돼 드래그 선택이 시작되지 않던 결함).
+    last_click_at: Option<std::time::Instant>,
     /// 가로 스크롤(px · ① 08-13) — 텍스트가 폭을 넘으면 **캐럿이 항상 보이게**
     /// 페인트가 조정한다(셀: 페인트는 &self).
     hscroll: std::cell::Cell<i32>,
@@ -160,7 +170,10 @@ impl TextBox {
             text_x: std::cell::Cell::new(0),
             caret_xs: std::cell::RefCell::new(Vec::new()),
             dragging: false,
+            column_mode: false,
+            col_anchor: None,
             last_click: (0, 0),
+            last_click_at: None,
             hscroll: std::cell::Cell::new(0),
             ctx_menu: super::EditMenu::new(),
             edit_ctx: None,
@@ -228,6 +241,53 @@ impl TextBox {
         self.indent_spaces = spaces;
     }
 
+    /// 탭 폭(칸).
+    #[must_use]
+    pub fn tab_size(&self) -> u8 {
+        self.tab_size
+    }
+
+    /// Tab 키·붙여넣기가 공백을 넣는가.
+    #[must_use]
+    pub fn indent_spaces(&self) -> bool {
+        self.indent_spaces
+    }
+
+    /// 연속 클릭 판정 — 직전 MouseDown이 [`DOUBLE_CLICK_MS`] 안이면 체인을 잇고, 지금 시각을 기록한다.
+    fn click_chain_alive(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let alive = self
+            .last_click_at
+            .is_some_and(|t| now.duration_since(t).as_millis() <= u128::from(DOUBLE_CLICK_MS));
+        self.last_click_at = Some(now);
+        alive
+    }
+
+    /// 탭 문자를 **다음 탭 정지까지의 공백**으로 편다(줄마다 열을 다시 센다 · 첫 줄은 `start_col`부터).
+    fn expand_tabs(text: &str, tab_size: usize, start_col: usize) -> String {
+        let ts = tab_size.max(1);
+        let mut out = String::with_capacity(text.len());
+        let mut col = start_col;
+        for c in text.chars() {
+            match c {
+                '\t' => {
+                    let n = ts - col % ts;
+                    out.push_str(&" ".repeat(n));
+                    col += n;
+                }
+                '\n' => {
+                    out.push(c);
+                    col = 0;
+                }
+                _ => {
+                    out.push(c);
+                    col += 1;
+                }
+            }
+        }
+        out
+    }
+
     /// 캐럿이 있는 줄의 열(0 기준 · 탭은 다음 정지까지).
     fn caret_column(&self) -> usize {
         let text = self.edit.text();
@@ -237,9 +297,13 @@ impl TextBox {
             .iter()
             .rposition(|&c| c == '\n')
             .map_or(0, |p| p + 1);
-        let ts = usize::from(self.tab_size.max(1));
+        Self::col_of(&chars[line_start..caret], usize::from(self.tab_size.max(1)))
+    }
+
+    /// 줄 앞부분 문자열의 열(탭은 다음 정지까지).
+    fn col_of(chars: &[char], ts: usize) -> usize {
         let mut col = 0usize;
-        for &c in &chars[line_start..caret] {
+        for &c in chars {
             col = if c == '\t' {
                 (col / ts + 1) * ts
             } else {
@@ -528,6 +592,101 @@ impl TextBox {
         self.edit.set_selection(a, b);
     }
 
+    /// 열(블록) 선택 모드 — Sublime의 Alt+Shift 드래그. 호스트가 수식키 상태를 밀어 준다.
+    pub fn set_column_mode(&mut self, on: bool) {
+        self.column_mode = on;
+    }
+
+    /// 다중 선택/캐럿을 하나로 접는다(Esc) — 접었으면 `true`.
+    pub fn clear_multi(&mut self) -> bool {
+        self.edit.clear_multi()
+    }
+
+    /// 다중 선택 중인가(상태줄 표시).
+    #[must_use]
+    pub fn has_multi(&self) -> bool {
+        self.edit.has_multi()
+    }
+
+    /// 선택 구간 수(주 선택 포함).
+    #[must_use]
+    pub fn selection_count(&self) -> usize {
+        self.edit.regions().len()
+    }
+
+    /// ★ Sublime `find_under_expand`(Ctrl+D) — 선택이 없으면 캐럿 밑 **단어**를 선택하고,
+    /// 이미 선택이 있으면 같은 문자열의 **다음 출현**을 추가 선택한다(끝까지 가면 처음으로 되돌아온다).
+    /// 더 찾을 것이 없으면 `false`.
+    pub fn select_next_occurrence(&mut self) -> bool {
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        if chars.is_empty() {
+            return false;
+        }
+        let Some((a, b)) = self.edit.selection() else {
+            let i = self.edit.caret().min(chars.len());
+            self.select_word_at(i);
+            return self.edit.selection().is_some();
+        };
+        let needle: Vec<char> = chars[a..b].to_vec();
+        if needle.is_empty() {
+            return false;
+        }
+        let taken = self.edit.regions();
+        let n = chars.len();
+        let m = needle.len();
+        if m > n {
+            return false;
+        }
+        // 주 선택 끝 다음부터 앞으로 훑고, 끝까지 가면 처음으로 되돌아온다(Sublime).
+        let start = b;
+        for k in 0..=(n - m) {
+            let i = (start + k) % (n - m + 1);
+            if chars[i..i + m] != needle[..] {
+                continue;
+            }
+            if taken.contains(&(i, i + m)) {
+                continue;
+            }
+            return self.edit.add_selection(i, i + m);
+        }
+        false
+    }
+
+    /// 열 선택 드래그 중인가(테스트·호스트 판정).
+    #[must_use]
+    pub fn column_dragging(&self) -> bool {
+        self.col_anchor.is_some()
+    }
+
+    /// 두 점(위젯 좌표) 사이의 **열 블록** 선택 — 줄마다 같은 x 구간을 구간 하나로 만든다.
+    /// 가로 폭이 0이면 줄마다 캐럿만 남는다(Sublime의 다중 커서).
+    fn column_regions(&self, ax: i32, ay: i32, bx: i32, by: i32) -> Vec<(usize, usize)> {
+        let lay = self.line_lay.borrow();
+        if lay.is_empty() {
+            return Vec::new();
+        }
+        let lh = self.line_h();
+        let row_at = |y: i32| -> usize {
+            lay.iter()
+                .position(|l| y < l.top + lh)
+                .unwrap_or(lay.len() - 1)
+        };
+        let (r0, r1) = (row_at(ay), row_at(by));
+        let (lo, hi) = (r0.min(r1), r0.max(r1));
+        let mut out = Vec::with_capacity(hi - lo + 1);
+        for li in lo..=hi {
+            let y = lay[li].top;
+            let i0 = self.ml_caret_at(ax, y);
+            let i1 = self.ml_caret_at(bx, y);
+            out.push((i0, i1));
+        }
+        // 드래그 방향에 따라 마지막(= 주 선택)을 커서 쪽 줄로.
+        if r1 < r0 {
+            out.reverse();
+        }
+        out
+    }
+
     /// ×(지우기) 버튼 영역(값이 있을 때만 유효) — 호스트 테스트용 공개.
     #[must_use]
     pub fn clear_rect(&self) -> Rect {
@@ -598,7 +757,7 @@ impl TextBox {
     /// 선택 텍스트(복사 — ① 08-13). 위젯은 OS 클립보드를 모른다 — 호스트가 잇는다.
     #[must_use]
     pub fn copy_selection(&self) -> Option<String> {
-        self.base.focused.then(|| self.edit.selected_text())?
+        self.base.focused.then(|| self.edit.selected_text_multi())?
     }
 
     /// 선택 텍스트를 잘라낸다(① — 반환 텍스트를 호스트가 클립보드에 쓴다).
@@ -630,7 +789,27 @@ impl TextBox {
                     out.push(c);
                 }
             }
-            out
+            // ★ 공백 들여쓰기 탭(파일)이면 붙여넣는 탭 문자를 **탭 폭만큼 공백**으로 편다(탭 들여쓰기 탭은
+            //   그대로 · 열은 캐럿 열부터 · nexa-sql 09-15 사용자 요청).
+            if self.indent_spaces && out.contains('\t') {
+                let col = if self.edit.selection().is_some() {
+                    // 선택 대체 = 선택 시작 열(캐럿이 선택 끝일 수 있다).
+                    let (a, _) = self.edit.selection().unwrap_or((0, 0));
+                    let text = self.edit.text();
+                    let chars: Vec<char> = text.chars().collect();
+                    let a = a.min(chars.len());
+                    let ls = chars[..a]
+                        .iter()
+                        .rposition(|&c| c == '\n')
+                        .map_or(0, |p| p + 1);
+                    Self::col_of(&chars[ls..a], usize::from(self.tab_size.max(1)))
+                } else {
+                    self.caret_column()
+                };
+                Self::expand_tabs(&out, usize::from(self.tab_size.max(1)), col)
+            } else {
+                out
+            }
         } else {
             let mut out = String::with_capacity(text.len());
             let mut ws = false;
@@ -841,6 +1020,21 @@ impl TextBox {
         } else {
             None
         };
+        // 다중 선택(Ctrl+D · 열 선택) — 그릴 구간 전부(빈 구간은 캐럿으로만 그린다).
+        let sels: Vec<(usize, usize)> = if preedit_n == 0 {
+            self.edit
+                .regions()
+                .into_iter()
+                .filter(|(a, e)| e > a)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let carets: Vec<usize> = if preedit_n == 0 {
+            self.edit.carets()
+        } else {
+            vec![disp_caret]
+        };
 
         // 거터 배경·구분선(텍스트보다 먼저 · 가로 스크롤 무관).
         if gw > 0 {
@@ -883,15 +1077,38 @@ impl TextBox {
                 h.line_spans(l, &mut hl_state, &mut hl_spans);
             }
         }
+        // 캐럿이 속한 표시 행(다중 캐럿 포함) — 시작이 캐럿 이하인 마지막 행.
+        let caret_rows: Vec<(usize, usize)> = carets
+            .iter()
+            .map(|&c| (lines.iter().rposition(|(st, _)| *st <= c).unwrap_or(0), c))
+            .collect();
         for (vi, li) in (top..lines.len().min(top + rows)).enumerate() {
             let (start_idx, line_str) = &lines[li];
             let y = top0 + (vi as i32) * lh;
+            let line_len = line_str.chars().count();
+            // 이 행이 선택에 걸리는가 — 줄번호를 선택 색으로 표시한다(여러 행 선택이 한눈에 · 사용자 09-15).
+            let row_selected = sels.iter().any(|&(a, e)| {
+                let (ls, le) = (*start_idx, *start_idx + line_len);
+                a <= le && e >= ls
+            });
             if gw > 0 {
+                if row_selected {
+                    // 선택 행 표시 — 거터 배경을 선택색으로(텍스트 선택 블록과 같은 색 계열).
+                    let gr = Rect::new(b.x + 1, y, self.s(10) + gw - self.s(4), lh);
+                    ctx.fill_rect(
+                        gr,
+                        if self.base.focused {
+                            theme.sel_bg
+                        } else {
+                            theme.sel_bg_inactive
+                        },
+                    );
+                }
                 if let Ok(n) = logical_starts.binary_search(start_idx) {
                     let num = (n + 1).to_string();
                     let nw = ctx.text_width(&num);
                     let gx = b.x + self.s(10) + gw - self.s(8) - nw;
-                    let is_caret_line = li == caret_line;
+                    let is_caret_line = li == caret_line || row_selected;
                     ctx.text(
                         gx,
                         y,
@@ -908,9 +1125,8 @@ impl TextBox {
             let view = Rect::new(tx, y, avail, lh);
             let mut w = Vec::new();
             ctx.text_prefix_widths(line_str, &mut w);
-            let line_len = line_str.chars().count();
-            // 선택 반전(줄 범위와 겹치는 부분만 · 뷰포트로 클립 · 텍스트 아래 먼저).
-            if let Some((a, e)) = sel {
+            // 선택 반전(줄 범위와 겹치는 부분만 · 뷰포트로 클립 · 텍스트 아래 먼저 · 구간마다).
+            for (a, e) in sels.iter().copied() {
                 let (ls, le) = (*start_idx, *start_idx + line_len);
                 let s0 = a.max(ls);
                 let s1 = e.min(le);
@@ -1003,12 +1219,17 @@ impl TextBox {
                     }
                 }
             }
-            // 캐럿 — 이 줄이 캐럿 줄일 때(포커스·깜빡임 위상).
-            if self.base.focused && ctx.caret_on() && li == caret_line {
-                let col = disp_caret - start_idx;
-                let cx = dx + w.get(col).copied().unwrap_or(0);
-                if cx >= vx0 && cx <= vx1 {
-                    ctx.fill_rect(Rect::new(cx, y, self.s(2).max(2), th), theme.text);
+            // 캐럿 — 이 줄에 있는 캐럿 전부(다중 커서 · 포커스·깜빡임 위상).
+            if self.base.focused && ctx.caret_on() {
+                for &(cl, c) in &caret_rows {
+                    if cl != li {
+                        continue;
+                    }
+                    let col = c.saturating_sub(*start_idx);
+                    let cx = dx + w.get(col).copied().unwrap_or(0);
+                    if cx >= vx0 && cx <= vx1 {
+                        ctx.fill_rect(Rect::new(cx, y, self.s(2).max(2), th), theme.text);
+                    }
                 }
             }
             lay.push(MlLine {
@@ -1165,13 +1386,23 @@ impl Widget for TextBox {
                 if self.multiline && self.base.bounds.contains(Point { x, y }) {
                     self.base.focused = true;
                     self.ml_user_scrolled = false; // 클릭 = 캐럿 이동 → 캐럿 추종 재개
+                                                   // ★ Alt+Shift 드래그 = 열(블록) 선택 · 다중 커서(Sublime · 사용자 09-15).
+                    if self.column_mode {
+                        self.col_anchor = Some((x, y));
+                        self.dragging = true;
+                        self.edit.set_caret(self.ml_caret_at(x, y), false);
+                        self.last_click = (0, 0);
+                        inv.push(self.base.bounds);
+                        return;
+                    }
                     if self.edit.preedit().is_empty() {
                         let idx = self.ml_caret_at(x, y);
                         // ★ 더블 = 단어 · 트리플 = **논리 줄**(09-02 사용자 요청 — 단일 줄과
                         //   같은 체인 규약: 같은 위치 연속 클릭만 잇고 ⇧는 제외).
+                        let chain = self.click_chain_alive();
                         self.last_click.1 = if shift {
                             0
-                        } else if self.last_click.0 == idx && self.last_click.1 > 0 {
+                        } else if chain && self.last_click.0 == idx && self.last_click.1 > 0 {
                             if self.last_click.1 >= 3 {
                                 1
                             } else {
@@ -1215,9 +1446,10 @@ impl Widget for TextBox {
                     // 연속 클릭은 **같은 캐럿 위치일 때만** 잇는다(08-13 실기 — 위치 무관
                     // 누적이라 두 번째 단일 클릭이 단어 선택이 돼 캐럿 재배치가 불가능했다).
                     // Shift+클릭은 언제나 선택 확장 — 더블클릭 체인에 넣지 않는다.
+                    let chain = self.click_chain_alive();
                     self.last_click.1 = if shift {
                         0
-                    } else if self.last_click.0 == idx && self.last_click.1 > 0 {
+                    } else if chain && self.last_click.0 == idx && self.last_click.1 > 0 {
                         if self.last_click.1 >= 3 {
                             1
                         } else {
@@ -1237,6 +1469,16 @@ impl Widget for TextBox {
                     }
                     inv.push(self.base.bounds);
                 }
+            }
+            // 열 선택 드래그 — 줄마다 같은 x 구간(폭 0이면 캐럿만).
+            InputEvent::MouseMove { x, y } if self.dragging && self.col_anchor.is_some() => {
+                if let Some((ax, ay)) = self.col_anchor {
+                    let regions = self.column_regions(ax, ay, x, y);
+                    if !regions.is_empty() {
+                        self.edit.set_regions(&regions);
+                    }
+                }
+                inv.push(self.base.bounds);
             }
             InputEvent::MouseMove { x, y } if self.dragging && self.multiline => {
                 // 멀티라인 드래그 자동 스크롤(08-17) — 상/하 밖 = 줄 단위 세로 이동
@@ -1285,6 +1527,7 @@ impl Widget for TextBox {
             }
             InputEvent::MouseUp { .. } => {
                 self.dragging = false;
+                self.col_anchor = None;
             }
             InputEvent::Char { c, .. } if self.base.focused => {
                 self.last_click.1 = 0; // 타이핑 = 클릭 체인 끊김(클릭-타이핑-클릭 ≠ 더블클릭)
@@ -1383,6 +1626,11 @@ impl Widget for TextBox {
                         self.changed = true;
                         inv.push(self.base.bounds);
                     }
+                    // Esc = 다중 선택 접기(Sublime).
+                    Key::Escape if self.edit.has_multi() => {
+                        self.edit.clear_multi();
+                        inv.push(self.base.bounds);
+                    }
                     _ => {}
                 }
             }
@@ -1405,6 +1653,9 @@ impl Widget for TextBox {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        // ★ 탭 폭은 **이 상자의 설정**으로 그린다(탭마다 다를 수 있다 · nexa-sql 09-15) —
+        //   측정·그리기·캐럿이 같은 값을 보도록 페인트 진입에서 주입한다.
+        nexa_gfx::text::set_tab_cols(u32::from(self.tab_size.max(1)));
         if self.multiline {
             self.paint_multiline(ctx, theme);
             return;
@@ -2023,5 +2274,129 @@ mod tests {
         t.set_text("short");
         measure(&t);
         assert_eq!(t.hscroll.get(), 0, "다 들어가면 스크롤 없음");
+    }
+
+    #[test]
+    fn paste_expands_tabs_when_indent_spaces() {
+        // 사용자 09-15 — 공백 들여쓰기 탭에 붙여넣는 탭 문자는 **탭 폭만큼 공백**이 된다.
+        let mut t = TextBox::new("p").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t.set_focused(true);
+        t.set_indent(4, true);
+        t.paste(
+            "a	b
+	c", &mut inv,
+        );
+        assert_eq!(
+            t.text(),
+            "a   b
+    c",
+            "탭 정지까지 채운다(a 뒤는 3칸)"
+        );
+        // 탭 들여쓰기 탭은 그대로 둔다.
+        let mut t2 = TextBox::new("p").with_multiline();
+        t2.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t2.set_focused(true);
+        t2.set_indent(4, false);
+        t2.paste("a	b", &mut inv);
+        assert_eq!(t2.text(), "a	b");
+        // 폭 2도 설정대로.
+        let mut t3 = TextBox::new("p").with_multiline();
+        t3.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t3.set_focused(true);
+        t3.set_indent(2, true);
+        t3.paste("	x", &mut inv);
+        assert_eq!(t3.text(), "  x");
+    }
+
+    #[test]
+    fn slow_second_click_starts_drag_not_word_select() {
+        // 사용자 09-15 — 같은 자리를 한참 뒤에 다시 누르면 더블클릭이 아니라 새 클릭이다
+        // (그전엔 단어가 선택되고 드래그가 시작되지 않았다).
+        let (mut t, mut inv) = tb();
+        t.set_text("select x;");
+        t.on_event(&click(200, 15), &mut inv);
+        assert!(t.dragging, "첫 클릭 = 드래그 시작");
+        t.on_event(&InputEvent::MouseUp { x: 200, y: 15 }, &mut inv);
+        // 더블클릭 간격을 넘긴 두 번째 클릭(시각을 과거로 돌려 흉내).
+        t.last_click_at = Some(
+            std::time::Instant::now() - std::time::Duration::from_millis(DOUBLE_CLICK_MS + 200),
+        );
+        t.on_event(&click(200, 15), &mut inv);
+        assert!(t.dragging, "간격을 넘긴 클릭은 드래그 시작이어야 한다");
+        assert!(t.edit.selection().is_none(), "단어 선택이 되면 안 된다");
+    }
+
+    #[test]
+    fn ctrl_d_selects_word_then_next_occurrence() {
+        // 사용자 09-15 — Sublime Ctrl+D.
+        let mut t = TextBox::new("p").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t.set_focused(true);
+        t.set_text("sum a sum b sum");
+        t.edit.set_caret(1, false); // 첫 "sum" 안
+        assert!(t.select_next_occurrence(), "첫 누름 = 단어 선택");
+        assert_eq!(t.edit.selection(), Some((0, 3)));
+        assert!(t.select_next_occurrence(), "두 번째 = 다음 출현 추가");
+        assert_eq!(t.edit.regions(), vec![(0, 3), (6, 9)]);
+        assert!(t.select_next_occurrence());
+        assert_eq!(t.selection_count(), 3);
+        assert!(!t.select_next_occurrence(), "더 없으면 false");
+        // 타이핑은 세 곳 모두에.
+        t.on_event(&ch('X'), &mut inv);
+        assert_eq!(t.text(), "X a X b X");
+        // Esc = 접기.
+        assert!(t.clear_multi());
+        assert!(!t.has_multi());
+    }
+
+    #[test]
+    fn alt_shift_drag_makes_column_selection() {
+        let mut t = TextBox::new("p").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t.set_focused(true);
+        t.set_text("abcd\nefgh\nijkl");
+        measure(&t); // 줄 배치 기록(히트테스트 근거)
+        let lay: Vec<(i32, usize)> = t
+            .line_lay
+            .borrow()
+            .iter()
+            .map(|l| (l.top, l.start_idx))
+            .collect();
+        assert_eq!(lay.len(), 3, "세 줄이 배치돼야 한다");
+        let x1 = t.line_lay.borrow()[0].xs[1]; // 첫 줄 1열 경계 x
+        let x3 = t.line_lay.borrow()[0].xs[3]; // 첫 줄 3열 경계 x
+        t.set_column_mode(true);
+        t.on_event(
+            &InputEvent::MouseDown {
+                x: x1,
+                y: lay[0].0 + 2,
+                shift: true,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(t.column_dragging());
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: x3,
+                y: lay[2].0 + 2,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.selection_count(), 3, "세 줄에 걸친 블록");
+        t.on_event(
+            &InputEvent::MouseUp {
+                x: x3,
+                y: lay[2].0 + 2,
+            },
+            &mut inv,
+        );
+        assert!(!t.column_dragging());
+        t.on_event(&ch('.'), &mut inv);
+        assert_eq!(t.text(), "a.d\ne.h\ni.l", "블록이 한 번에 대체된다");
     }
 }

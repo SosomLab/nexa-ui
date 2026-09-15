@@ -29,6 +29,10 @@ pub struct EditState {
     buf: Vec<char>,
     caret: usize,
     anchor: Option<usize>,
+    /// 추가 선택/캐럿(Sublime find_under_expand = Ctrl+D · 열 선택 · nexa-sql 09-15) — `(anchor, caret)`.
+    /// 주 선택(`caret`/`anchor`)은 마지막에 추가된 것이다. 삽입·삭제는 전 구간에 함께 적용하고,
+    /// 클릭·세로 이동(`set_caret`)·전체 선택은 이 목록을 비운다(하나로 접힘).
+    extra: Vec<(usize, usize)>,
     /// ★ 되돌리기 히스토리(nexa-sql 사용자 09-15) — 변경 **직전** 스냅샷(버퍼·캐럿·앵커). 연속 타이핑/삭제는 한 묶음
     /// (공백·개행·선택 대체·캐럿 이동이 경계). 상한 [`Self::HISTORY_MAX`] · `set_text`(프로그램 교체)는 히스토리를 비운다.
     undo: Vec<Snap>,
@@ -48,6 +52,7 @@ struct Snap {
     buf: Vec<char>,
     caret: usize,
     anchor: Option<usize>,
+    extra: Vec<(usize, usize)>,
 }
 
 /// 편집 종류 — 같은 종류가 이어지면 한 묶음(경계가 없을 때).
@@ -67,6 +72,7 @@ impl EditState {
             buf: self.buf.clone(),
             caret: self.caret,
             anchor: self.anchor,
+            extra: self.extra.clone(),
         }
     }
 
@@ -88,6 +94,12 @@ impl EditState {
         self.buf = s.buf;
         self.caret = s.caret.min(self.buf.len());
         self.anchor = s.anchor.map(|a| a.min(self.buf.len()));
+        let n = self.buf.len();
+        self.extra = s
+            .extra
+            .into_iter()
+            .map(|(a, c)| (a.min(n), c.min(n)))
+            .collect();
     }
 
     /// 실행 취소 — 되돌렸으면 `true`.
@@ -140,6 +152,7 @@ impl EditState {
             buf,
             caret,
             anchor,
+            extra: Vec::new(),
             preedit: String::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -227,12 +240,142 @@ impl EditState {
         true
     }
 
-    /// 문자 하나 삽입(선택 있으면 대체).
+    // ───────────────────────── 다중 선택(Ctrl+D · 열 선택 · Sublime) ─────────────────────────
+
+    /// 추가 선택이 있는가(주 선택 외).
+    #[must_use]
+    pub fn has_multi(&self) -> bool {
+        !self.extra.is_empty()
+    }
+
+    /// 모든 구간 `[start, end)`(주 선택 포함 · 시작 오름차순 · 빈 캐럿도 `start == end`로 들어온다).
+    #[must_use]
+    pub fn regions(&self) -> Vec<(usize, usize)> {
+        let mut v: Vec<(usize, usize)> = self
+            .extra
+            .iter()
+            .map(|&(a, c)| (a.min(c), a.max(c)))
+            .collect();
+        let (a, b) = match self.selection() {
+            Some(r) => r,
+            None => (self.caret, self.caret),
+        };
+        v.push((a, b));
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// 모든 캐럿 위치(주 캐럿 포함 · 오름차순).
+    #[must_use]
+    pub fn carets(&self) -> Vec<usize> {
+        let mut v: Vec<usize> = self.extra.iter().map(|&(_, c)| c).collect();
+        v.push(self.caret);
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// 구간을 추가로 선택한다 — 지금 선택은 추가 목록으로 내려가고 새 구간이 주 선택이 된다.
+    /// 이미 선택된 구간이면 아무것도 하지 않는다(`false`).
+    pub fn add_selection(&mut self, from: usize, to: usize) -> bool {
+        let n = self.buf.len();
+        let (from, to) = (from.min(n), to.min(n));
+        let key = (from.min(to), from.max(to));
+        if self.regions().contains(&key) {
+            return false;
+        }
+        let cur = (self.anchor.unwrap_or(self.caret), self.caret);
+        if cur.0 != cur.1 || self.has_multi() {
+            self.extra.push(cur);
+        }
+        self.anchor = Some(from);
+        self.caret = to;
+        self.last_op = None;
+        true
+    }
+
+    /// 구간 목록으로 선택을 통째로 바꾼다(열 선택 드래그) — 마지막 구간이 주 선택.
+    pub fn set_regions(&mut self, regions: &[(usize, usize)]) {
+        let n = self.buf.len();
+        let mut v: Vec<(usize, usize)> =
+            regions.iter().map(|&(a, c)| (a.min(n), c.min(n))).collect();
+        let Some((a, c)) = v.pop() else { return };
+        self.extra = v;
+        self.anchor = (a != c).then_some(a);
+        self.caret = c;
+        self.last_op = None;
+    }
+
+    /// 추가 선택을 모두 지운다(Esc·클릭) — 지웠으면 `true`.
+    pub fn clear_multi(&mut self) -> bool {
+        let had = !self.extra.is_empty();
+        self.extra.clear();
+        had
+    }
+
+    /// 모든 구간의 텍스트(복사·잘라내기 — Sublime처럼 줄바꿈으로 잇는다).
+    #[must_use]
+    pub fn selected_text_multi(&self) -> Option<String> {
+        if !self.has_multi() {
+            return self.selected_text();
+        }
+        let parts: Vec<String> = self
+            .regions()
+            .into_iter()
+            .filter(|(a, b)| b > a)
+            .map(|(a, b)| self.buf[a..b].iter().collect::<String>())
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("\n"))
+    }
+
+    /// 모든 구간에 같은 편집을 적용한다 — `ins`를 넣고, 빈 구간이면 `back`(앞 한 글자)·`fwd`(뒤 한 글자)를 지운다.
+    /// 구간은 앞에서부터 처리하며 길이 변화를 누적 반영한다(뒤 구간 위치가 밀린다).
+    fn edit_regions(&mut self, ins: &[char], back: bool, fwd: bool) {
+        let regions = self.regions();
+        let mut delta: isize = 0;
+        let mut carets: Vec<usize> = Vec::with_capacity(regions.len());
+        for (a, b) in regions {
+            let mut a2 = ((a as isize + delta).max(0) as usize).min(self.buf.len());
+            let b2 = ((b as isize + delta).max(0) as usize).min(self.buf.len());
+            let mut removed = b2.saturating_sub(a2);
+            if removed == 0 {
+                if back && a2 > 0 {
+                    a2 -= 1;
+                    removed = 1;
+                } else if fwd && a2 < self.buf.len() {
+                    removed = 1;
+                }
+            }
+            if removed > 0 {
+                self.buf.drain(a2..a2 + removed);
+            }
+            for (i, c) in ins.iter().enumerate() {
+                self.buf.insert(a2 + i, *c);
+            }
+            delta += ins.len() as isize - removed as isize;
+            carets.push(a2 + ins.len());
+        }
+        // 마지막 구간을 주 캐럿으로(나머지는 추가 캐럿 · 선택은 접힌다 = Sublime).
+        let last = carets.pop().unwrap_or(self.caret);
+        self.extra = carets.into_iter().map(|c| (c, c)).collect();
+        self.caret = last.min(self.buf.len());
+        self.anchor = None;
+    }
+
+    /// 문자 하나 삽입(선택 있으면 대체 · 다중 선택이면 전부에).
     pub fn insert(&mut self, c: char) {
         // 묶음 경계 = 공백 뒤 첫 글자(새 단어) · 개행 · 선택 대체 → 단어 단위로 되돌린다(Sublime 관례).
-        let boundary = (self.last_ws && !c.is_whitespace()) || c == '\n' || self.anchor.is_some();
+        let boundary = (self.last_ws && !c.is_whitespace())
+            || c == '\n'
+            || self.anchor.is_some()
+            || self.has_multi();
         self.record(EditOp::Insert, boundary);
         self.last_ws = c.is_whitespace();
+        if self.has_multi() {
+            self.edit_regions(&[c], false, false);
+            return;
+        }
         self.delete_selection();
         self.buf.insert(self.caret, c);
         self.caret += 1;
@@ -241,6 +384,11 @@ impl EditState {
     /// 문자열 삽입(붙여넣기·IME 확정 — 선택 있으면 대체). 제어문자 필터는 호출자 몫.
     pub fn insert_str(&mut self, s: &str) {
         self.record(EditOp::Other, true);
+        if self.has_multi() {
+            let ins: Vec<char> = s.chars().collect();
+            self.edit_regions(&ins, false, false);
+            return;
+        }
         self.delete_selection();
         for c in s.chars() {
             self.buf.insert(self.caret, c);
@@ -250,6 +398,11 @@ impl EditState {
 
     /// Backspace(선택 있으면 선택 삭제).
     pub fn backspace(&mut self) {
+        if self.has_multi() {
+            self.record(EditOp::Delete, true);
+            self.edit_regions(&[], true, false);
+            return;
+        }
         if self.anchor.is_none() && self.caret == 0 {
             return;
         }
@@ -262,15 +415,20 @@ impl EditState {
 
     /// 잘라내기(선택 텍스트 반환 후 삭제).
     pub fn cut(&mut self) -> Option<String> {
-        let t = self.selected_text()?;
+        let t = self.selected_text_multi()?;
         self.record(EditOp::Other, true);
-        self.delete_selection();
+        if self.has_multi() {
+            self.edit_regions(&[], false, false);
+        } else {
+            self.delete_selection();
+        }
         Some(t)
     }
 
     /// 캐럿을 옮긴다 — `extend`면 기존 앵커를 유지해 범위가 늘어난다(드래그·Shift 이동).
     pub fn set_caret(&mut self, idx: usize, extend: bool) {
         self.last_op = None; // 캐럿 이동 = 타이핑 묶음 경계
+        self.extra.clear(); // 클릭·세로 이동 = 다중 선택 접기(Sublime)
         let i = idx.min(self.buf.len());
         if extend {
             if self.anchor.is_none() {
@@ -284,6 +442,7 @@ impl EditState {
 
     /// 범위를 직접 선택한다(더블클릭 단어 선택 등).
     pub fn set_selection(&mut self, from: usize, to: usize) {
+        self.extra.clear();
         let n = self.buf.len();
         self.anchor = Some(from.min(n));
         self.caret = to.min(n);
@@ -294,6 +453,7 @@ impl EditState {
         self.buf = text.chars().collect();
         self.caret = self.buf.len();
         self.anchor = None;
+        self.extra.clear();
         // 프로그램적 교체 = 새 문서(히스토리 초기화).
         self.undo.clear();
         self.redo.clear();
@@ -302,6 +462,46 @@ impl EditState {
 
     /// 키 처리. 비Shift 이동 중 선택이 있으면 선택 가장자리로 접는다(표준 관례).
     pub fn key(&mut self, k: EditKey, shift: bool) {
+        // 다중 캐럿에서는 ←/→가 모든 캐럿을 함께 옮긴다(Sublime) · 삭제도 전 구간에.
+        if self.has_multi() {
+            match k {
+                EditKey::Left | EditKey::Right => {
+                    let right = matches!(k, EditKey::Right);
+                    let n = self.buf.len();
+                    let step = |a: Option<usize>, c: usize| -> (Option<usize>, usize) {
+                        let nc = if right {
+                            (c + 1).min(n)
+                        } else {
+                            c.saturating_sub(1)
+                        };
+                        let na = if shift { Some(a.unwrap_or(c)) } else { None };
+                        (na, nc)
+                    };
+                    let (na, nc) = step(self.anchor, self.caret);
+                    self.anchor = na;
+                    self.caret = nc;
+                    let moved: Vec<(usize, usize)> = self
+                        .extra
+                        .iter()
+                        .map(|&(a, c)| {
+                            let (na, nc) = step((a != c).then_some(a), c);
+                            (na.unwrap_or(nc), nc)
+                        })
+                        .collect();
+                    self.extra = moved;
+                    self.last_op = None;
+                    return;
+                }
+                EditKey::DeleteForward => {
+                    self.record(EditOp::Delete, true);
+                    self.edit_regions(&[], false, true);
+                    return;
+                }
+                EditKey::SelectAll | EditKey::Home | EditKey::End => {
+                    self.extra.clear();
+                }
+            }
+        }
         match k {
             EditKey::Left => {
                 if let (false, Some((a, _))) = (shift, self.selection()) {
@@ -483,5 +683,53 @@ mod undo_tests {
         e.set_text("fresh");
         assert!(!e.can_undo(), "프로그램 교체 = 히스토리 초기화");
         assert!(!e.can_redo());
+    }
+
+    #[test]
+    fn multi_selection_edits_every_region() {
+        // Ctrl+D로 모은 구간 전부에 같은 타이핑이 들어간다(Sublime).
+        let mut e = EditState::with_text("aa bb aa", false);
+        e.set_selection(0, 2); // 첫 "aa"
+        assert!(e.add_selection(6, 8)); // 두 번째 "aa"
+        assert!(e.has_multi());
+        assert_eq!(e.regions(), vec![(0, 2), (6, 8)]);
+        e.insert('X');
+        assert_eq!(e.text(), "X bb X");
+        assert_eq!(
+            e.carets(),
+            vec![1, 6],
+            "구간마다 캐럿이 남는다(두 번째 X 뒤)"
+        );
+        // 이어 타이핑하면 두 캐럿 모두에 들어간다.
+        e.insert('Y');
+        assert_eq!(e.text(), "XY bb XY");
+        // Backspace도 전부.
+        e.backspace();
+        assert_eq!(e.text(), "X bb X");
+        // 복사 텍스트는 줄바꿈으로 잇는다.
+        e.set_selection(0, 1);
+        assert!(e.add_selection(5, 6));
+        assert_eq!(e.selected_text_multi().as_deref(), Some("X\nX"));
+        // 클릭(= set_caret)은 다중 선택을 접는다.
+        e.set_caret(0, false);
+        assert!(!e.has_multi());
+    }
+
+    #[test]
+    fn add_selection_skips_duplicates() {
+        let mut e = EditState::with_text("aa aa", false);
+        e.set_selection(0, 2);
+        assert!(e.add_selection(3, 5));
+        assert!(!e.add_selection(0, 2), "이미 선택된 구간은 추가하지 않는다");
+    }
+
+    #[test]
+    fn set_regions_makes_column_block() {
+        // 열 선택 드래그 — 줄마다 같은 열 구간(마지막이 주 선택).
+        let mut e = EditState::with_text("abcd\nefgh\nijkl", false);
+        e.set_regions(&[(1, 3), (6, 8), (11, 13)]);
+        assert_eq!(e.regions(), vec![(1, 3), (6, 8), (11, 13)]);
+        e.insert('.');
+        assert_eq!(e.text(), "a.d\ne.h\ni.l");
     }
 }
