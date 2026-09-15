@@ -235,13 +235,69 @@ impl IconService {
     }
 }
 
+/// `shell:` 별칭(탐색기 규약 · `shell:startup` `shell:common startup` `shell:downloads` `shell:::{GUID}` …) → 실제 폴더.
+/// 접두가 아니면 `None`(호출자는 일반 경로로) · 해석 실패도 `None`.
+/// Windows = `SHParseDisplayName`(KnownFolders 레지스트리 전부 · 향후 추가분 자동) · macOS/Linux = 공통 이름 표(홈·바탕 화면·문서·다운로드·시작프로그램·앱데이터).
+#[must_use]
+pub fn resolve_alias(input: &str) -> Option<std::path::PathBuf> {
+    let t = input.trim();
+    if t.len() < 6 || !t[..6].eq_ignore_ascii_case("shell:") {
+        return None;
+    }
+    let name = t[6..].trim();
+    if let Some(p) = imp::shell_alias(name) {
+        return Some(p);
+    }
+    portable_alias(name)
+}
+
+/// OS 공통 별칭 표(Windows에서도 셸이 모르는 이름의 폴백).
+fn portable_alias(name: &str) -> Option<std::path::PathBuf> {
+    let home = crate::home_dir()?;
+    let n = name.to_ascii_lowercase();
+    let sub = |s: &str| Some(home.join(s));
+    match n.as_str() {
+        "home" | "profile" | "userprofile" => Some(home),
+        "desktop" => sub("Desktop"),
+        "personal" | "documents" | "my documents" => sub("Documents"),
+        "downloads" => sub("Downloads"),
+        "startup" => {
+            if cfg!(target_os = "macos") {
+                sub("Library/LaunchAgents")
+            } else if cfg!(unix) {
+                sub(".config/autostart")
+            } else {
+                None
+            }
+        }
+        "common startup" => {
+            if cfg!(target_os = "macos") {
+                Some(std::path::PathBuf::from("/Library/LaunchAgents"))
+            } else if cfg!(unix) {
+                Some(std::path::PathBuf::from("/etc/xdg/autostart"))
+            } else {
+                None
+            }
+        }
+        "appdata" | "local appdata" => {
+            if cfg!(target_os = "macos") {
+                sub("Library/Application Support")
+            } else if cfg!(unix) {
+                sub(".config")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use super::RgbaIcon;
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
-    use std::sync::Once;
 
     type Handle = *mut c_void;
 
@@ -338,19 +394,64 @@ mod imp {
     #[link(name = "ole32")]
     extern "system" {
         fn CoInitializeEx(reserved: *mut c_void, coinit: u32) -> i32;
+        fn CoTaskMemFree(p: *mut c_void);
+    }
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SHParseDisplayName(
+            name: *const u16,
+            bind_ctx: *mut c_void,
+            pidl: *mut *mut c_void,
+            attr_in: u32,
+            attr_out: *mut u32,
+        ) -> i32;
+        fn SHGetPathFromIDListEx(pidl: *mut c_void, out: *mut u16, cch: u32, opts: u32) -> i32;
     }
 
-    static COM: Once = Once::new();
+    /// `shell:` 이름 → 경로(셸 정식 해석기 · 가상 폴더는 FS 경로가 없어 `None`).
+    pub(super) fn shell_alias(name: &str) -> Option<std::path::PathBuf> {
+        ensure_com();
+        let full = format!("shell:{name}");
+        let w = wide(std::ffi::OsStr::new(&full));
+        // SAFETY: 널 종단 문자열 · pidl은 성공 시 CoTaskMemFree로 해제 · 버퍼 길이 전달.
+        unsafe {
+            let mut pidl: *mut c_void = std::ptr::null_mut();
+            let mut attr: u32 = 0;
+            if SHParseDisplayName(w.as_ptr(), std::ptr::null_mut(), &mut pidl, 0, &mut attr) < 0
+                || pidl.is_null()
+            {
+                return None;
+            }
+            let mut buf = [0u16; 1024];
+            let ok = SHGetPathFromIDListEx(pidl, buf.as_mut_ptr(), buf.len() as u32, 0);
+            CoTaskMemFree(pidl);
+            if ok == 0 {
+                return None;
+            }
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            Some(std::path::PathBuf::from(String::from_utf16_lossy(
+                &buf[..end],
+            )))
+        }
+    }
+
+    thread_local! {
+        /// COM 초기화는 **스레드마다**(STA) — 전역 Once면 첫 스레드만 초기화되어 다른 스레드의 `SHParseDisplayName`이 실패한다.
+        static COM_READY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
 
     fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
         s.encode_wide().chain(std::iter::once(0)).collect()
     }
 
     fn ensure_com() {
-        COM.call_once(|| {
-            // SAFETY: 인자 없음 · 실패해도(이미 다른 모드로 초기화) 아이콘 조회는 동작한다.
-            unsafe {
-                let _ = CoInitializeEx(std::ptr::null_mut(), 2);
+        COM_READY.with(|c| {
+            if !c.get() {
+                // SAFETY: 인자 없음 · 실패해도(이미 다른 모드로 초기화) 조회는 동작한다.
+                unsafe {
+                    let _ = CoInitializeEx(std::ptr::null_mut(), 2);
+                }
+                c.set(true);
             }
         });
     }
@@ -520,6 +621,9 @@ mod imp {
     use super::RgbaIcon;
     use std::path::Path;
     pub(super) const SUPPORTED: bool = false;
+    pub(super) fn shell_alias(_name: &str) -> Option<std::path::PathBuf> {
+        None
+    }
     pub(super) fn icon_for_kind(_ext: &str, _is_dir: bool, _large: bool) -> Option<RgbaIcon> {
         None
     }
@@ -597,6 +701,20 @@ mod tests {
             "icon_for_kind ≈ {per:?}/ext · kind_name ≈ {per2:?}/ext · icon_for_path(home) = {:?}",
             t3.elapsed()
         );
+    }
+
+    #[test]
+    fn shell_aliases_resolve_like_explorer() {
+        let st = resolve_alias("shell:startup").expect("startup");
+        assert!(st.to_string_lossy().to_lowercase().ends_with("startup"));
+        let common = resolve_alias("shell:common startup").expect("common startup");
+        assert!(common
+            .to_string_lossy()
+            .to_lowercase()
+            .contains("programdata"));
+        assert!(resolve_alias("Shell:Downloads").is_some());
+        assert!(resolve_alias("shell:no-such-folder-xyz").is_none());
+        assert!(resolve_alias("C:\\Windows").is_none(), "접두가 아니면 None");
     }
 
     #[test]

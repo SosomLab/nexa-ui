@@ -158,7 +158,7 @@
 | 무엇 | 어디서 | 비고 |
 |---|---|---|
 | 컬럼 모델 · **가상화 행**(`VirtualRows<S>` · `RowSource` · 헤더 3단 정렬 · 다중 컬럼 배지 · 드래그 리사이즈 · 3,212 LOC · 의존 0) | `nexa-dir2/crates/nexa-gui/{columns.rs, widgets/rows.rs}` | U-3 `nexa-grid`와 **같은 코드** — FileList 상세 보기 = grid 인스턴스 |
-| **PathBar**(브레드크럼 · `split_path` · 편집 모드 · `take_navigation`) | `nexa-dir2/crates/nexa-gui/src/widgets/pathbar.rs` | 그대로 이식(DrawCtx 어댑터만) |
+| **PathBar**(브레드크럼 · `split_path` · 편집 모드 · `take_navigation`) | `nexa-dir2/crates/nexa-gui/src/widgets/pathbar.rs` | ✅ 09-15 nexa-dlg 안에 조립(브레드크럼 = 페인트+범위 캐시 · 편집 = 기존 TextBox 재사용 · `History` = nav.rs 이식 · `shell:` = `SHParseDisplayName` raw FFI + 3-OS 공통 표) — 독립 컨트롤 승격은 F-3 |
 | 파일 열거·작업·정렬·검색(std 전용) | `nexa-dir2/crates/{nexa-vfs,nexa-ops,nexa-tree}` | → `nexa-fs`(§2) |
 | 경로 입력 해석·자동완성 · 탐색 히스토리 | `nexa-dir2/crates/nexa-app/src/{pathinput,nav}.rs` | → `nexa-fs::path` |
 | 자체 파일 피커 시제품(별도 창 · `ChoosePicker` 어댑터 · 용도 8종) | `nexa-beep/crates/nexa-beep/src/app.rs:2584~2883` | `nexa-dlg::FilePicker`가 대체(F-7) |

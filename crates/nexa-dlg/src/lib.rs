@@ -18,7 +18,7 @@ use nexa_ctl::{
     TreeModel, TreeNode, TreeView, Widget,
 };
 use nexa_fs::shell::{IconKey, IconService, Lookup};
-use nexa_fs::{Entry, Place, PlaceKind, SortKey};
+use nexa_fs::{Entry, History, Place, PlaceKind, SortKey};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -144,8 +144,19 @@ pub struct FilePicker {
     places: Vec<Place>,
     recent: Vec<PathBuf>,
     // 컨트롤
+    home_btn: Button,
+    back_btn: Button,
+    fwd_btn: Button,
     up_btn: Button,
+    /// 경로 편집 상자 — 브레드크럼 위에 겹치며 **편집 중일 때만** 보인다(우클릭/빈 곳 클릭 = 편집 · Enter = 이동 · Esc = 취소).
     path_box: TextBox,
+    /// 브레드크럼 편집 중인가.
+    path_editing: bool,
+    /// 브레드크럼 세그먼트 x 범위(페인트 캐시 · 히트테스트).
+    crumb_ranges: std::cell::RefCell<Vec<(i32, i32)>>,
+    crumb_hover: Option<usize>,
+    /// 탐색 히스토리(뒤로/앞으로).
+    history: History,
     new_folder_btn: Button,
     places_view: TreeView,
     grid: TreeGrid,
@@ -173,6 +184,9 @@ pub struct FilePicker {
     /// 마지막으로 반영한 서비스 버전 — 바뀌면(아이콘/종류 이름 도착) 제자리 갱신.
     icon_version: u64,
 }
+
+/// 폴더 트리 자리표시 자식(펼칠 때 실제 하위 폴더로 교체).
+const PENDING: &str = "\u{0}pending";
 
 /// 더블클릭 간격.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
@@ -228,8 +242,15 @@ impl FilePicker {
             show_hidden: false,
             places: nexa_fs::places(),
             recent: Vec::new(),
+            home_btn: Button::new("⌂"),
+            back_btn: Button::new("←"),
+            fwd_btn: Button::new("→"),
             up_btn: Button::new("↑"),
             path_box: TextBox::new(labels.path_hint.clone()),
+            path_editing: false,
+            crumb_ranges: std::cell::RefCell::new(Vec::new()),
+            crumb_hover: None,
+            history: History::new(dir.clone()),
             new_folder_btn: Button::new(labels.new_folder.clone()),
             places_view: TreeView::new(TreeModel::new(Vec::new())),
             grid: TreeGrid::new(TreeModel::new(Vec::new()), Vec::new()),
@@ -316,13 +337,16 @@ impl FilePicker {
     /// 콤보 드롭다운·편집 메뉴가 열려 있는가(호스트 Esc 가드).
     #[must_use]
     pub fn popup_open(&self) -> bool {
-        self.filter_combo.is_open() || self.extra_open()
+        self.filter_combo.is_open() || self.extra_open() || self.path_editing
     }
 
     /// 프레임 틱 — 다시 그려야 하면 true(아이콘/종류 이름 도착 포함).
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.apply_icon_updates()
             | self.up_btn.tick(now_ms)
+            | self.home_btn.tick(now_ms)
+            | self.back_btn.tick(now_ms)
+            | self.fwd_btn.tick(now_ms)
             | self.new_folder_btn.tick(now_ms)
             | self.ok_btn.tick(now_ms)
             | self.cancel_btn.tick(now_ms)
@@ -348,6 +372,9 @@ impl FilePicker {
     pub fn animating(&self) -> bool {
         self.icons_pending()
             || self.up_btn.is_animating()
+            || self.home_btn.is_animating()
+            || self.back_btn.is_animating()
+            || self.fwd_btn.is_animating()
             || self.new_folder_btn.is_animating()
             || self.ok_btn.is_animating()
             || self.cancel_btn.is_animating()
@@ -362,7 +389,7 @@ impl FilePicker {
 
     /// 포커스 텍스트 박스(IME 배선).
     pub fn focused_textbox(&mut self) -> Option<&mut TextBox> {
-        if self.path_box.is_focused() {
+        if self.path_editing && self.path_box.is_focused() {
             Some(&mut self.path_box)
         } else if self.name_box.is_focused() {
             Some(&mut self.name_box)
@@ -387,16 +414,14 @@ impl FilePicker {
         let places = self.places.clone();
         let mut std_places: Vec<TreeNode> = Vec::new();
         for p in places.iter().filter(|p| p.kind != PlaceKind::Drive) {
-            let node = TreeNode::leaf(label_of(p, &self.labels));
             let img = self.path_icon(&p.path);
-            std_places.push(node.with_image(img));
+            std_places.push(Self::folder_node(label_of(p, &self.labels), &p.path, img));
         }
         nodes.extend(std_places);
         let mut drives: Vec<TreeNode> = Vec::new();
         for p in places.iter().filter(|p| p.kind == PlaceKind::Drive) {
-            let node = TreeNode::leaf(p.name.clone());
             let img = self.path_icon(&p.path);
-            drives.push(node.with_image(img));
+            drives.push(Self::folder_node(p.name.clone(), &p.path, img));
         }
         if !drives.is_empty() {
             let mut b = TreeNode::branch(self.labels.place_drives.clone(), drives);
@@ -408,7 +433,7 @@ impl FilePicker {
             let kids: Vec<TreeNode> = self
                 .recent
                 .iter()
-                .map(|p| TreeNode::leaf(nexa_fs::path::display(p)).with_image(folder.clone()))
+                .map(|p| Self::folder_node(nexa_fs::path::display(p), p, folder.clone()))
                 .collect();
             let mut b = TreeNode::branch(self.labels.place_recent.clone(), kids);
             b.expanded = true;
@@ -420,34 +445,87 @@ impl FilePicker {
     }
 
     /// 장소 가시 행 → 경로(그룹 행은 None).
+    /// 폴더 노드 — `cells[0]` = 전체 경로 · 자리표시 자식 1개(펼치면 하위 폴더를 읽어 채운다 · 없으면 글리프 제거).
+    fn folder_node(label: String, path: &Path, icon: Rc<IconImage>) -> TreeNode {
+        let mut n = TreeNode::branch(
+            label,
+            vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])],
+        )
+        .with_cells(vec![path.to_string_lossy().into_owned()])
+        .with_image(icon);
+        n.expanded = false;
+        n
+    }
+
+    /// 가시 행 → 경로(그룹 행·자리표시 행은 None).
     fn place_path(&self, row: usize) -> Option<PathBuf> {
         let rows = self.places_view.rows();
         let r = rows.get(row)?;
-        if r.has_children {
+        let p = r.cells.first()?;
+        if p.is_empty() || p == PENDING {
             return None;
         }
-        let std: Vec<&Place> = self
-            .places
-            .iter()
-            .filter(|p| p.kind != PlaceKind::Drive)
-            .collect();
-        let drives: Vec<&Place> = self
-            .places
-            .iter()
-            .filter(|p| p.kind == PlaceKind::Drive)
-            .collect();
-        match r.path.as_slice() {
-            [i] if *i < std.len() => Some(std[*i].path.clone()),
-            [g, j] => {
-                let group = *g - std.len();
-                if group == 0 && !drives.is_empty() {
-                    drives.get(*j).map(|p| p.path.clone())
-                } else {
-                    self.recent.get(*j).cloned()
+        Some(PathBuf::from(p))
+    }
+
+    /// 펼쳐진 노드 중 아직 자리표시 자식만 가진 것을 **지연 열거**(하위 폴더만 · 자연 정렬 · 숨김 규칙 동일).
+    fn lazy_load_places(&mut self) {
+        let show_hidden = self.show_hidden;
+        let folder_icon = self.kind_icon(true, "");
+        let mut todo: Vec<Vec<usize>> = Vec::new();
+        for row in self.places_view.rows() {
+            if !row.expanded {
+                continue;
+            }
+            if let Some(n) = Self::node_at(&self.places_view.model().roots, &row.path) {
+                let pending = n.children.len() == 1
+                    && n.children[0].cells.first().map(String::as_str) == Some(PENDING);
+                if pending && n.cells.first().is_some_and(|c| !c.is_empty()) {
+                    todo.push(row.path.clone());
                 }
             }
-            _ => None,
         }
+        if todo.is_empty() {
+            return;
+        }
+        for path in todo {
+            let Some(dir) = Self::node_at(&self.places_view.model().roots, &path)
+                .and_then(|n| n.cells.first().cloned())
+            else {
+                continue;
+            };
+            let mut subs: Vec<Entry> = nexa_fs::list(Path::new(&dir), show_hidden)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.is_dir)
+                .collect();
+            nexa_fs::sort_by(&mut subs, &[]);
+            let kids: Vec<TreeNode> = subs
+                .iter()
+                .map(|e| Self::folder_node(e.name.clone(), &e.path, folder_icon.clone()))
+                .collect();
+            if let Some(n) = Self::node_at_mut(&mut self.places_view.model_mut().roots, &path) {
+                n.children = kids; // 비면 자식 0 = 글리프 없음(dir2 X-43)
+            }
+        }
+    }
+
+    fn node_at<'a>(roots: &'a [TreeNode], path: &[usize]) -> Option<&'a TreeNode> {
+        let (first, rest) = path.split_first()?;
+        let mut n = roots.get(*first)?;
+        for &i in rest {
+            n = n.children.get(i)?;
+        }
+        Some(n)
+    }
+
+    fn node_at_mut<'a>(roots: &'a mut [TreeNode], path: &[usize]) -> Option<&'a mut TreeNode> {
+        let (first, rest) = path.split_first()?;
+        let mut n = roots.get_mut(*first)?;
+        for &i in rest {
+            n = n.children.get_mut(i)?;
+        }
+        Some(n)
     }
 
     /// 서비스 키의 아이콘 — 캐시 적중/도착이면 OS 아이콘, 아니면(조회 중·없음) 자체 그림. **절대 막지 않는다**.
@@ -529,6 +607,69 @@ impl FilePicker {
         changed || true
     }
 
+    /// 브레드크럼 그리기(dir2 경로 바 규약: 끝 정렬 · 앞이 넘치면 `…` · 마지막 = 현재(비활성) · hover 강조 · 구분자 `›`).
+    fn paint_crumbs(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let b = self.path_box.bounds();
+        ctx.fill_round_rect(b, self.s(6), theme.field_bg);
+        ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
+        ctx.select_font(FontSlot::Base, false);
+        let th = ctx.text_height();
+        let ty = b.y + (b.h - th) / 2;
+        let crumbs = self.crumbs();
+        let seg_pad = self.s(6);
+        let sep = " › ";
+        let sep_w = ctx.text_width(sep);
+        let widths: Vec<i32> = crumbs
+            .iter()
+            .map(|(l, _)| ctx.text_width(l) + seg_pad * 2)
+            .collect();
+        let last = crumbs.len().saturating_sub(1);
+        let avail = b.w - self.s(8);
+        let total: i32 = widths.iter().sum::<i32>() + sep_w * last as i32;
+        let mut start = 0usize;
+        if total > avail && !crumbs.is_empty() {
+            let mut acc = ctx.text_width("…") + sep_w;
+            start = crumbs.len();
+            for i in (0..crumbs.len()).rev() {
+                acc += widths[i] + if i == last { 0 } else { sep_w };
+                if acc > avail {
+                    break;
+                }
+                start = i;
+            }
+            start = start.min(last);
+        }
+        let mut ranges = vec![(0, 0); start];
+        let mut x = b.x + self.s(4);
+        let inner = Rect::new(b.x + 1, b.y + 1, b.w - 2, b.h - 2);
+        if start > 0 {
+            ctx.text(x, ty, inner, "…", theme.text_dim);
+            x += ctx.text_width("…");
+            ctx.text(x, ty, inner, sep, theme.text_dim);
+            x += sep_w;
+        }
+        for (i, (label, _)) in crumbs.iter().enumerate().skip(start) {
+            let w = widths[i];
+            let cell = Rect::new(x, b.y + 2, w, b.h - 4).intersection(&inner);
+            if self.crumb_hover == Some(i) {
+                ctx.fill_round_rect(cell, self.s(4), theme.sel_bg);
+            }
+            let fg = if i == last {
+                theme.text
+            } else {
+                theme.text_dim
+            };
+            ctx.text(x + seg_pad, ty, inner, label, fg);
+            ranges.push((x, x + w));
+            x += w;
+            if i != last {
+                ctx.text(x, ty, inner, sep, theme.text_dim);
+                x += sep_w;
+            }
+        }
+        *self.crumb_ranges.borrow_mut() = ranges;
+    }
+
     fn current_filter(&self) -> &FileFilter {
         let i = self
             .filter_combo
@@ -541,6 +682,14 @@ impl FilePicker {
 
     /// 폴더 이동(읽기 실패 = 메시지 · 현재 폴더 유지).
     fn go(&mut self, dir: &Path) {
+        if self.go_no_history(dir) {
+            self.history.push(self.dir.clone());
+            self.sync_nav_buttons();
+        }
+    }
+
+    /// 히스토리에 넣지 않는 이동(뒤로/앞으로) — 성공하면 true.
+    fn go_no_history(&mut self, dir: &Path) -> bool {
         match nexa_fs::list(dir, self.show_hidden) {
             Ok(entries) => {
                 self.dir = dir.to_path_buf();
@@ -548,12 +697,75 @@ impl FilePicker {
                 self.message = None;
                 self.pending_overwrite = None;
                 self.path_box.set_text(&nexa_fs::path::display(&self.dir));
+                self.end_path_edit();
                 self.refresh_grid(0);
+                true
             }
             Err(e) => {
                 self.message = Some((format!("{} — {e}", self.labels.err_list), true));
+                false
             }
         }
+    }
+
+    fn sync_nav_buttons(&mut self) {
+        self.back_btn.set_enabled(self.history.can_back());
+        self.fwd_btn.set_enabled(self.history.can_forward());
+    }
+
+    fn go_back(&mut self) {
+        if let Some(p) = self.history.back().map(Path::to_path_buf) {
+            if !self.go_no_history(&p) {
+                let _ = self.history.forward();
+            }
+        }
+        self.sync_nav_buttons();
+    }
+
+    fn go_forward(&mut self) {
+        if let Some(p) = self.history.forward().map(Path::to_path_buf) {
+            if !self.go_no_history(&p) {
+                let _ = self.history.back();
+            }
+        }
+        self.sync_nav_buttons();
+    }
+
+    fn go_home(&mut self) {
+        if let Some(h) = nexa_fs::home_dir() {
+            self.go(&h);
+        }
+    }
+
+    /// 브레드크럼 세그먼트(루트 → 현재 · 라벨 = 폴더 이름 · 루트는 표기 그대로).
+    fn crumbs(&self) -> Vec<(String, std::path::PathBuf)> {
+        nexa_fs::path::parent_chain(&self.dir)
+            .into_iter()
+            .map(|p| {
+                let label = p
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| {
+                        p.to_string_lossy()
+                            .trim_end_matches(['\\', '/'])
+                            .to_string()
+                    });
+                (label, p)
+            })
+            .collect()
+    }
+
+    /// 경로 편집 시작(우클릭 · 빈 곳 클릭) — 전체 경로를 상자에 넣고 전체 선택.
+    fn begin_path_edit(&mut self, inv: &mut Invalidations) {
+        self.path_editing = true;
+        self.path_box.set_text(&self.dir.to_string_lossy());
+        self.path_box.set_focused(true);
+        self.path_box.on_event(&InputEvent::SelectAll, inv);
+    }
+
+    fn end_path_edit(&mut self) {
+        self.path_editing = false;
+        self.path_box.set_focused(false);
     }
 
     fn reload(&mut self) {
@@ -920,6 +1132,9 @@ impl FilePicker {
         let s = self.base.scale;
         let mut inv = Invalidations::default();
         for c in [
+            &mut self.home_btn,
+            &mut self.back_btn,
+            &mut self.fwd_btn,
             &mut self.up_btn,
             &mut self.new_folder_btn,
             &mut self.ok_btn,
@@ -938,23 +1153,27 @@ impl FilePicker {
         let row = self.s(ROW);
         let x0 = b.x + pad;
         let x1 = b.right() - pad;
-        // 1행: ↑ · 경로 · 새 폴더
+        // 1행: ⌂ ← → ↑ · 브레드크럼(편집 = 같은 자리 상자) · 새 폴더 (nexa-dir2 경로 바 · 사용자 09-15)
         let y = b.y + pad;
-        let up_w = row;
+        let nav_w = row;
         let nf_w = self.s(BTN_W + 20);
-        self.up_btn
-            .set_bounds(Rect::new(x0, y, up_w, row), &mut inv);
+        let mut nx = x0;
+        let step = nav_w + self.s(2);
+        for btn in [
+            &mut self.home_btn,
+            &mut self.back_btn,
+            &mut self.fwd_btn,
+            &mut self.up_btn,
+        ] {
+            btn.set_bounds(Rect::new(nx, y, nav_w, row), &mut inv);
+            nx += step;
+        }
+        nx += gap - (step - nav_w);
         self.new_folder_btn
             .set_bounds(Rect::new(x1 - nf_w, y, nf_w, row), &mut inv);
-        self.path_box.set_bounds(
-            Rect::new(
-                x0 + up_w + gap,
-                y,
-                (x1 - nf_w - gap) - (x0 + up_w + gap),
-                row,
-            ),
-            &mut inv,
-        );
+        self.path_box
+            .set_bounds(Rect::new(nx, y, (x1 - nf_w - gap) - nx, row), &mut inv);
+        self.sync_nav_buttons();
         // 하단 2행(아래에서 위로)
         let y_btn = b.bottom() - pad - row;
         let y_name = y_btn - gap - row;
@@ -1002,7 +1221,10 @@ impl FilePicker {
         let nf = self.new_folder_btn.bounds().contains(p);
         let ok = self.ok_btn.bounds().contains(p);
         let cancel = self.cancel_btn.bounds().contains(p);
-        let path = self.path_box.bounds().contains(p);
+        let path = self.path_editing && self.path_box.bounds().contains(p);
+        if self.path_editing && !self.path_box.bounds().contains(p) {
+            self.end_path_edit();
+        }
         let name = self.name_box.bounds().contains(p);
         let places = self.places_view.bounds().contains(p);
         let grid = self.grid.bounds().contains(p);
@@ -1016,6 +1238,12 @@ impl FilePicker {
             c.set_focused(ex);
         }
         self.up_btn.set_focused(up);
+        let home = self.home_btn.bounds().contains(p);
+        let back = self.back_btn.bounds().contains(p);
+        let fwd = self.fwd_btn.bounds().contains(p);
+        self.home_btn.set_focused(home);
+        self.back_btn.set_focused(back);
+        self.fwd_btn.set_focused(fwd);
         self.new_folder_btn.set_focused(nf);
         self.ok_btn.set_focused(ok);
         self.cancel_btn.set_focused(cancel);
@@ -1047,10 +1275,20 @@ impl FilePicker {
         if self.up_btn.take_clicked() {
             self.go_up();
         }
+        if self.home_btn.take_clicked() {
+            self.go_home();
+        }
+        if self.back_btn.take_clicked() {
+            self.go_back();
+        }
+        if self.fwd_btn.take_clicked() {
+            self.go_forward();
+        }
         if self.new_folder_btn.take_clicked() {
             self.make_new_folder();
         }
         if let Some(text) = self.path_box.take_committed() {
+            self.end_path_edit();
             self.commit_path(&text);
         }
         if self.name_box.take_committed().is_some() {
@@ -1233,6 +1471,9 @@ impl Widget for FilePicker {
         // 버튼은 마우스 사건을 항상 받는다(hover 정리).
         if is_mouse {
             self.up_btn.on_event(ev, inv);
+            self.home_btn.on_event(ev, inv);
+            self.back_btn.on_event(ev, inv);
+            self.fwd_btn.on_event(ev, inv);
             self.new_folder_btn.on_event(ev, inv);
             self.ok_btn.on_event(ev, inv);
             self.cancel_btn.on_event(ev, inv);
@@ -1253,14 +1494,78 @@ impl Widget for FilePicker {
             self.ok_btn.on_event(ev, inv);
             self.cancel_btn.on_event(ev, inv);
         }
-        if route(self.path_box.bounds(), self.path_box.is_focused()) {
-            self.path_box.on_event(ev, inv);
+        // 브레드크럼(편집 아님): 세그먼트 클릭 = 이동 · 빈 곳 클릭/우클릭 = 편집 · hover 강조.
+        let pb = self.path_box.bounds();
+        if !self.path_editing && (is_mouse && pb.contains(p)) {
+            match *ev {
+                InputEvent::MouseMove { x, .. } => {
+                    let n = self.crumbs().len();
+                    let h = self
+                        .crumb_ranges
+                        .borrow()
+                        .iter()
+                        .position(|&(x0, x1)| x >= x0 && x < x1)
+                        .filter(|&i| i + 1 < n);
+                    if h != self.crumb_hover {
+                        self.crumb_hover = h;
+                        inv.push(pb);
+                    }
+                }
+                InputEvent::MouseDown { x, .. } => {
+                    let crumbs = self.crumbs();
+                    let hit = self
+                        .crumb_ranges
+                        .borrow()
+                        .iter()
+                        .position(|&(x0, x1)| x >= x0 && x < x1);
+                    match hit {
+                        Some(i) if i + 1 < crumbs.len() => {
+                            let target = crumbs[i].1.clone();
+                            self.go(&target);
+                        }
+                        Some(_) => {}
+                        None => self.begin_path_edit(inv),
+                    }
+                }
+                InputEvent::RightDown { .. } => self.begin_path_edit(inv),
+                _ => {}
+            }
+        } else if !pb.contains(p) && self.crumb_hover.is_some() {
+            self.crumb_hover = None;
+            inv.push(pb);
+        }
+        if self.path_editing {
+            if matches!(
+                ev,
+                InputEvent::Key {
+                    key: Key::Escape,
+                    ..
+                }
+            ) {
+                self.end_path_edit();
+                inv.push(pb);
+                return;
+            }
+            if route(pb, self.path_box.is_focused()) {
+                self.path_box.on_event(ev, inv);
+            }
         }
         if route(self.name_box.bounds(), self.name_box.is_focused()) {
             self.name_box.on_event(ev, inv);
         }
         if route(self.places_view.bounds(), self.places_view.is_focused()) {
+            let chev = match *ev {
+                InputEvent::MouseDown { x, y, .. } => {
+                    self.places_view.row_hit(x, y).is_some_and(|(_, c)| c)
+                }
+                _ => false,
+            };
             self.places_view.on_event(ev, inv);
+            if chev {
+                // 셰브론 = 펼침/접힘만(Explorer 탐색 창 관례) — 선택 변화로 이동하지 않게.
+                self.last_place_row = self.places_view.selected_row();
+            }
+            self.lazy_load_places();
         }
         if route(self.grid.bounds(), self.grid.is_focused()) {
             match *ev {
@@ -1328,9 +1633,16 @@ impl Widget for FilePicker {
         if fb.x - self.s(GAP) - ft_w > nb.x + self.s(120) {
             let _ = ft_w;
         }
+        self.home_btn.paint(ctx, theme);
+        self.back_btn.paint(ctx, theme);
+        self.fwd_btn.paint(ctx, theme);
         self.up_btn.paint(ctx, theme);
         self.new_folder_btn.paint(ctx, theme);
-        self.path_box.paint(ctx, theme);
+        if self.path_editing {
+            self.path_box.paint(ctx, theme);
+        } else {
+            self.paint_crumbs(ctx, theme);
+        }
         self.places_view.paint(ctx, theme);
         self.grid.paint(ctx, theme);
         // 헤더 드래그 피드백 — 끄는 컬럼은 선택색 · 놓일 자리는 accent 세로선.
@@ -1390,7 +1702,9 @@ impl Widget for FilePicker {
             c.paint(ctx, theme);
         }
         self.filter_combo.paint(ctx, theme);
-        self.path_box.paint_popup(ctx, theme);
+        if self.path_editing {
+            self.path_box.paint_popup(ctx, theme);
+        }
         self.name_box.paint_popup(ctx, theme);
     }
 }

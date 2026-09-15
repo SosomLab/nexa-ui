@@ -312,6 +312,70 @@ pub fn drives() -> Vec<PathBuf> {
     out
 }
 
+/// 탐색 히스토리(nexa-dir2 `nav.rs` 이식 · 순수 로직) — 뒤로/앞으로 스택. 새 진입은 현재 이후의 "앞으로"를 버린다.
+#[derive(Clone, Debug)]
+pub struct History {
+    entries: Vec<PathBuf>,
+    pos: usize,
+}
+
+impl History {
+    /// 시작 위치.
+    #[must_use]
+    pub fn new(start: PathBuf) -> Self {
+        History {
+            entries: vec![start],
+            pos: 0,
+        }
+    }
+
+    /// 현재 위치.
+    #[must_use]
+    pub fn current(&self) -> &Path {
+        &self.entries[self.pos]
+    }
+
+    /// 새 위치 진입(앞으로 기록 절단 · 같은 경로는 무시).
+    pub fn push(&mut self, path: PathBuf) {
+        if self.current() == path.as_path() {
+            return;
+        }
+        self.entries.truncate(self.pos + 1);
+        self.entries.push(path);
+        self.pos += 1;
+    }
+
+    /// 뒤로 갈 수 있는가.
+    #[must_use]
+    pub fn can_back(&self) -> bool {
+        self.pos > 0
+    }
+
+    /// 앞으로 갈 수 있는가.
+    #[must_use]
+    pub fn can_forward(&self) -> bool {
+        self.pos + 1 < self.entries.len()
+    }
+
+    /// 뒤로.
+    pub fn back(&mut self) -> Option<&Path> {
+        if !self.can_back() {
+            return None;
+        }
+        self.pos -= 1;
+        Some(self.current())
+    }
+
+    /// 앞으로.
+    pub fn forward(&mut self) -> Option<&Path> {
+        if !self.can_forward() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.current())
+    }
+}
+
 /// 파일명 규칙(세 OS 공통 최소 집합).
 pub mod naming {
     /// 이름 오류.
@@ -395,6 +459,10 @@ pub mod path {
             }
         }
         s = expand_env(&s);
+        // `shell:startup` · `shell:common startup` · `shell:downloads` … (탐색기 별칭 · OS별 해석은 `shell` 모듈 · 사용자 09-15).
+        if let Some(p) = crate::shell::resolve_alias(&s) {
+            return p;
+        }
         let p = PathBuf::from(&s);
         if p.is_absolute() {
             p
@@ -403,7 +471,7 @@ pub mod path {
         }
     }
 
-    /// `%NAME%`(CMD) · `$NAME`/`${NAME}`(sh) 확장 — 미정의는 원문 유지.
+    /// `%NAME%`(CMD) · `$NAME`/`${NAME}`(sh) · `$env:NAME`/`${env:NAME}`(PowerShell · 대소문자 무시) 확장 — 미정의는 원문 유지.
     #[must_use]
     pub fn expand_env(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
@@ -411,6 +479,37 @@ pub mod path {
         let mut i = 0;
         while i < chars.len() {
             let c = chars[i];
+            // PowerShell `$env:NAME` / `${env:NAME}` — `$NAME`보다 먼저(접두가 겹친다).
+            if c == '$' {
+                let rest: String = chars[i + 1..].iter().take(6).collect();
+                let braced = rest.to_ascii_lowercase().starts_with("{env:");
+                let bare = rest.to_ascii_lowercase().starts_with("env:");
+                if braced || bare {
+                    let start = i + 1 + if braced { 5 } else { 4 };
+                    let (name, len) = if braced {
+                        match chars[start..].iter().position(|&x| x == '}') {
+                            Some(end) => (
+                                chars[start..start + end].iter().collect::<String>(),
+                                end + 1,
+                            ),
+                            None => (String::new(), 0),
+                        }
+                    } else {
+                        let n = chars[start..]
+                            .iter()
+                            .take_while(|x| x.is_alphanumeric() || **x == '_')
+                            .count();
+                        (chars[start..start + n].iter().collect::<String>(), n)
+                    };
+                    if !name.is_empty() {
+                        if let Ok(v) = std::env::var(&name) {
+                            out.push_str(&v);
+                            i = start + len;
+                            continue;
+                        }
+                    }
+                }
+            }
             if c == '%' {
                 if let Some(end) = chars[i + 1..].iter().position(|&x| x == '%') {
                     let name: String = chars[i + 1..i + 1 + end].iter().collect();

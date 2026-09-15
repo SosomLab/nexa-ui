@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (7차 · win)** — `FilePicker` 경로 바(dir2 이식): ⌂ ← → ↑ · **브레드크럼**(세그먼트 클릭 · 빈 곳/우클릭 = 편집 · Esc) · `nexa-fs::History` · `shell:` 별칭(`SHParseDisplayName` raw FFI · 3-OS 공통 표) · `$env:NAME` 확장 · **장소 = 지연 로딩 폴더 트리** · COM 초기화 스레드별. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (6차 · win)** — `nexa-fs::sort_by`(결합 정렬) · `FilePicker` 헤더 Shift+클릭 결합 정렬(▲1 ▼2) · 헤더 드래그 컬럼 이동(이름 고정 · 드롭선 피드백) · 기본 순서 이름·크기·일시·유형. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (5차 · win)** — ★ `nexa-fs::shell` **OS 아이콘 서비스**(Windows `SHGetFileInfoW` · 워커 스레드 · `Lookup{Ready|Pending}` · 전역 LRU 512 · 종류 이름) · `FilePicker` 아이콘/OS 종류 이름 제자리 갱신 · 콤보 뷰포트 하한(창 밖 드롭다운) · 트리 16px 원본 크기 · docs/20 §2-1 · D-6 ⓑ 확정 · F-8. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (4차 · win)** — `ContextMenu` 아이콘(`MenuIcon`)·단축키·**하위 메뉴** · `EditMenu` 아이콘/단축키 주입 · 툴바 hover 배경 제거 · TextBox 선택 = 텍스트 범위 · `FilePicker::set_extra`(하단 부가 콤보 · 인코딩). → [journal](journal/2026-09-15.md)
