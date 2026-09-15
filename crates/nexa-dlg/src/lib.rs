@@ -215,6 +215,10 @@ pub struct FilePicker {
 }
 
 /// 그리드 행 숨은 셀 위치(보이는 3열 뒤): 경로 · `d`/`f` · 확장자.
+/// 점 파일(`.`으로 시작) 토글을 **Windows에서만** 보인다(사용자 09-16) — macOS·Linux는 점 파일이 곧 숨김 파일이라
+/// (`nexa-fs::is_hidden_meta` = 점 접두) "Show hidden" 하나로 충분하고, 그 OS에서 `show_dot`은 항상 켜짐으로 고정한다.
+const DOT_TOGGLE: bool = cfg!(windows);
+
 const CELL_PATH: usize = 3;
 const CELL_KIND: usize = 4;
 const CELL_EXT: usize = 5;
@@ -367,6 +371,7 @@ impl FilePicker {
 
     /// 점 파일 표시 초기값(앱 설정).
     pub fn set_show_dot(&mut self, on: bool) {
+        let on = on || !DOT_TOGGLE;
         self.show_dot = on;
         self.dot_chk.set_checked(on);
         self.reload();
@@ -1104,9 +1109,14 @@ impl FilePicker {
                     p.file_name()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_else(|| {
-                            p.to_string_lossy()
-                                .trim_end_matches(['\\', '/'])
-                                .to_string()
+                            // 루트: Windows `C:\` → `C:` · unix `/` → **`/`**(비우면 빈 조각이 남는다 · 사용자 09-16).
+                            let full = p.to_string_lossy();
+                            let t = full.trim_end_matches(['\\', '/']);
+                            if t.is_empty() {
+                                full.into_owned()
+                            } else {
+                                t.to_string()
+                            }
                         })
                 };
                 (label, p)
@@ -1539,7 +1549,11 @@ impl FilePicker {
         items.push(
             CtxItem::item("hidden", self.labels.show_hidden.clone()).with_checked(self.show_hidden),
         );
-        items.push(CtxItem::item("dot", self.labels.show_dot.clone()).with_checked(self.show_dot));
+        if DOT_TOGGLE {
+            items.push(
+                CtxItem::item("dot", self.labels.show_dot.clone()).with_checked(self.show_dot),
+            );
+        }
         self.menu.set_scale(self.base.scale);
         self.menu
             .open_at(x, y, items, self.base.bounds, self.s(170));
@@ -1723,8 +1737,10 @@ impl FilePicker {
         self.hidden_chk
             .set_bounds(Rect::new(x0, y_btn, self.s(180), row), &mut inv);
         self.dot_chk.set_scale(s);
+        // Windows 외 = 폭 0(안 그리고 · 입력 없음 · 메시지는 숨김 체크 바로 오른쪽부터).
+        let dot_w = if DOT_TOGGLE { self.s(160) } else { 0 };
         self.dot_chk.set_bounds(
-            Rect::new(x0 + self.s(180) + gap, y_btn, self.s(160), row),
+            Rect::new(x0 + self.s(180) + gap, y_btn, dot_w, row),
             &mut inv,
         );
         let ew = self.s(170);
@@ -1847,8 +1863,9 @@ impl FilePicker {
             }
         }
         if self.filter_combo.take_changed().is_some() {
-            let sel = self.grid.selected_row();
-            self.refresh_grid(sel);
+            // ★ 확장자 필터는 **열거 단계**(nexa-fs `lister` · 배경 스레드)에서 걸러진다 → 캐시된 항목을 다시 거르는
+            //   것만으로는 넓어진 필터의 파일이 나타나지 않는다(사용자 09-16 "콤보를 바꿔도 바로 반영 안 됨") → 다시 열거.
+            self.reload();
         }
         if let Some(on) = self.hidden_chk.take_toggled() {
             self.show_hidden = on;
@@ -2096,7 +2113,13 @@ impl Widget for FilePicker {
                         Some(_) | None => {}
                     }
                 }
-                InputEvent::RightDown { .. } => self.begin_path_edit(inv),
+                InputEvent::RightDown { .. } => {
+                    // 첫 우클릭 = 편집 모드 진입만 — 같은 사건을 상자에 넘기면 편집 메뉴까지 뜬다(사용자 09-16).
+                    // 편집 중의 우클릭은 아래에서 상자로 가서 메뉴가 뜬다.
+                    self.begin_path_edit(inv);
+                    inv.push(pb);
+                    return;
+                }
                 _ => {}
             }
         } else if !pb.contains(p) && self.crumb_hover.is_some() {
@@ -2111,6 +2134,8 @@ impl Widget for FilePicker {
                     ..
                 }
             ) {
+                // Esc = 편집 취소 — 입력 중이던 글자를 버리고 진입 시 경로로 되돌린다(사용자 09-16).
+                self.path_box.set_text(&nexa_fs::path::display(&self.dir));
                 self.end_path_edit();
                 inv.push(pb);
                 return;
@@ -2255,7 +2280,9 @@ impl Widget for FilePicker {
         }
         self.name_box.paint(ctx, theme);
         self.hidden_chk.paint(ctx, theme);
-        self.dot_chk.paint(ctx, theme);
+        if DOT_TOGGLE {
+            self.dot_chk.paint(ctx, theme);
+        }
         self.ok_btn.paint(ctx, theme);
         self.cancel_btn.paint(ctx, theme);
         // 메시지(체크박스 오른쪽 · 버튼 왼쪽).

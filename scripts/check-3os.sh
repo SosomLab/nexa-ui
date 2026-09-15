@@ -12,6 +12,14 @@ FAIL=0
 step() { printf '\n── %s ──\n' "$1"; }
 run()  { if "$@"; then echo "  ✓"; else echo "  ✗ 실패"; FAIL=$((FAIL+1)); fi; }
 
+# ★ rustup 툴체인을 쓴다(09-16 mac 실기 · nexa-sql 동일): PATH에 Homebrew Rust가 ~/.cargo/bin보다 앞서면 크로스 타깃 std를 못 찾는다(E0463).
+if command -v rustup >/dev/null 2>&1; then
+    RUSTUP_BIN="$(dirname "$(rustup which cargo 2>/dev/null || echo "$HOME/.cargo/bin/cargo")")"
+    case "$(command -v cargo)" in
+        "$RUSTUP_BIN"/*) ;;
+        *) echo "⚠ cargo가 rustup 것이 아님($(command -v cargo)) — rustup 툴체인($RUSTUP_BIN)으로 실행"; export PATH="$HOME/.cargo/bin:$PATH" ;;
+    esac
+fi
 HOST="$(rustc -vV | sed -n 's/^host: //p')"
 case "$HOST" in
     *apple-darwin*)   OTHERS=(x86_64-pc-windows-msvc x86_64-unknown-linux-gnu) ;;
@@ -33,5 +41,5 @@ if [[ "${1:-}" != "--quick" ]]; then
     done
 fi
 echo
-if [[ $FAIL -eq 0 ]]; then echo "★ 3-OS 검사 통과 — push 가능 (push 뒤 gh run watch 로 CI도 확인)"; else echo "★ 실패 $FAIL건 — push 금지"; fi
+if [[ $FAIL -eq 0 ]]; then echo "★ 3-OS 검사 통과 — push 가능 (push 뒤 gh run watch 로 CI도 확인)"; else echo "★ 실패 ${FAIL}건 — push 금지"; fi
 [[ $FAIL -eq 0 ]]

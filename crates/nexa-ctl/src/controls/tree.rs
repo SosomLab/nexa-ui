@@ -306,18 +306,24 @@ pub trait TreeControl: Control {
     }
 
     /// 트리 열 한 칸을 그린다(들여쓰기 + 셰브론 + 라벨) — TreeView 전체 / TreeGrid 첫 열 공용.
+    /// `cell` = 기하(가로 스크롤만큼 왼쪽으로 밀린 칸) · `clip` = 실제로 칠할 수 있는 영역(컨트롤 안쪽).
+    /// ★ 둘을 나눈 이유: 가로 스크롤 시 `cell`이 컨트롤 왼쪽 밖으로 나가는데 그대로 클립으로 쓰면 글자·아이콘·셰브론이
+    ///   이웃 컨트롤(파일 대화상자 사이드바) 위에 그려진다(09-16 mac 캡처).
+    #[allow(clippy::too_many_arguments)] // 기하(cell)·클립(clip)·상태(selected/hover) — 호출 2곳 · 구조체화는 과함
     fn paint_tree_cell(
         &self,
         ctx: &mut dyn DrawCtx,
         theme: &Theme,
         row: &FlatRow,
         cell: Rect,
+        clip: Rect,
         selected: bool,
         hover: f32,
     ) {
+        let cell_vis = cell.intersection(&clip);
         if selected {
             ctx.fill_rect(
-                cell,
+                cell_vis,
                 if self.is_active() {
                     theme.sel_bg
                 } else {
@@ -329,7 +335,7 @@ pub trait TreeControl: Control {
         //   진행도(0~1)를 곱하므로 **서서히** 밝아진다(사용자 확정 08-26).
         let a = hover_alpha(selected, hover);
         if a > 0.0 {
-            ctx.fill_rect_alpha(cell, theme.text, a);
+            ctx.fill_rect_alpha(cell_vis, theme.text, a);
         }
         let chev_x = cell.x + self.s(4) + self.s(INDENT) * row.depth as i32;
         // dir2 파일 그리드와 같은 90° 셰브론 · 크기 = 글꼴 높이 · 접힘 = 흐림 · 펼침/hover = 본문색(사용자 09-15).
@@ -337,7 +343,8 @@ pub trait TreeControl: Control {
         let cw = ctx.text_height().max(self.s(CHEV_W));
         let cy = cell.y + (cell.h - cw) / 2;
         let chev = Rect::new(chev_x, cy, cw, cw);
-        if row.has_children {
+        // 셰브론은 선분이라 클립을 못 받는다 — 온전히 안에 들 때만 그린다.
+        if row.has_children && chev.intersection(&clip) == chev {
             let color = if row.expanded || hover > 0.0 {
                 theme.text
             } else {
@@ -353,12 +360,12 @@ pub trait TreeControl: Control {
             let isz = self.s(super::LEADING_ICON).max(self.s(native));
             let boxr = Rect::new(tx, cell.y + (cell.h - isz) / 2, isz, isz);
             let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
-            ctx.image_scaled(fit, img, cell);
+            ctx.image_scaled(fit, img, cell_vis);
             tx += isz + self.s(4);
         }
         ctx.select_font(FontSlot::Base, false);
         let ty = cell.y + (cell.h - ctx.text_height()) / 2;
-        ctx.text(tx, ty, cell, &row.label, theme.text);
+        ctx.text(tx, ty, cell_vis, &row.label, theme.text);
     }
 }
 
@@ -539,6 +546,7 @@ impl Widget for TreeView {
                 theme,
                 row,
                 cell,
+                b,
                 i == self.selected,
                 self.hover.value(i),
             );
@@ -768,6 +776,8 @@ impl Widget for TreeGrid {
         let tree_w = self.columns.first().map_or(b.w, |c| self.s(c.width));
         // 선택·hover 폭 — 열 합까지만(`fit_columns`) 또는 전폭.
         let row_w = self.hit_width();
+        // 본문 클립 — 가로 스크롤로 왼쪽 밖에 나간 부분은 그리지 않는다(09-16).
+        let body = Rect::new(b.x, top, b.w, (bottom - top).max(0));
         let rows = self.rows();
         let first = ((self.scroll_y / rh.max(1)).max(0) as usize).min(rows.len());
         let count = ((bottom - top) / rh.max(1)).max(0) as usize + 2;
@@ -793,7 +803,7 @@ impl Widget for TreeGrid {
             }
             // 첫 열 = 트리 셀(배경·hover 재도색 방지 — 위에서 이미 얹었다).
             let tree_cell = Rect::new(b.x - ox, y, tree_w, rh);
-            self.paint_tree_cell(ctx, theme, row, tree_cell, false, 0.0);
+            self.paint_tree_cell(ctx, theme, row, tree_cell, body, false, 0.0);
             // 나머지 열 = 셀 값.
             let mut colx = b.x + tree_w - ox;
             for (ci, col) in self.columns.iter().enumerate().skip(1) {
@@ -804,7 +814,7 @@ impl Widget for TreeGrid {
                     ctx.text(
                         colx + self.s(8),
                         y + (rh - th) / 2,
-                        Rect::new(colx, y, w, rh),
+                        Rect::new(colx, y, w, rh).intersection(&body),
                         val,
                         theme.text,
                     );
@@ -965,6 +975,63 @@ mod tests {
         assert_eq!(g.rows()[1].cells, vec!["⌘,".to_string()]);
         // 헤더 아래부터 트리 행.
         assert!(g.tree_top() > g.bounds().y);
+    }
+
+    /// 가로 스크롤 시 그리기 클립이 컨트롤 왼쪽 밖으로 나가지 않는다(09-16 mac 캡처: 파일 목록이 사이드바 위에 겹침).
+    #[test]
+    fn horizontal_scroll_never_paints_left_of_bounds() {
+        use crate::theme::Color;
+        #[derive(Default)]
+        struct Rec {
+            clips: Vec<Rect>,
+            fills: Vec<Rect>,
+        }
+        impl DrawCtx for Rec {
+            fn fill_rect(&mut self, r: Rect, _c: Color) {
+                self.fills.push(r);
+            }
+            fn text_opaque(
+                &mut self,
+                _x: i32,
+                _y: i32,
+                clip: Rect,
+                _t: &str,
+                _f: Color,
+                _b: Color,
+            ) {
+                self.clips.push(clip);
+            }
+            fn text(&mut self, _x: i32, _y: i32, clip: Rect, _t: &str, _f: Color) {
+                self.clips.push(clip);
+            }
+            fn text_width(&mut self, text: &str) -> i32 {
+                text.chars().count() as i32 * 7
+            }
+        }
+        let m = TreeModel::new(vec![TreeNode::branch(
+            "a long folder name that scrolls",
+            vec![TreeNode::leaf("child").with_cells(vec!["cell".into()])],
+        )]);
+        let mut g = TreeGrid::new(
+            m,
+            vec![GridColumn::new("Name", 400), GridColumn::new("Size", 100)],
+        );
+        let mut inv = Invalidations::default();
+        let b = Rect::new(200, 0, 150, 300);
+        g.set_bounds(b, &mut inv);
+        g.set_scroll(120, 0);
+        let mut rec = Rec::default();
+        g.paint(&mut rec, &Theme::dark());
+        assert!(!rec.clips.is_empty());
+        for c in &rec.clips {
+            assert!(
+                c.w == 0 || c.x >= b.x,
+                "클립이 컨트롤 왼쪽 밖: {c:?} (bounds {b:?})"
+            );
+        }
+        for f in rec.fills.iter().filter(|f| f.w > 0) {
+            assert!(f.x >= b.x - 1, "채우기가 컨트롤 왼쪽 밖: {f:?}");
+        }
     }
 
     #[test]

@@ -22,7 +22,8 @@ const KNOB_PAD: i32 = 1;
 /// 트랙 ↔ 라벨 간격(논리 px).
 const GAP: i32 = 8;
 /// 켜짐 트랙 — iOS 시스템 그린(#34C759) · 다크/라이트 공통(참고 이미지 색).
-const ON_GREEN: Color = Color(0x0034_C759);
+/// 켜짐 색(iOS 스위치 초록) — 우클릭 메뉴의 토글 항목도 같은 색을 쓴다(09-16).
+pub(crate) const ON_GREEN: Color = Color(0x0034_C759);
 /// 손잡이 — 흰 원(iOS 공통).
 const KNOB_WHITE: Color = Color(0x00FF_FFFF);
 

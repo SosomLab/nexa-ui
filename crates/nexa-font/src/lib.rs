@@ -103,11 +103,20 @@ const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
         0,
         "Arial Unicode MS",
     ),
+    // ⏱⏳(U+23F1/23F3)는 위 둘에 없다 — 맥 시스템 본 전수 실측(09-16)에서 외곽선을 가진 것은 STIX Two Math뿐
+    // (Apple Color Emoji는 sbix 비트맵 · LastResort는 자리표시 글리프라 제외).
+    (
+        "/System/Library/Fonts/Supplemental/STIXTwoMath.otf",
+        0,
+        "STIX Two Math",
+    ),
 ];
 #[cfg(target_os = "windows")]
 const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
     ("C:\\Windows\\Fonts\\seguisym.ttf", 0, "Segoe UI Symbol"),
     ("C:\\Windows\\Fonts\\seguiemj.ttf", 0, "Segoe UI Emoji"),
+    // Office 동봉(있으면) — 넓은 BMP 커버.
+    ("C:\\Windows\\Fonts\\arialuni.ttf", 0, "Arial Unicode MS"),
 ];
 #[cfg(target_os = "linux")]
 const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
@@ -126,6 +135,51 @@ const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
         0,
         "Noto Sans Symbols2",
     ),
+    // 배포판별 경로(Fedora `google-noto`/`dejavu-sans-fonts` · Arch `noto`/`TTF` · openSUSE `truetype`) — 09-16.
+    (
+        "/usr/share/fonts/google-noto/NotoSansSymbols2-Regular.ttf",
+        0,
+        "Noto Sans Symbols2",
+    ),
+    (
+        "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+        0,
+        "Noto Sans Symbols2",
+    ),
+    (
+        "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+        0,
+        "Noto Sans Symbols",
+    ),
+    (
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+        0,
+        "DejaVu Sans",
+    ),
+    ("/usr/share/fonts/TTF/DejaVuSans.ttf", 0, "DejaVu Sans"),
+    ("/usr/share/fonts/truetype/DejaVuSans.ttf", 0, "DejaVu Sans"),
+    (
+        "/usr/share/fonts/truetype/ancient-scripts/Symbola_hint.ttf",
+        0,
+        "Symbola",
+    ),
+];
+
+/// 고정 경로에 없을 때 **폰트 폴더를 이름으로 훑는** 기호 본(파일명 어간 · 앞이 우선) — OS별.
+/// 고정 경로 표는 "그 OS의 표준 자리", 이 표는 "배포판·사용자 설치 위치가 달라도 붙는" 두 번째 그물(09-16 두부 방지).
+#[cfg(target_os = "macos")]
+const SYMBOL_FAMILIES: &[&str] = &["Apple Symbols", "Arial Unicode", "STIXTwoMath", "Symbola"];
+#[cfg(target_os = "windows")]
+const SYMBOL_FAMILIES: &[&str] = &["seguisym", "seguiemj", "arialuni", "Symbola"];
+#[cfg(target_os = "linux")]
+const SYMBOL_FAMILIES: &[&str] = &[
+    "NotoSansSymbols2",
+    "NotoSansSymbols",
+    "DejaVuSans",
+    "Symbola",
+    "NotoSansMath",
+    "OpenSymbol",
+    "unifont",
 ];
 
 #[cfg(target_os = "macos")]
@@ -196,7 +250,27 @@ fn first_existing(cands: &'static [(&'static str, u32, &'static str)]) -> Option
     None
 }
 
-/// 패밀리 이름(파일명 어간 정규화 비교)으로 폰트 파일을 찾는다. 파일명 ≠ 패밀리명인 본은 못 찾는다(정직한 한계).
+/// 폴더 아래 폰트 파일(하위 폴더 포함 · 깊이 [`SCAN_DEPTH`]) — 리눅스는 `/usr/share/fonts/<종류>/<패밀리>/`처럼 두 단 아래에 있다(09-16).
+fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            if depth < SCAN_DEPTH {
+                collect_font_files(&path, depth + 1, out);
+            }
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// 폰트 폴더 재귀 깊이 상한(Fedora `google-noto/` 1단 · Debian `truetype/noto/` 2단 · 여유 1).
+const SCAN_DEPTH: u32 = 3;
+
+/// 패밀리 이름(파일명 어간 정규화 비교)으로 폰트 파일을 찾는다(하위 폴더 포함). 파일명 ≠ 패밀리명인 본은 못 찾는다(정직한 한계).
 #[must_use]
 pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
     let want = norm(family);
@@ -204,10 +278,8 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
         return None;
     }
     for dir in FONT_DIRS {
-        let Ok(rd) = std::fs::read_dir(expand(dir)) else {
-            continue;
-        };
-        let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        let mut entries = Vec::new();
+        collect_font_files(&expand(dir), 0, &mut entries);
         entries.sort();
         for path in entries {
             let ext_ok = path
@@ -264,8 +336,24 @@ pub fn symbol_fallback_fonts() -> Vec<Found> {
             out.push(Found { data, index, name });
         }
     }
+    for fam in SYMBOL_FAMILIES {
+        if out.iter().any(|f| norm(f.name) == norm(fam)) {
+            continue;
+        }
+        if let Some((data, index)) = find_font_by_family(fam) {
+            out.push(Found {
+                data,
+                index,
+                name: fam,
+            });
+        }
+    }
     out
 }
+
+/// UI가 쓰는 기호(nexa-sql·nexa-ctl·nexa-dlg 문자열 리터럴 전수 · 09-16) — 두부(□) 방지 회귀 테스트의 기준.
+/// 새 기호를 UI에 넣으면 여기에도 추가한다(CI 3-OS가 폴백 체인에 빠졌는지 잡는다).
+pub const UI_SYMBOLS: &str = "·—–…×→←↑↓⇧⌘⌥⌂⌄›«»▲▼▶◀▸●•★✓⚠⇕∨＋⏱⏳";
 
 /// 로드 결과 + 진단(어느 본이 붙었는지).
 #[derive(Debug)]
@@ -379,6 +467,27 @@ mod tests {
     fn unknown_family_is_none() {
         assert!(find_font_by_family("이런폰트는없다12345").is_none());
         assert!(find_font_by_family("").is_none());
+    }
+
+    /// 두부 방지(사용자 09-16 "심볼이 표시될 수 있는 폰트를 fail-over") — UI·고정폭 체인 모두 [`UI_SYMBOLS`] 전부 커버.
+    /// 실측: mac = Apple SD Gothic Neo → Apple Symbols → Arial Unicode → **STIX Two Math**(⏱⏳) ·
+    /// Windows = 맑은 고딕 → Segoe UI Symbol(⏱⏳ 포함) · Linux = Noto CJK → DejaVu → Noto Sans Symbols2(⏱⏳).
+    #[test]
+    fn ui_and_mono_fonts_cover_all_ui_symbols() {
+        let u = ui_font(None).expect("UI 본");
+        let m = mono_font(None).expect("고정폭 본");
+        let miss_u: String = UI_SYMBOLS.chars().filter(|&c| !u.font.covers(c)).collect();
+        let miss_m: String = UI_SYMBOLS.chars().filter(|&c| !m.font.covers(c)).collect();
+        assert!(
+            miss_u.is_empty(),
+            "UI 체인 {:?}에 없는 기호: [{miss_u}]",
+            u.chain
+        );
+        assert!(
+            miss_m.is_empty(),
+            "고정폭 체인 {:?}에 없는 기호: [{miss_m}]",
+            m.chain
+        );
     }
 
     #[test]

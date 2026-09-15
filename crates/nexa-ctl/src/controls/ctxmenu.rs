@@ -709,7 +709,16 @@ impl ContextMenu {
                                 IconImage::from_rgba(ic.w, ic.h, rgba.to_vec())
                             }
                             _ => {
-                                let (cr, cg, cb) = fg.rgb();
+                                // 토글 켜짐 = Switch 컨트롤과 같은 초록 — 손잡이 위치만으로는 켜짐이 잘 안 보인다(사용자 09-16).
+                                let tint = if icon.is_none()
+                                    && *enabled
+                                    && matches!(checked, Some(true))
+                                {
+                                    super::switch::ON_GREEN
+                                } else {
+                                    fg
+                                };
+                                let (cr, cg, cb) = tint.rgb();
                                 IconImage::from_alpha_tinted(ic.w, ic.h, &ic.alpha, (cr, cg, cb))
                             }
                         };
