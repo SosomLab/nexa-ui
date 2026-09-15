@@ -14,8 +14,16 @@ pub enum GlyphKind {
     Folder,
     /// 새 폴더(폴더 + ⊕).
     FolderNew,
-    /// 새로 고침(원형 화살표).
+    /// 새로 고침(Material `refresh` — 원호 + 오른쪽 위 화살촉 · 사용자 SVG 09-16).
     Refresh,
+    /// 뒤로(Material `arrow_back` · 사용자 SVG 09-16).
+    ArrowBack,
+    /// 앞으로(Material `arrow_forward` = 뒤로의 좌우 대칭 · 사용자 SVG 09-16).
+    ArrowForward,
+    /// 위로(Material `arrow_upward` · 사용자 SVG 09-16 = 뒤로를 90° 돌린 것과 같은 기하).
+    ArrowUp,
+    /// 홈 폴더(Material `home` 외곽선 · 사용자 SVG 09-16).
+    Home,
     /// 토글 켜짐(채운 알약 · 손잡이 오른쪽).
     ToggleOn,
     /// 토글 꺼짐(알약 외곽선 · 손잡이 왼쪽).
@@ -80,13 +88,52 @@ fn shape_folder_new(x: f32, y: f32) -> bool {
     f || plus
 }
 
+/// Material 아이콘 좌표(viewBox 960 · y는 아래로) → 이 도형 좌표(256).
+const M: f32 = 256.0 / 960.0;
+
 fn shape_refresh(x: f32, y: f32) -> bool {
-    // 원호(위 오른쪽 틈) + 화살촉.
-    let ang = (y - 128.0).atan2(x - 128.0); // -π..π · 0 = 오른쪽
-    let arc = ring(x, y, 128.0, 128.0, 60.0, 82.0) && !(ang > -1.35 && ang < -0.15);
-    let head = stroke(x, y, (196.0, 62.0), (196.0, 108.0), 22.0)
-        || stroke(x, y, (196.0, 62.0), (150.0, 62.0), 22.0);
-    arc || head
+    // Material `refresh`(사용자 SVG 09-16): 반지름 240~320 원호 · 오른쪽은 위 화살촉(−41°)부터 y=560 수평 절단선까지
+    // 비어 있다 · 화살촉 = 세로 막대(720~800 × 160~440) + 가로 막대(520~800 × 360~440).
+    let ang = (y - 128.0).atan2(x - 128.0); // −π..π · 0 = 오른쪽 · 음수 = 위
+    let arc = ring(x, y, 128.0, 128.0, 240.0 * M, 320.0 * M);
+    let gap = x > 128.0 && y < 560.0 * M && ang > -0.7156; // −41°
+    let head = rrect(x, y, 720.0 * M, 160.0 * M, 80.0 * M, 280.0 * M, 0.0)
+        || rrect(x, y, 520.0 * M, 360.0 * M, 280.0 * M, 80.0 * M, 0.0);
+    (arc && !gap) || head
+}
+
+fn shape_arrow_back(x: f32, y: f32) -> bool {
+    // Material `arrow_back`(사용자 SVG 09-16): 자루 313~800 × 440~520 · 촉 = 꼭짓점(160,480)에서 45° 두 팔(폭 80 · x ≤ 537 절단).
+    let shaft = rrect(x, y, 313.0 * M, 440.0 * M, 487.0 * M, 80.0 * M, 0.0);
+    let tip = (200.0 * M, 480.0 * M);
+    let arms = (stroke(x, y, tip, (537.0 * M, 143.0 * M), 80.0 * M)
+        || stroke(x, y, tip, (537.0 * M, 817.0 * M), 80.0 * M))
+        && (160.0 * M..=537.0 * M).contains(&x);
+    shaft || arms
+}
+
+fn shape_home(x: f32, y: f32) -> bool {
+    // Material `home`(사용자 SVG 09-16): 오각형 집 외곽선(벽·지붕 두께 80) + 문틀(360~600 × 520~760) − 문 구멍(440~520 × 600~840).
+    let (x, y) = (x / M, y / M); // 960 좌표계에서 판정
+    let roof = |x0: f32, apex_y: f32, w: f32| {
+        // 지붕선: 처마 y0에서 꼭대기(x0+w/2, apex_y)까지 45°에 가까운 0.75 기울기.
+        let half = w / 2.0;
+        let dx = (x - (x0 + half)).abs();
+        apex_y + dx * 0.75
+    };
+    let outer = (160.0..=800.0).contains(&x) && y <= 840.0 && y >= roof(160.0, 120.0, 640.0);
+    let inner = (240.0..=720.0).contains(&x) && y <= 760.0 && y >= roof(240.0, 220.0, 480.0);
+    let frame = (360.0..=600.0).contains(&x) && (520.0..=760.0).contains(&y);
+    let door = (440.0..=520.0).contains(&x) && (600.0..=840.0).contains(&y);
+    ((outer && !inner) || frame) && !door
+}
+
+fn shape_arrow_forward(x: f32, y: f32) -> bool {
+    shape_arrow_back(256.0 - x, y)
+}
+
+fn shape_arrow_up(x: f32, y: f32) -> bool {
+    shape_arrow_back(y, x)
 }
 
 fn shape_toggle_on(x: f32, y: f32) -> bool {
@@ -142,6 +189,10 @@ fn shape_of(kind: GlyphKind) -> fn(f32, f32) -> bool {
         GlyphKind::Folder => shape_folder,
         GlyphKind::FolderNew => shape_folder_new,
         GlyphKind::Refresh => shape_refresh,
+        GlyphKind::ArrowBack => shape_arrow_back,
+        GlyphKind::ArrowForward => shape_arrow_forward,
+        GlyphKind::ArrowUp => shape_arrow_up,
+        GlyphKind::Home => shape_home,
         GlyphKind::ToggleOn => shape_toggle_on,
         GlyphKind::ToggleOff => shape_toggle_off,
         GlyphKind::Copy => shape_copy,
@@ -199,6 +250,10 @@ mod tests {
             GlyphKind::Folder,
             GlyphKind::FolderNew,
             GlyphKind::Refresh,
+            GlyphKind::ArrowBack,
+            GlyphKind::ArrowForward,
+            GlyphKind::ArrowUp,
+            GlyphKind::Home,
             GlyphKind::ToggleOn,
             GlyphKind::ToggleOff,
             GlyphKind::Copy,

@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (2차 · mac)** — Material 아이콘 5종(새로 고침·뒤로·앞으로·상위로·홈 = 사용자 SVG) · `Button::glyph` 마스크 아이콘(글자색 틴트). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (1차 · mac)** — 맥 실기 첫날: `nexa-font` 두부 방지(⏱⏳ = STIX Two Math · OS별 경로+이름 검색 2중 · 재귀 스캔 · `UI_SYMBOLS` 회귀 테스트) · TreeGrid 가로 스크롤 **클립**(사이드바 겹침) · 다중 행 툴팁 · **`Splitter` 부품** · FilePicker(점 파일 = Windows만 · 루트 `/` · 우클릭/Esc · 필터 변경 = 재열거) · 토글 켜짐 초록 · 3-OS 스크립트 rustup 보정. → [journal](journal/2026-09-16.md)
 - **2026-09-15 (14차 · win · 마지막)** — 파일 대화상자 자원 회수 점검(nexa-sql docs/37 §6-5): 아이콘 워커 **COM 아파트먼트 = 스레드 수명**(`ComApartment` 진입/해제 짝) · `IconService::release_worker()`(FilePicker Drop → 즉시 회수 · 30초 대기 없음) · `clear()` · 자원 계측 테스트(`resource_tests` · GDI/핸들 5주기 평평). 선형 누수 0 · 남는 것은 셸 일회성 초기화. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (13차 · win)** — ★ 성능(nexa-sql docs/37): `TreeModel` **평탄화 캐시**(`Rc<Vec<FlatRow>>` · `roots` 비공개 · `roots_mut/toggle/set_expanded` = 무효화 · 4,899행 8.6ms/프레임 → 0) · 트리 페인트 **첫 가시 행부터** · `nexa-fs` 링크일 때만 경로 stat(53×) · 파일 대화상자 배치 재구성 150ms 간격 · `ContextMenu` 색 아이콘(`MenuIcon::from_rgba`)·토글(`with_checked` · 켜짐/꺼짐 도형) · `controls::glyphs`(코드 도형 9종 · 스레드 로컬 캐시) · `docs/bench/`(조사 세션 벤치 보존). → [journal](journal/2026-09-15.md)

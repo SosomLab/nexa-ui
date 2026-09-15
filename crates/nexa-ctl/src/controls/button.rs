@@ -7,12 +7,14 @@
 //!
 //! 공통 기능은 [`Control`] 기본 메서드로 상속([`super`]).
 
+use super::ctxmenu::MenuIcon;
 use super::{image_fit_contain, image_fit_cover, Control, ControlBase, HAlign};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
-use crate::theme::{IconImage, Theme};
+use crate::theme::{Color, IconImage, Theme};
 use crate::tokens::{hover_alpha, hover_color, pressed_color, Fade, FadeSpeed};
+use std::cell::RefCell;
 
 /// 눌림 때 선택색 위에 더 얹는 전경색 알파(선택색보다 한 단계 어둡게).
 const PRESSED_EXTRA: f32 = 0.10;
@@ -69,6 +71,10 @@ pub struct Button {
     base: ControlBase,
     label: Option<String>,
     image: Option<Rc<IconImage>>,
+    /// 코드 도형 아이콘(알파 마스크 · [`glyph`](super::glyph)) — 그릴 때 **글자색으로 틴트**(테마·hover 따라감 · 09-16).
+    mask: Option<MenuIcon>,
+    /// 마스크 틴트 캐시(색이 같으면 재사용) — 페인트가 `&self`라 내부 가변.
+    tint: RefCell<Option<(Color, Rc<IconImage>)>>,
     mode: ButtonMode,
     /// **이미지 맨 앞 고정**(옵션): true면 텍스트 정렬과 무관하게 이미지가 버튼 앞(pad)에
     /// 붙는다. false(기본)면 이미지+텍스트를 한 묶음으로 정렬(halign)한다.
@@ -84,6 +90,19 @@ pub struct Button {
 }
 
 impl Button {
+    /// 마스크를 `fg`로 틴트한 이미지(같은 색이면 캐시).
+    fn tinted_mask(&self, m: &MenuIcon, fg: Color) -> Rc<IconImage> {
+        if let Some((c, img)) = self.tint.borrow().as_ref() {
+            if *c == fg {
+                return img.clone();
+            }
+        }
+        let (r, g, b) = fg.rgb();
+        let img = Rc::new(IconImage::from_alpha_tinted(m.w, m.h, &m.alpha, (r, g, b)));
+        *self.tint.borrow_mut() = Some((fg, img.clone()));
+        img
+    }
+
     /// 텍스트 버튼.
     #[must_use]
     pub fn new(label: impl Into<String>) -> Self {
@@ -98,7 +117,18 @@ impl Button {
             tone: ButtonTone::Default,
             font: FontSlot::Base,
             hover: Fade::button_hover(),
+            mask: None,
+            tint: RefCell::new(None),
         }
+    }
+
+    /// 코드 도형 아이콘만 있는 버튼(텍스트 없음) — 파일 대화상자 ⟵ ⟶ ⟳(Material 도형 · 사용자 09-16). 글자색 틴트.
+    #[must_use]
+    pub fn glyph(mask: MenuIcon) -> Self {
+        let mut b = Self::icon(Rc::new(IconImage::swatch(1, (0, 0, 0))));
+        b.image = None;
+        b.mask = Some(mask);
+        b
     }
 
     /// 이미지만 있는 버튼(텍스트 없음).
@@ -115,6 +145,8 @@ impl Button {
             tone: ButtonTone::Default,
             font: FontSlot::Base,
             hover: Fade::button_hover(),
+            mask: None,
+            tint: RefCell::new(None),
         }
     }
 
@@ -413,13 +445,15 @@ impl Widget for Button {
                 ctx.select_font(self.font, false);
                 let th = ctx.text_height();
                 let label_w = self.label.as_deref().map_or(0, |l| ctx.text_width(l));
+                let tinted = self.mask.as_ref().map(|m| self.tinted_mask(m, fg));
+                let img_ref: Option<&IconImage> = self.image.as_deref().or(tinted.as_deref());
                 let (img_x, text_x) = Self::normal_positions(
                     b,
                     self.s(PAD),
                     self.s(GAP),
                     icon,
                     label_w,
-                    self.image.is_some(),
+                    img_ref.is_some(),
                     self.label.is_some(),
                     self.image_leading,
                     self.halign(),
@@ -427,7 +461,7 @@ impl Widget for Button {
                 // 세로 배치 = VAlign(기본 중앙).
                 let icon_y = self.align_y(b, icon, self.s(4)) + sink;
                 let text_y = self.align_y(b, th, self.s(4)) + sink;
-                if let (Some(x), Some(img)) = (img_x, self.image.as_deref()) {
+                if let (Some(x), Some(img)) = (img_x, img_ref) {
                     let boxr = Rect::new(x, icon_y, icon, icon);
                     let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, img, b);
