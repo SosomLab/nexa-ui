@@ -138,7 +138,30 @@ impl IconService {
             let spawned = std::thread::Builder::new()
                 .name("nexa-fs-icons".into())
                 .spawn(move || {
-                    for req in r {
+                    // ★ 유휴 30초면 스레드를 거둔다(사용자 09-15 "사용 후 회수") — tx를 None으로 되돌려 다음 요청이 새로 만든다.
+                    //   종료 결정과 tx 해제는 같은 잠금 아래에서 · 그 사이 도착한 요청은 처리하고 계속 산다(유실 0).
+                    loop {
+                        let req = match r.recv_timeout(std::time::Duration::from_secs(30)) {
+                            Ok(req) => req,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                let svc = IconService::global();
+                                let mut tx = svc
+                                    .tx
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                match r.try_recv() {
+                                    Ok(req) => {
+                                        drop(tx);
+                                        req
+                                    }
+                                    Err(_) => {
+                                        *tx = None;
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                        };
                         let svc = IconService::global();
                         match req {
                             Req::Icon(key, large) => {

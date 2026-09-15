@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (12차 · win)** — ★ `nexa-fs::lister`(**백그라운드 열거** · 256 배치 스트리밍 · 폴더 프로브 · `ListHandle` Drop = 취소) · `FilePicker` 동기 `list` 호출 0(이동·새로 고침·지연 펼침·사이드바 프로브 전부 로더 · 틱에서 8개 상한 소비) · 아이콘 워커 유휴 30초 종료 · docs/20 §2-2. → [journal](journal/2026-09-15.md)
+- **2026-09-15 (11차 · win)** — `TreeGrid::set_fit_columns`(선택·hover·클릭 = 열 합 폭 · `TreeControl::hit_width`) · `FilePicker` 항목/빈 공간 우클릭 메뉴 분리. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (10차 · win)** — `nexa-fs::list_opts`(점 파일 토글 · `has_visible_child/has_subfolder`도) · `FilePicker` Show dot files 체크·메뉴·`set_show_dot/show_dot`. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (9차 · win)** — `nexa-fs::has_visible_child/has_subfolder`(첫 일치 프로브 · dir2 X-43) · `FilePicker` 빈 폴더 셰브론 억제(현재 보기 기준 · 숨김 토글 즉시 재판정). → [journal](journal/2026-09-15.md)
 - **2026-09-15 (8차 · win)** — 공용 **90° 셰브론**(`draw_chevron_90` · 트리 셀 전부 · 크기 = 글꼴 높이 · 접힘 흐림/펼침·hover 본문) · `FilePicker` 오른쪽 목록 = **트리**(폴더 인라인 펼침 · 지연 열거 · 숨은 셀 경로/종류/확장자) · **우클릭 메뉴**(열기 · 경로/이름 복사 · 새 폴더 · 새로 고침 · 숨김 ✓ · `PickerAction::CopyText`) · `nexa-fs::VIRTUAL_ROOT`("내 PC" · 3-OS 드라이브/볼륨 · 루트 ↑) · `parent_chain` 맨 앞 = PC. → [journal](journal/2026-09-15.md)

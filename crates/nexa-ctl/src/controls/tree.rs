@@ -201,6 +201,11 @@ pub trait TreeControl: Control {
         self.bounds().y
     }
 
+    /// 행 클릭이 유효한 가로 폭(기본 = 전폭 · 그리드는 `fit_columns`면 열 합 — 그 밖은 **빈 공간**).
+    fn hit_width(&self) -> i32 {
+        self.bounds().w
+    }
+
     /// 행이 그려지는 뷰포트(헤더 아래 · 스크롤 대상).
     fn rows_viewport(&self) -> Rect {
         let b = self.bounds();
@@ -258,7 +263,7 @@ pub trait TreeControl: Control {
         let (sx, sy) = self.scroll();
         // ★ x·y 둘 다 검사(09-15 nexa-sql 설정 창: 오른쪽 카드 클릭이 왼쪽 트리 행을 선택하던 결함 — y만 보고 있었다).
         let b = self.bounds();
-        if y < top || y >= b.bottom() || x < b.x || x >= b.right() {
+        if y < top || y >= b.bottom() || x < b.x || x >= b.right() || x >= b.x + self.hit_width() {
             return None;
         }
         let i = ((y - top + sy) / rh) as usize;
@@ -575,9 +580,16 @@ pub struct TreeGrid {
     border: BorderSpec,
     /// ★ 커서가 올라간 행 — 서서히 밝아진다.
     hover: HoverFade,
+    /// 선택·hover·클릭을 **열 합 폭까지만**(그 밖은 빈 공간 · 파일 대화상자 · 사용자 09-15).
+    fit_columns: bool,
 }
 
 impl TreeGrid {
+    /// 선택·hover·클릭 범위를 열 합 폭으로 제한(기본 = 전폭).
+    pub fn set_fit_columns(&mut self, on: bool) {
+        self.fit_columns = on;
+    }
+
     /// 모델 + 열 정의로 만든다(첫 열이 트리 열).
     #[must_use]
     pub fn new(model: TreeModel, columns: Vec<GridColumn>) -> Self {
@@ -591,6 +603,7 @@ impl TreeGrid {
             bars: ScrollBars::new(),
             border: BorderSpec::default(),
             hover: HoverFade::default(),
+            fit_columns: false,
         }
     }
 
@@ -661,6 +674,13 @@ impl TreeControl for TreeGrid {
     fn tree_top(&self) -> i32 {
         self.base.bounds.y + self.s(HEADER_H)
     }
+    fn hit_width(&self) -> i32 {
+        if self.fit_columns {
+            (self.columns_width() - self.scroll_x).clamp(0, self.base.bounds.w)
+        } else {
+            self.base.bounds.w
+        }
+    }
     /// 가로 콘텐츠 = 전체 열 폭 합(길면 좌우 스크롤).
     fn content_size(&self) -> (i32, i32) {
         let h = self.rows().len() as i32 * self.s(ROW_H);
@@ -713,6 +733,8 @@ impl Widget for TreeGrid {
         let top = self.tree_top();
         let bottom = b.bottom();
         let tree_w = self.columns.first().map_or(b.w, |c| self.s(c.width));
+        // 선택·hover 폭 — 열 합까지만(`fit_columns`) 또는 전폭.
+        let row_w = self.hit_width();
         for (i, row) in self.rows().iter().enumerate() {
             let y = top - self.scroll_y + rh * i as i32;
             if y < top || y + rh > bottom {
@@ -720,7 +742,7 @@ impl Widget for TreeGrid {
             }
             if i == self.selected {
                 ctx.fill_rect(
-                    Rect::new(b.x, y, b.w, rh),
+                    Rect::new(b.x, y, row_w, rh),
                     if self.is_active() {
                         theme.sel_bg
                     } else {
@@ -731,7 +753,7 @@ impl Widget for TreeGrid {
             // ★ hover는 **행 전체**에 얹는다(첫 열만 밝아지면 행이 잘려 보인다).
             let a = hover_alpha(i == self.selected, self.hover.value(i));
             if a > 0.0 {
-                ctx.fill_rect_alpha(Rect::new(b.x, y, b.w, rh), theme.text, a);
+                ctx.fill_rect_alpha(Rect::new(b.x, y, row_w, rh), theme.text, a);
             }
             // 첫 열 = 트리 셀(배경·hover 재도색 방지 — 위에서 이미 얹었다).
             let tree_cell = Rect::new(b.x - ox, y, tree_w, rh);

@@ -18,7 +18,7 @@ use nexa_ctl::{
     TreeModel, TreeNode, TreeView, Widget,
 };
 use nexa_fs::shell::{IconKey, IconService, Lookup};
-use nexa_fs::{Entry, History, Place, PlaceKind, SortKey};
+use nexa_fs::{Entry, History, ListHandle, ListMsg, ListOpts, Place, PlaceKind, SortKey};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -144,6 +144,16 @@ pub struct FilePicker {
     filters: Vec<FileFilter>,
     dir: PathBuf,
     entries: Vec<Entry>,
+    /// 현재 폴더 열거(백그라운드 · 배치 도착마다 목록 갱신 · Drop = 취소).
+    loader: Option<ListHandle>,
+    /// 지연 펼침 로더 — (그리드? · 노드 경로 · 모은 항목 · 핸들). 노드가 접히거나 목록이 바뀌면 버린다.
+    sub_loaders: Vec<SubLoad>,
+    /// 사이드바 장소 프로브(셰브론 유무).
+    probe: Option<ListHandle>,
+    /// 프로브 결과 — 경로 → (보여줄 자식 있음, 하위 폴더 있음). 폴더 이동 때 비운다.
+    probes: HashMap<PathBuf, (bool, bool)>,
+    /// 열거 끝난 뒤 선택할 이름(새 폴더·↑ 복귀).
+    select_after: Option<String>,
     /// 우클릭 메뉴(열기 · 경로/이름 복사 · 새 폴더 · 새로 고침 · 숨김 표시).
     menu: ContextMenu,
     menu_row: Option<usize>,
@@ -206,6 +216,23 @@ pub struct FilePicker {
 const CELL_PATH: usize = 3;
 const CELL_KIND: usize = 4;
 const CELL_EXT: usize = 5;
+
+/// 지연 펼침 로더 한 건.
+#[derive(Debug)]
+struct SubLoad {
+    /// 사이드바(폴더만)인가 · 아니면 목록 그리드.
+    sidebar: bool,
+    /// 대상 노드 경로(트리 인덱스).
+    node: Vec<usize>,
+    /// 지금까지 도착한 항목.
+    items: Vec<Entry>,
+    /// 새 배치가 있어 다시 반영해야 하는가.
+    dirty: bool,
+    handle: ListHandle,
+}
+
+/// 자리표시 자식이 "로딩 중"으로 바뀐 상태(같은 노드를 두 번 시작하지 않게).
+const LOADING: &str = "\u{0}loading";
 
 /// 폴더 트리 자리표시 자식(펼칠 때 실제 하위 폴더로 교체).
 const PENDING: &str = "\u{0}pending";
@@ -298,6 +325,11 @@ impl FilePicker {
             fallback_dir: Rc::new(fallback_icon(true)),
             fallback_file: Rc::new(fallback_icon(false)),
             icon_version: IconService::global().version(),
+            loader: None,
+            sub_loaders: Vec::new(),
+            probe: None,
+            probes: HashMap::new(),
+            select_after: None,
             labels,
         };
         p.rebuild_places();
@@ -388,7 +420,8 @@ impl FilePicker {
 
     /// 프레임 틱 — 다시 그려야 하면 true(아이콘/종류 이름 도착 포함).
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        self.apply_icon_updates()
+        self.poll_loaders()
+            | self.apply_icon_updates()
             | self.up_btn.tick(now_ms)
             | self.home_btn.tick(now_ms)
             | self.back_btn.tick(now_ms)
@@ -416,7 +449,8 @@ impl FilePicker {
     /// 애니메이션 진행 중(호스트가 타이머를 유지할 근거) — 아이콘 조회 중도 포함.
     #[must_use]
     pub fn animating(&self) -> bool {
-        self.icons_pending()
+        self.loading()
+            || self.icons_pending()
             || self.up_btn.is_animating()
             || self.home_btn.is_animating()
             || self.back_btn.is_animating()
@@ -490,16 +524,25 @@ impl FilePicker {
         *self.places_view.model_mut() = TreeModel::new(nodes);
         self.places_view.set_selected_row(usize::MAX);
         self.last_place_row = usize::MAX;
+        // 셰브론 유무는 백그라운드 프로브(장소 + 드라이브 + 최근 · 이미 아는 것은 제외).
+        let mut paths: Vec<PathBuf> = self.places.iter().map(|p| p.path.clone()).collect();
+        paths.extend(self.recent.iter().cloned());
+        paths.retain(|p| !self.probes.contains_key(p));
+        if !paths.is_empty() {
+            let opts = self.list_opts(true);
+            self.probe = Some(ListHandle::probe(paths, opts));
+        }
+        self.apply_probes();
     }
 
     /// 장소 가시 행 → 경로(그룹 행은 None).
     /// 폴더 노드 — `cells[0]` = 전체 경로 · 자리표시 자식 1개(펼치면 하위 폴더를 읽어 채운다 · 없으면 글리프 제거).
     /// 사이드바 폴더 노드 — 하위 **폴더**가 하나라도 있을 때만 자리표시 자식(= 셰브론) · 숨김 규칙은 현재 설정.
     fn folder_node(&self, label: String, path: &Path, icon: Rc<IconImage>) -> TreeNode {
-        let kids = if self.dir_has_subfolder(path) {
-            vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])]
-        } else {
-            Vec::new()
+        // 기본 = 셰브론(자리표시) · 프로브가 "하위 폴더 없음"이면 `apply_probes`가 지운다(UI 스레드 프로브 0).
+        let kids = match self.probes.get(path) {
+            Some(&(_, has_dir)) if !has_dir => Vec::new(),
+            _ => vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])],
         };
         let mut n = TreeNode::branch(label, kids)
             .with_cells(vec![path.to_string_lossy().into_owned()])
@@ -540,25 +583,26 @@ impl FilePicker {
         if todo.is_empty() {
             return;
         }
+        let _ = (show_hidden, show_dot, folder_icon);
         for path in todo {
             let Some(dir) = Self::node_at(&self.places_view.model().roots, &path)
                 .and_then(|n| n.cells.first().cloned())
             else {
                 continue;
             };
-            let mut subs: Vec<Entry> = nexa_fs::list_opts(Path::new(&dir), show_hidden, show_dot)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|e| e.is_dir)
-                .collect();
-            nexa_fs::sort_by(&mut subs, &[]);
-            let kids: Vec<TreeNode> = subs
-                .iter()
-                .map(|e| self.folder_node(e.name.clone(), &e.path, folder_icon.clone()))
-                .collect();
             if let Some(n) = Self::node_at_mut(&mut self.places_view.model_mut().roots, &path) {
-                n.children = kids; // 비면 자식 0 = 글리프 없음(dir2 X-43)
+                if let Some(c) = n.children.first_mut() {
+                    c.cells = vec![LOADING.into()];
+                }
             }
+            let opts = self.list_opts(true);
+            self.sub_loaders.push(SubLoad {
+                sidebar: true,
+                node: path,
+                items: Vec::new(),
+                dirty: false,
+                handle: ListHandle::start(PathBuf::from(dir), opts),
+            });
         }
     }
 
@@ -793,22 +837,206 @@ impl FilePicker {
 
     /// 히스토리에 넣지 않는 이동(뒤로/앞으로) — 성공하면 true.
     fn go_no_history(&mut self, dir: &Path) -> bool {
-        match nexa_fs::list_opts(dir, self.show_hidden, self.show_dot) {
-            Ok(entries) => {
-                self.dir = dir.to_path_buf();
-                self.entries = entries;
-                self.message = None;
-                self.pending_overwrite = None;
-                self.path_box.set_text(&nexa_fs::path::display(&self.dir));
-                self.end_path_edit();
-                self.refresh_grid(0);
-                true
-            }
-            Err(e) => {
-                self.message = Some((format!("{} — {e}", self.labels.err_list), true));
-                false
+        if !nexa_fs::is_virtual_root(dir) && !dir.is_dir() {
+            self.message = Some((self.labels.err_list.clone(), true));
+            return false;
+        }
+        self.dir = dir.to_path_buf();
+        self.entries.clear();
+        self.probes.clear();
+        self.sub_loaders.clear(); // Drop = 취소
+        self.message = None;
+        self.pending_overwrite = None;
+        self.path_box.set_text(&nexa_fs::path::display(&self.dir));
+        self.end_path_edit();
+        self.refresh_grid(0);
+        self.start_loader();
+        true
+    }
+
+    fn list_opts(&self, dirs_only: bool) -> ListOpts {
+        ListOpts {
+            show_hidden: self.show_hidden,
+            show_dot: self.show_dot,
+            exts: self.current_filter().exts.clone(),
+            dirs_only,
+            batch: 0,
+            skip_probe: false,
+        }
+    }
+
+    /// 현재 폴더 열거를 백그라운드로 시작(이전 것은 Drop으로 취소).
+    fn start_loader(&mut self) {
+        let opts = self.list_opts(false);
+        self.loader = Some(ListHandle::start(self.dir.clone(), opts));
+    }
+
+    /// 열거 진행 중인가(호스트 타이머 유지 근거).
+    fn loading(&self) -> bool {
+        self.loader.as_ref().is_some_and(|h| !h.is_done())
+            || self.sub_loaders.iter().any(|l| !l.handle.is_done())
+            || self.probe.as_ref().is_some_and(|h| !h.is_done())
+    }
+
+    /// 로더 메시지 소비(프레임당 상한 — UI가 막히지 않게) · 바뀌었으면 true.
+    fn poll_loaders(&mut self) -> bool {
+        const MAX_MSGS: usize = 8;
+        let mut changed = false;
+        // 현재 폴더.
+        let mut got_batch = false;
+        let mut finished: Option<Result<usize, String>> = None;
+        if let Some(h) = self.loader.as_mut() {
+            for _ in 0..MAX_MSGS {
+                match h.try_recv() {
+                    Some(ListMsg::Batch(v)) => {
+                        self.entries.extend(v);
+                        got_batch = true;
+                    }
+                    Some(ListMsg::Probe(p, a, b)) => {
+                        self.probes.insert(p, (a, b));
+                        changed = true;
+                    }
+                    Some(ListMsg::Done(r)) => {
+                        finished = Some(r);
+                        break;
+                    }
+                    None => break,
+                }
             }
         }
+        if got_batch || finished.is_some() {
+            let sel = self.grid.selected_row();
+            self.refresh_grid(sel);
+            changed = true;
+        }
+        if let Some(r) = finished {
+            match r {
+                Ok(_) => {
+                    if let Some(name) = self.select_after.take() {
+                        self.select_name(&name);
+                    }
+                }
+                Err(e) => {
+                    self.message = Some((format!("{} — {e}", self.labels.err_list), true));
+                }
+            }
+        }
+        // 프로브 결과를 행에 반영(자식 없음 = 셰브론 제거 · 사이드바는 하위 폴더 기준).
+        if changed {
+            self.apply_probes();
+        }
+        // 지연 펼침 로더들.
+        let mut done_idx: Vec<usize> = Vec::new();
+        for (i, l) in self.sub_loaders.iter_mut().enumerate() {
+            for _ in 0..MAX_MSGS {
+                match l.handle.try_recv() {
+                    Some(ListMsg::Batch(v)) => {
+                        l.items.extend(v);
+                        l.dirty = true;
+                    }
+                    Some(ListMsg::Probe(p, a, b)) => {
+                        self.probes.insert(p, (a, b));
+                        changed = true;
+                    }
+                    Some(ListMsg::Done(_)) => {
+                        l.dirty = true;
+                        done_idx.push(i);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+        let dirty: Vec<usize> = self
+            .sub_loaders
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.dirty)
+            .map(|(i, _)| i)
+            .collect();
+        for i in dirty {
+            self.apply_sub_loader(i);
+            changed = true;
+        }
+        for i in done_idx.into_iter().rev() {
+            if i < self.sub_loaders.len() {
+                self.sub_loaders.remove(i);
+            }
+        }
+        // 사이드바 프로브.
+        let mut probe_changed = false;
+        if let Some(h) = self.probe.as_mut() {
+            for _ in 0..MAX_MSGS {
+                match h.try_recv() {
+                    Some(ListMsg::Probe(p, a, b)) => {
+                        self.probes.insert(p, (a, b));
+                        probe_changed = true;
+                    }
+                    Some(ListMsg::Done(_)) | None => break,
+                    Some(ListMsg::Batch(_)) => {}
+                }
+            }
+        }
+        if probe_changed {
+            self.apply_probes();
+            changed = true;
+        }
+        changed
+    }
+
+    /// 프로브 결과 → 그리드/사이드바 노드의 자리표시 자식 제거(자식 없음 = 셰브론 없음).
+    fn apply_probes(&mut self) {
+        fn walk(nodes: &mut [TreeNode], probes: &HashMap<PathBuf, (bool, bool)>, sidebar: bool) {
+            for n in nodes {
+                let key = if sidebar { 0 } else { CELL_PATH };
+                if let Some(p) = n.cells.get(key) {
+                    if !p.is_empty() && p != PENDING {
+                        if let Some(&(has_any, has_dir)) = probes.get(Path::new(p)) {
+                            let keep = if sidebar { has_dir } else { has_any };
+                            let placeholder = n.children.len() == 1
+                                && n.children[0].cells.first().map(String::as_str) == Some(PENDING);
+                            if !keep && placeholder {
+                                n.children.clear();
+                            }
+                        }
+                    }
+                }
+                walk(&mut n.children, probes, sidebar);
+            }
+        }
+        walk(&mut self.grid.model_mut().roots, &self.probes, false);
+        walk(&mut self.places_view.model_mut().roots, &self.probes, true);
+    }
+
+    /// 지연 펼침 결과를 그 노드의 자식으로(도착할 때마다 정렬해 교체 · 접혔으면 버린다).
+    fn apply_sub_loader(&mut self, i: usize) {
+        let (sidebar, path, mut items) = {
+            let l = &mut self.sub_loaders[i];
+            l.dirty = false;
+            (l.sidebar, l.node.clone(), l.items.clone())
+        };
+        nexa_fs::sort_by(&mut items, if sidebar { &[] } else { &self.sort_keys });
+        let kids: Vec<TreeNode> = if sidebar {
+            let folder = self.kind_icon(true, "");
+            items
+                .iter()
+                .filter(|e| e.is_dir)
+                .map(|e| self.folder_node(e.name.clone(), &e.path, folder.clone()))
+                .collect()
+        } else {
+            items.iter().map(|e| self.make_row(e)).collect()
+        };
+        let roots = if sidebar {
+            &mut self.places_view.model_mut().roots
+        } else {
+            &mut self.grid.model_mut().roots
+        };
+        if let Some(n) = Self::node_at_mut(roots, &path) {
+            if n.expanded {
+                n.children = kids;
+            }
+        }
+        self.apply_probes();
     }
 
     fn sync_nav_buttons(&mut self) {
@@ -875,11 +1103,20 @@ impl FilePicker {
     }
 
     fn reload(&mut self) {
-        let sel = self.grid.selected_row();
-        if let Ok(entries) = nexa_fs::list_opts(&self.dir, self.show_hidden, self.show_dot) {
-            self.entries = entries;
-        }
-        self.refresh_grid(sel);
+        let name = self
+            .grid
+            .rows()
+            .get(self.grid.selected_row())
+            .filter(|r| r.depth == 0)
+            .map(|r| r.label.clone());
+        self.select_after = name;
+        let dir = self.dir.clone();
+        self.entries.clear();
+        self.probes.clear();
+        self.sub_loaders.clear();
+        self.refresh_grid(0);
+        let _ = dir;
+        self.start_loader();
     }
 
     /// 필터·정렬 적용 → 그리드 모델 재구성(정렬 표시는 헤더 제목에).
@@ -926,11 +1163,11 @@ impl FilePicker {
         cells.push(ext);
         // ★ 현재 보기(숨김 · 확장자 필터)로 보여줄 자식이 없으면 셰브론 없음(dir2 X-43 · 사용자 09-15) —
         //   숨김 표시를 켜면 `reload`가 다시 판정해 바로 나타난다.
-        let exts = self.current_filter().exts.clone();
-        let children = if e.is_dir
-            && nexa_fs::has_visible_child(&e.path, self.show_hidden, self.show_dot, &exts)
-        {
-            vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])]
+        let children = if e.is_dir {
+            match self.probes.get(&e.path) {
+                Some(&(has_any, _)) if !has_any => Vec::new(),
+                _ => vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])],
+            }
         } else {
             Vec::new()
         };
@@ -939,11 +1176,6 @@ impl FilePicker {
             .with_image(icon);
         n.expanded = false;
         n
-    }
-
-    /// 하위 폴더가 있는가(사이드바 트리는 폴더만 보인다 · 첫 폴더에서 멈춤 · 숨김 규칙 = 현재 설정).
-    fn dir_has_subfolder(&self, path: &Path) -> bool {
-        nexa_fs::has_subfolder(path, self.show_hidden, self.show_dot)
     }
 
     /// 행의 숨은 셀 → (경로, 폴더?, 이름).
@@ -957,18 +1189,6 @@ impl FilePicker {
             PathBuf::from(path),
             cells.get(CELL_KIND).map(String::as_str) == Some("d"),
         ))
-    }
-
-    /// 폴더 항목의 자식(하위 폴더 + 필터에 맞는 파일 · 정렬 규약 동일).
-    fn children_of(&mut self, dir: &Path) -> Vec<TreeNode> {
-        let exts = self.current_filter().exts.clone();
-        let mut items: Vec<Entry> = nexa_fs::list_opts(dir, self.show_hidden, self.show_dot)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|e| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
-            .collect();
-        nexa_fs::sort_by(&mut items, &self.sort_keys);
-        items.iter().map(|e| self.make_row(e)).collect()
     }
 
     /// 펼쳐진 폴더 행 중 자리표시 자식만 가진 것을 지연 열거(사이드바와 같은 규약).
@@ -989,10 +1209,20 @@ impl FilePicker {
             }
         }
         for (path, dir) in todo {
-            let kids = self.children_of(&dir);
+            // 자리표시를 "로딩"으로 바꿔 두 번 시작하지 않게 · 로더는 백그라운드 · 결과는 tick에서.
             if let Some(n) = Self::node_at_mut(&mut self.grid.model_mut().roots, &path) {
-                n.children = kids;
+                if let Some(c) = n.children.first_mut() {
+                    c.cells = vec![LOADING.into()];
+                }
             }
+            let opts = self.list_opts(false);
+            self.sub_loaders.push(SubLoad {
+                sidebar: false,
+                node: path,
+                items: Vec::new(),
+                dirty: false,
+                handle: ListHandle::start(dir, opts),
+            });
         }
     }
 
@@ -1039,6 +1269,7 @@ impl FilePicker {
         }
         let focused = self.grid.is_focused();
         let mut grid = TreeGrid::new(TreeModel::new(nodes), cols);
+        grid.set_fit_columns(true); // 열 합 밖 = 빈 공간(선택·hover·클릭 없음 · 사용자 09-15)
         grid.set_scale(self.base.scale);
         grid.set_focused(focused);
         grid.set_selected_row(select.min(n_rows.saturating_sub(1)));
@@ -1210,7 +1441,7 @@ impl FilePicker {
         match std::fs::create_dir(self.dir.join(&name)) {
             Ok(()) => {
                 self.reload();
-                self.select_name(&name);
+                self.select_after = Some(name);
                 self.message = None;
             }
             Err(e) => self.message = Some((format!("{} — {e}", self.labels.err_mkdir), true)),
@@ -1253,25 +1484,25 @@ impl FilePicker {
             if self.show_dot { "✓" } else { "  " },
             self.labels.show_dot
         );
-        let items = vec![
-            CtxItem::maybe("open", self.labels.menu_open.clone(), has.is_some()),
-            CtxItem::maybe(
+        // 항목 위 = 항목 메뉴(열기·복사 + 폴더 메뉴) · 빈 공간 = 폴더 메뉴(새 폴더·새로 고침·표시 토글)만.
+        let mut items = Vec::new();
+        if has.is_some() {
+            items.push(CtxItem::item("open", self.labels.menu_open.clone()));
+            items.push(CtxItem::item(
                 "copy_path",
                 self.labels.menu_copy_path.clone(),
-                has.is_some(),
-            ),
-            CtxItem::maybe(
+            ));
+            items.push(CtxItem::item(
                 "copy_name",
                 self.labels.menu_copy_name.clone(),
-                has.is_some(),
-            ),
-            CtxItem::Separator,
-            CtxItem::item("new_folder", self.labels.new_folder.clone()),
-            CtxItem::item("refresh", self.labels.menu_refresh.clone()),
-            CtxItem::Separator,
-            CtxItem::item("hidden", hidden_label),
-            CtxItem::item("dot", dot_label),
-        ];
+            ));
+            items.push(CtxItem::Separator);
+        }
+        items.push(CtxItem::item("new_folder", self.labels.new_folder.clone()));
+        items.push(CtxItem::item("refresh", self.labels.menu_refresh.clone()));
+        items.push(CtxItem::Separator);
+        items.push(CtxItem::item("hidden", hidden_label));
+        items.push(CtxItem::item("dot", dot_label));
         self.menu.set_scale(self.base.scale);
         self.menu
             .open_at(x, y, items, self.base.bounds, self.s(170));
@@ -2101,6 +2332,23 @@ mod tests {
         }
     }
 
+    /// 백그라운드 열거가 끝날 때까지 틱을 돌린다(테스트 전용 · 5초 상한).
+    fn settle(p: &mut FilePicker) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            p.tick(0);
+            if !p.loading() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "열거가 5초 안에 끝나야 한다"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        p.tick(0);
+    }
+
     fn temp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("nexa-dlg-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -2113,7 +2361,7 @@ mod tests {
     #[test]
     fn filter_hides_other_extensions_and_keeps_folders() {
         let d = temp_dir("filter");
-        let p = FilePicker::new(
+        let mut p = FilePicker::new(
             PickerMode::Open,
             Some(&d),
             vec![
@@ -2122,6 +2370,7 @@ mod tests {
             ],
             labels(),
         );
+        settle(&mut p);
         let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
         assert_eq!(names, vec!["sub", "a.sql"]);
         let _ = std::fs::remove_dir_all(&d);

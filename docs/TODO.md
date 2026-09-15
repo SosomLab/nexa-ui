@@ -16,7 +16,7 @@
 ## 파일 관리 · 파일 대화상자([20](20-file-management-and-dialogs.md) · 사용자 09-14) — 3-OS 동일 UI · 계층 확장
 | ID | 우선 | 규모 | 항목 | 의존 | 상태 |
 |---|:--:|:--:|---|---|:--:|
-| **F-1** | P0 | 중 | `nexa-fs` — ✅ 09-15 places · list(숨김) · sort(자연 · 폴더 먼저) · naming · path(`~`·환경변수·상대) · local_time(FFI) · 테스트 6 · 잔여 = 배치/취소 열거 · kind 아이콘 키 · watch(dir2 `fsprobe.rs`) | D-5 | 🚧 |
+| **F-1** | P0 | 중 | `nexa-fs` — ✅ 09-15 places · list(숨김·점) · sort(자연 · 폴더 먼저 · 결합) · naming · path(`~`·환경변수·`$env:`·`shell:`·상대) · local_time(FFI) · ✅ **`lister`(배치 스트리밍 · 프로브 · 취소 = Drop)** · ✅ `shell` 아이콘 서비스 · 테스트 · 잔여 = watch(dir2 `fsprobe.rs`) | D-5 | 🚧 |
 | **F-2** | P0 | 소 | `nexa-ctl::Overlay` z 스택(Base→Popup→Modal · 모달 입력 독점) + Combo/CtxMenu 팝업 승격 | D-4 | ☐ |
 | **F-3** | P0 | 대 | 파일 컨트롤 6종 — 09-15 1차는 **기존 컨트롤 조립**(TextBox 경로/이름 · TreeView 장소 · TreeGrid 목록 · Combo 필터)으로 대체 · ✅ 브레드크럼+편집+⌂←→↑+`shell:`/`$env:` 별칭 · ✅ FileTree(장소 사이드바 = 지연 로딩 폴더 트리 · 빈 폴더 글리프 없음 · 셰브론 = 펼침만) · ✅ 목록 트리(폴더 인라인 펼침) · ✅ 우클릭 메뉴 · ✅ 가상 최상위 `::PC::`(3-OS) · 잔여 = PathBar/FileTree 독립 컨트롤 승격 · 자동완성(dir2 `suggest_folders`) · FileList 가상화(U-3 공유) · `docs/ctl` | F-1 U-2 D-8 | 🚧 |
 | **F-4** | P0 | 중 | `nexa-dlg` — ✅ 09-15 `FilePicker{Open·Save}` + 하단 부가 콤보(`set_extra` · 인코딩 등)(복합 컨트롤 · 라벨 주입 `PickerLabels` · 정렬·필터·숨김·새 폴더·덮어쓰기 2단 · 테스트 3) · 잔여 = OpenMany·Folder · Dialog 프레임·MessageBox·Prompt · 크기/보기 기억 | F-2 F-3 | 🚧 |

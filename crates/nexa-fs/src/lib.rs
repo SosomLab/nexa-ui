@@ -9,7 +9,10 @@
 //! 출처: nexa-dir2 `nexa-vfs`(`Entry`·`read_dir_entries`·`drive_entries`) · `nexa-tree`(정렬) · `nexa-app/pathinput.rs`(경로 입력) —
 //! 이름을 중립화해 **추출**한 것이다(재발명 아님 · docs/20 §7).
 
+pub mod lister;
 pub mod shell;
+
+pub use lister::{ListHandle, ListMsg, ListOpts};
 
 use std::cmp::Ordering;
 use std::fs;
@@ -125,40 +128,47 @@ pub fn list_opts(dir: &Path, show_hidden: bool, show_dot: bool) -> io::Result<Ve
     let mut out = Vec::new();
     for res in fs::read_dir(dir)? {
         let Ok(de) = res else { continue };
-        let name = de.file_name().to_string_lossy().into_owned();
-        let path = de.path();
-        // 링크는 대상 기준(폴더 링크는 폴더로 진입 가능해야 한다).
-        let meta = fs::metadata(&path).or_else(|_| de.metadata());
-        let (is_dir, size, modified, hidden) = match &meta {
-            Ok(m) => (
-                m.is_dir(),
-                if m.is_dir() { 0 } else { m.len() },
-                m.modified().ok(),
-                is_hidden_meta(m, &name),
-            ),
-            Err(_) => (
-                de.file_type().map(|t| t.is_dir()).unwrap_or(false),
-                0,
-                None,
-                name.starts_with('.'),
-            ),
-        };
-        if hidden && !show_hidden {
-            continue;
+        if let Some(e) = entry_of(&de, show_hidden, show_dot) {
+            out.push(e);
         }
-        if !show_dot && name.starts_with('.') {
-            continue;
-        }
-        out.push(Entry {
-            name,
-            path,
-            is_dir,
-            size,
-            modified,
-            hidden,
-        });
     }
     Ok(out)
+}
+
+/// `DirEntry` → [`Entry`](숨김·점 규칙 적용 · 걸러지면 `None`). 동기 열거와 백그라운드 열거가 같은 규칙을 쓴다.
+pub(crate) fn entry_of(de: &fs::DirEntry, show_hidden: bool, show_dot: bool) -> Option<Entry> {
+    let name = de.file_name().to_string_lossy().into_owned();
+    let path = de.path();
+    // 링크는 대상 기준(폴더 링크는 폴더로 진입 가능해야 한다).
+    let meta = fs::metadata(&path).or_else(|_| de.metadata());
+    let (is_dir, size, modified, hidden) = match &meta {
+        Ok(m) => (
+            m.is_dir(),
+            if m.is_dir() { 0 } else { m.len() },
+            m.modified().ok(),
+            is_hidden_meta(m, &name),
+        ),
+        Err(_) => (
+            de.file_type().map(|t| t.is_dir()).unwrap_or(false),
+            0,
+            None,
+            name.starts_with('.'),
+        ),
+    };
+    if hidden && !show_hidden {
+        return None;
+    }
+    if !show_dot && name.starts_with('.') {
+        return None;
+    }
+    Some(Entry {
+        name,
+        path,
+        is_dir,
+        size,
+        modified,
+        hidden,
+    })
 }
 
 /// 현재 보기 규칙(숨김 · 확장자 필터)으로 **보여줄 자식이 하나라도 있는가** — 첫 일치에서 멈추는 프로브
