@@ -643,29 +643,25 @@ impl FilePicker {
             match keys.iter().position(|(kk, _)| *kk == k) {
                 Some(i) => {
                     let arrow = if keys[i].1 { "▼" } else { "▲" };
+                    // 결과 그리드와 같은 배지: ▲/▼ + 결합 순번(키 2개 이상) · 헤더 오른쪽 끝 accent.
                     if keys.len() > 1 {
-                        format!(" {arrow}{}", i + 1)
+                        format!("{arrow}{}", i + 1)
                     } else {
-                        format!(" {arrow}")
+                        arrow.to_string()
                     }
                 }
                 None => String::new(),
             }
         };
-        let mut cols = vec![GridColumn::new(
-            format!("{}{}", self.labels.col_name, mark(SortKey::Name)),
-            self.col_w[0],
-        )];
+        let mut cols = vec![GridColumn::new(self.labels.col_name.clone(), self.col_w[0])
+            .with_badge(mark(SortKey::Name))];
         for &c in &self.col_order {
             let (label, k) = match c {
                 1 => (&self.labels.col_modified, SortKey::Modified),
                 2 => (&self.labels.col_size, SortKey::Size),
                 _ => (&self.labels.col_kind, SortKey::Kind),
             };
-            cols.push(GridColumn::new(
-                format!("{label}{}", mark(k)),
-                self.col_w[c],
-            ));
+            cols.push(GridColumn::new(label.clone(), self.col_w[c]).with_badge(mark(k)));
         }
         let focused = self.grid.is_focused();
         let mut grid = TreeGrid::new(TreeModel::new(nodes), cols);

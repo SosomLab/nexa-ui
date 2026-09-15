@@ -538,14 +538,25 @@ pub struct GridColumn {
     pub title: String,
     /// 열 폭(논리 px).
     pub width: i32,
+    /// 헤더 오른쪽 끝 배지(정렬 ▲/▼ + 결합 순번 · accent 색 · nexa-sql 결과 그리드와 같은 모양 · 09-15).
+    pub badge: Option<String>,
 }
 
 impl GridColumn {
+    /// 배지 붙이기(빌더 · 빈 문자열 = 없음).
+    #[must_use]
+    pub fn with_badge(mut self, badge: impl Into<String>) -> Self {
+        let b: String = badge.into();
+        self.badge = (!b.is_empty()).then_some(b);
+        self
+    }
+
     /// (제목, 폭).
     pub fn new(title: impl Into<String>, width: i32) -> Self {
         Self {
             title: title.into(),
             width,
+            badge: None,
         }
     }
 }
@@ -674,7 +685,17 @@ impl Widget for TreeGrid {
         let hty = header.y + (header.h - ctx.text_height()) / 2; // 상·하 여백 동일(실측)
         for col in &self.columns {
             let w = self.s(col.width);
-            ctx.text(cx + self.s(8), hty, header, &col.title, theme.text_dim);
+            let cell = Rect::new(cx, header.y, w, header.h).intersection(&header);
+            // 배지(정렬 표시) — 오른쪽 끝 · accent · 제목은 배지 폭만큼 잘라 그린다.
+            let title_clip = if let Some(bd) = &col.badge {
+                let bw = ctx.text_width(bd);
+                ctx.text(cx + w - self.s(8) - bw, hty, cell, bd, theme.accent);
+                Rect::new(cx, header.y, (w - bw - self.s(16)).max(0), header.h)
+                    .intersection(&header)
+            } else {
+                cell
+            };
+            ctx.text(cx + self.s(8), hty, title_clip, &col.title, theme.text_dim);
             cx += w;
             ctx.fill_rect(Rect::new(cx - 1, header.y, 1, b.h), theme.border);
         }
