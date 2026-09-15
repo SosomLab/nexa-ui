@@ -13,10 +13,7 @@
 //!
 //! 확장: 열을 늘리거나(그리드) 셀 렌더를 바꿔도 트리 로직은 그대로 재사용된다(추상 레벨 연결).
 
-use super::{
-    draw_chevron_down, draw_chevron_right, image_fit_contain, BorderSpec, Control, ControlBase,
-    ScrollBars,
-};
+use super::{image_fit_contain, BorderSpec, Control, ControlBase, ScrollBars};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::Rect;
@@ -300,15 +297,18 @@ pub trait TreeControl: Control {
             ctx.fill_rect_alpha(cell, theme.text, a);
         }
         let chev_x = cell.x + self.s(4) + self.s(INDENT) * row.depth as i32;
-        let cy = cell.y + (cell.h - self.s(CHEV_W)) / 2;
-        let chev = Rect::new(chev_x, cy, self.s(CHEV_W), self.s(CHEV_W));
+        // dir2 파일 그리드와 같은 90° 셰브론 · 크기 = 글꼴 높이 · 접힘 = 흐림 · 펼침/hover = 본문색(사용자 09-15).
+        ctx.select_font(FontSlot::Base, false);
+        let cw = ctx.text_height().max(self.s(CHEV_W));
+        let cy = cell.y + (cell.h - cw) / 2;
+        let chev = Rect::new(chev_x, cy, cw, cw);
         if row.has_children {
-            let color = theme.text_dim;
-            if row.expanded {
-                draw_chevron_down(ctx, chev, color);
+            let color = if row.expanded || hover > 0.0 {
+                theme.text
             } else {
-                draw_chevron_right(ctx, chev, color);
-            }
+                theme.text_dim
+            };
+            super::draw_chevron_90(ctx, chev, color, row.expanded);
         }
         let mut tx = chev.right() + self.s(4);
         // 선행 이미지(옵션 · 셰브론과 별개) — 공용 아이콘 크기(콤보/버튼과 동일 원천).

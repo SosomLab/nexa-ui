@@ -663,6 +663,32 @@ pub fn draw_chevron_down(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
 }
 
 /// 오른쪽 셰브론(›) — 트리 접힘 표식. 아래 셰브론(∨)과 같은 세트 크기(h/5 · 사용자 확정).
+/// ★ 펼침/접힘 셰브론(nexa-dir2 파일 그리드와 같은 모양 · 꺾임 **90°** · 사용자 09-15 "dir2 모양 그대로").
+/// `area` 한 변 = 글꼴 높이 정도 · 다리 길이 = 변의 0.32 · `expanded` = ∨ · 아니면 ›. 색은 호출자(접힘 = 흐림 · 펼침/hover = 본문).
+pub fn draw_chevron_90(ctx: &mut dyn DrawCtx, area: Rect, color: Color, expanded: bool) {
+    let cx = area.x + area.w / 2;
+    let cy = area.y + area.h / 2;
+    let len = (area.w as f32 * 0.32).max(3.0);
+    let half_t = 45.0_f32.to_radians();
+    let a = (len * half_t.cos()).round() as i32;
+    let b = (len * half_t.sin()).round() as i32;
+    let w = (area.w as f32 / 10.0).max(1.5);
+    let pts = if expanded {
+        [
+            (cx - b, cy - a / 2),
+            (cx, cy + a - a / 2),
+            (cx + b, cy - a / 2),
+        ]
+    } else {
+        [
+            (cx - a / 2, cy - b),
+            (cx + a - a / 2, cy),
+            (cx - a / 2, cy + b),
+        ]
+    };
+    ctx.polyline(&pts, color, w);
+}
+
 pub fn draw_chevron_right(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
     let cx = area.x + area.w / 2;
     let cy = area.y + area.h / 2;

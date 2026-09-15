@@ -74,9 +74,49 @@ fn is_hidden_meta(_m: &fs::Metadata, name: &str) -> bool {
     name.starts_with('.')
 }
 
+/// 가상 최상위("내 PC" · nexa-dir2 X-17 `::PC::` 이식 · 사용자 09-15) — 콜론은 파일명에 못 쓰는 문자라 실제 경로와 충돌하지 않는다.
+/// 여기를 열면 [`drives`]가 항목이 된다(Windows `C:\` · macOS `/`·`/Volumes/*` · Linux `/`·`/media/$USER/*`·`/mnt/*`) —
+/// 세 OS 모두 "루트 위"가 생겨 ↑가 막히지 않는다.
+pub const VIRTUAL_ROOT: &str = "::PC::";
+
+/// `p`가 가상 최상위인가.
+#[must_use]
+pub fn is_virtual_root(p: &Path) -> bool {
+    p.as_os_str() == VIRTUAL_ROOT
+}
+
+/// 드라이브/볼륨 항목(가상 최상위의 내용).
+#[must_use]
+pub fn drive_entries() -> Vec<Entry> {
+    drives()
+        .into_iter()
+        .map(|p| {
+            let name = if p.parent().is_none() {
+                // 루트(`C:\` · `/`) — 표기 그대로.
+                p.to_string_lossy().into_owned()
+            } else {
+                p.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
+            };
+            Entry {
+                name,
+                path: p,
+                is_dir: true,
+                size: 0,
+                modified: None,
+                hidden: false,
+            }
+        })
+        .collect()
+}
+
 /// 폴더 열거 — 한 항목의 실패(권한 등)가 전체를 막지 않는다(메타데이터 실패 = 크기·시각만 기본값).
-/// `show_hidden`이 거짓이면 숨김 항목을 뺀다.
+/// `show_hidden`이 거짓이면 숨김 항목을 뺀다. 가상 최상위는 드라이브 목록.
 pub fn list(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
+    if is_virtual_root(dir) {
+        return Ok(drive_entries());
+    }
     let mut out = Vec::new();
     for res in fs::read_dir(dir)? {
         let Ok(de) = res else { continue };
@@ -554,9 +594,15 @@ pub mod path {
     /// 브레드크럼 — 루트부터 `p`까지의 조상 목록(각각 전체 경로).
     #[must_use]
     pub fn parent_chain(p: &Path) -> Vec<PathBuf> {
-        let mut chain: Vec<PathBuf> = p.ancestors().map(Path::to_path_buf).collect();
-        chain.reverse();
-        chain.retain(|c| !c.as_os_str().is_empty());
+        // 맨 앞은 언제나 가상 최상위(탐색기 "내 PC ›" · 루트에서 ↑가 여기로 간다).
+        let mut chain = vec![PathBuf::from(crate::VIRTUAL_ROOT)];
+        if crate::is_virtual_root(p) {
+            return chain;
+        }
+        let mut anc: Vec<PathBuf> = p.ancestors().map(Path::to_path_buf).collect();
+        anc.reverse();
+        anc.retain(|c| !c.as_os_str().is_empty());
+        chain.extend(anc);
         chain
     }
 }

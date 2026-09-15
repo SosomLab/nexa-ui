@@ -10,7 +10,7 @@
 //! 파일명 상자 Enter = 확정 · 확장자 필터 · 숨김 표시 · 새 폴더 · 저장은 **덮어쓰기 2단 확인**(같은 이름으로 한 번 더) ·
 //! 확장자 자동 부여 · 파일명 규칙 즉시 검증.
 
-use nexa_ctl::controls::LabelSide;
+use nexa_ctl::controls::{ContextMenu, CtxItem, LabelSide};
 use nexa_ctl::IconImage;
 use nexa_ctl::{
     Button, Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, DrawCtx, FontSlot,
@@ -92,8 +92,10 @@ pub struct PickerLabels {
     pub place_documents: String,
     /// 장소 라벨.
     pub place_downloads: String,
-    /// 장소 그룹.
+    /// 장소 그룹(= 가상 최상위 "내 PC" · 클릭 = 드라이브 목록).
     pub place_drives: String,
+    /// 드라이브 행의 종류 셀.
+    pub kind_drive: String,
     /// 장소 그룹.
     pub place_recent: String,
     /// 경로 상자 placeholder.
@@ -108,6 +110,14 @@ pub struct PickerLabels {
     pub err_list: String,
     /// 오류 — 새 폴더 실패.
     pub err_mkdir: String,
+    /// 우클릭 메뉴 — 열기.
+    pub menu_open: String,
+    /// 우클릭 메뉴 — 경로 복사.
+    pub menu_copy_path: String,
+    /// 우클릭 메뉴 — 이름 복사.
+    pub menu_copy_name: String,
+    /// 우클릭 메뉴 — 새로 고침.
+    pub menu_refresh: String,
 }
 
 /// 선택기 결과(1회성 · [`FilePicker::take_action`]).
@@ -119,6 +129,8 @@ pub enum PickerAction {
     Confirm(PathBuf),
     /// 취소.
     Cancel,
+    /// 클립보드에 쓸 텍스트(경로/이름 복사 — 클립보드는 호스트 몫).
+    CopyText(String),
 }
 
 /// 파일 선택기 — 컨트롤 6개를 한 패널에 조립한 **복합 컨트롤**.
@@ -130,8 +142,9 @@ pub struct FilePicker {
     filters: Vec<FileFilter>,
     dir: PathBuf,
     entries: Vec<Entry>,
-    /// 필터·정렬을 거친 표시 목록(그리드 행 ↔ 인덱스).
-    shown: Vec<usize>,
+    /// 우클릭 메뉴(열기 · 경로/이름 복사 · 새 폴더 · 새로 고침 · 숨김 표시).
+    menu: ContextMenu,
+    menu_row: Option<usize>,
     /// 결합 정렬 키(클릭 = 단일 3단 ▲→▼→해제 · Shift+클릭 = 키 추가/방향/제거 · 비면 이름 ▲ · 결과 그리드와 같은 규약).
     sort_keys: Vec<(SortKey, bool)>,
     /// 표시 순서(논리 컬럼 1=수정 · 2=크기 · 3=유형 · 이름은 항상 첫 열) — 헤더 드래그로 바꾼다.
@@ -185,6 +198,11 @@ pub struct FilePicker {
     icon_version: u64,
 }
 
+/// 그리드 행 숨은 셀 위치(보이는 3열 뒤): 경로 · `d`/`f` · 확장자.
+const CELL_PATH: usize = 3;
+const CELL_KIND: usize = 4;
+const CELL_EXT: usize = 5;
+
 /// 폴더 트리 자리표시 자식(펼칠 때 실제 하위 폴더로 교체).
 const PENDING: &str = "\u{0}pending";
 
@@ -234,7 +252,8 @@ impl FilePicker {
             filters,
             dir: dir.clone(),
             entries: Vec::new(),
-            shown: Vec::new(),
+            menu: ContextMenu::new(),
+            menu_row: None,
             sort_keys: Vec::new(),
             col_order: vec![2, 1, 3],
             hdr_drag: None,
@@ -337,7 +356,7 @@ impl FilePicker {
     /// 콤보 드롭다운·편집 메뉴가 열려 있는가(호스트 Esc 가드).
     #[must_use]
     pub fn popup_open(&self) -> bool {
-        self.filter_combo.is_open() || self.extra_open() || self.path_editing
+        self.filter_combo.is_open() || self.extra_open() || self.path_editing || self.menu.is_open()
     }
 
     /// 프레임 틱 — 다시 그려야 하면 true(아이콘/종류 이름 도착 포함).
@@ -424,7 +443,9 @@ impl FilePicker {
             drives.push(Self::folder_node(p.name.clone(), &p.path, img));
         }
         if !drives.is_empty() {
-            let mut b = TreeNode::branch(self.labels.place_drives.clone(), drives);
+            // 그룹 행 자체가 가상 최상위(클릭 = 드라이브 목록 · 탐색기 "내 PC").
+            let mut b = TreeNode::branch(self.labels.place_drives.clone(), drives)
+                .with_cells(vec![nexa_fs::VIRTUAL_ROOT.into()]);
             b.expanded = true;
             nodes.push(b);
         }
@@ -579,26 +600,77 @@ impl FilePicker {
         }
         self.icon_version = v;
         let mut changed = false;
-        let shown = self.shown.clone();
-        for (row, &i) in shown.iter().enumerate() {
-            let (is_dir, ext) = (self.entries[i].is_dir, self.entries[i].ext());
-            let img = self.kind_icon(is_dir, &ext);
-            let name = self.kind_name(is_dir, &ext);
-            if let Some(node) = self.grid.model_mut().roots.get_mut(row) {
-                if node.image.as_ref().map(Rc::as_ptr) != Some(Rc::as_ptr(&img)) {
-                    node.image = Some(img);
-                    changed = true;
+        // 트리 전체(펼친 하위 폴더 포함)의 (폴더?, 확장자) 조합 → 아이콘·종류 이름을 먼저 모은다(가변 차용 분리).
+        fn collect(nodes: &[TreeNode], out: &mut Vec<(bool, String)>) {
+            for n in nodes {
+                if n.cells
+                    .get(CELL_PATH)
+                    .is_some_and(|p| !p.is_empty() && p != PENDING)
+                {
+                    let is_dir = n.cells.get(CELL_KIND).map(String::as_str) == Some("d");
+                    let ext = n.cells.get(CELL_EXT).cloned().unwrap_or_default();
+                    out.push((is_dir, ext));
                 }
-                if let Some(n) = name {
-                    if node.cells.get(2) != Some(&n) {
-                        if let Some(c) = node.cells.get_mut(2) {
-                            *c = n;
-                            changed = true;
+                collect(&n.children, out);
+            }
+        }
+        let mut combos = Vec::new();
+        collect(&self.grid.model().roots, &mut combos);
+        combos.sort();
+        combos.dedup();
+        let mut icons: HashMap<(bool, String), Rc<IconImage>> = HashMap::new();
+        let mut names: HashMap<(bool, String), String> = HashMap::new();
+        for (is_dir, ext) in combos {
+            icons.insert((is_dir, ext.clone()), self.kind_icon(is_dir, &ext));
+            if let Some(k) = self.kind_name(is_dir, &ext) {
+                names.insert((is_dir, ext), k);
+            }
+        }
+        let kind_pos = self.col_order.iter().position(|&c| c == 3);
+        fn apply(
+            nodes: &mut [TreeNode],
+            icons: &HashMap<(bool, String), Rc<IconImage>>,
+            names: &HashMap<(bool, String), String>,
+            kind_pos: Option<usize>,
+            changed: &mut bool,
+        ) {
+            for n in nodes {
+                let is_drive = n
+                    .cells
+                    .get(CELL_PATH)
+                    .is_some_and(|p| std::path::Path::new(p).parent().is_none());
+                if !is_drive
+                    && n.cells
+                        .get(CELL_PATH)
+                        .is_some_and(|p| !p.is_empty() && p != PENDING)
+                {
+                    let is_dir = n.cells.get(CELL_KIND).map(String::as_str) == Some("d");
+                    let ext = n.cells.get(CELL_EXT).cloned().unwrap_or_default();
+                    if let Some(img) = icons.get(&(is_dir, ext.clone())) {
+                        if n.image.as_ref().map(Rc::as_ptr) != Some(Rc::as_ptr(img)) {
+                            n.image = Some(img.clone());
+                            *changed = true;
+                        }
+                    }
+                    if let (Some(k), Some(pos)) = (names.get(&(is_dir, ext)), kind_pos) {
+                        if n.cells.get(pos) != Some(k) {
+                            if let Some(c) = n.cells.get_mut(pos) {
+                                *c = k.clone();
+                                *changed = true;
+                            }
                         }
                     }
                 }
+                apply(&mut n.children, icons, names, kind_pos, changed);
             }
         }
+        apply(
+            &mut self.grid.model_mut().roots,
+            &icons,
+            &names,
+            kind_pos,
+            &mut changed,
+        );
         // 장소(특수 폴더·드라이브·최근) — 수가 적어 통째로 다시 만든다(선택 행 보존).
         let sel = self.places_view.selected_row();
         self.rebuild_places();
@@ -742,14 +814,17 @@ impl FilePicker {
         nexa_fs::path::parent_chain(&self.dir)
             .into_iter()
             .map(|p| {
-                let label = p
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| {
-                        p.to_string_lossy()
-                            .trim_end_matches(['\\', '/'])
-                            .to_string()
-                    });
+                let label = if nexa_fs::is_virtual_root(&p) {
+                    self.labels.place_drives.clone()
+                } else {
+                    p.file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| {
+                            p.to_string_lossy()
+                                .trim_end_matches(['\\', '/'])
+                                .to_string()
+                        })
+                };
                 (label, p)
             })
             .collect()
@@ -777,77 +852,120 @@ impl FilePicker {
     }
 
     /// 필터·정렬 적용 → 그리드 모델 재구성(정렬 표시는 헤더 제목에).
+    /// 항목 → 그리드 행(보이는 셀 = 표시 순서 · **숨은 셀** = 경로 · `d`/`f` · 확장자 — 열 수보다 많은 셀은 그리드가 무시한다).
+    /// 폴더는 자리표시 자식을 가져 인라인으로 펼쳐진다(dir2 파일 그리드 · 사용자 09-15).
+    fn make_row(&mut self, e: &Entry) -> TreeNode {
+        let modified = e
+            .modified
+            .map(|t| nexa_fs::local_time(t).short())
+            .unwrap_or_default();
+        let size = if e.is_dir {
+            String::new()
+        } else {
+            nexa_fs::fmt_size(e.size)
+        };
+        let ext = e.ext();
+        let is_drive = e.is_dir && e.path.parent().is_none();
+        let kind = if is_drive {
+            self.labels.kind_drive.clone()
+        } else {
+            self.kind_name(e.is_dir, &ext).unwrap_or_else(|| {
+                if e.is_dir {
+                    self.labels.kind_folder.clone()
+                } else if ext.is_empty() {
+                    self.labels.kind_file.clone()
+                } else {
+                    format!("{} {}", ext.to_uppercase(), self.labels.kind_file)
+                }
+            })
+        };
+        let icon = if is_drive {
+            self.path_icon(&e.path)
+        } else {
+            self.kind_icon(e.is_dir, &ext)
+        };
+        let logical = [modified, size, kind];
+        let mut cells: Vec<String> = self
+            .col_order
+            .iter()
+            .map(|&c| logical[c - 1].clone())
+            .collect();
+        cells.push(e.path.to_string_lossy().into_owned());
+        cells.push(if e.is_dir { "d".into() } else { "f".into() });
+        cells.push(ext);
+        let children = if e.is_dir {
+            vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])]
+        } else {
+            Vec::new()
+        };
+        let mut n = TreeNode::branch(e.name.clone(), children)
+            .with_cells(cells)
+            .with_image(icon);
+        n.expanded = false;
+        n
+    }
+
+    /// 행의 숨은 셀 → (경로, 폴더?, 이름).
+    fn row_item(cells: &[String], label: &str) -> Option<(PathBuf, bool)> {
+        let path = cells.get(CELL_PATH)?;
+        if path.is_empty() || path == PENDING {
+            return None;
+        }
+        let _ = label;
+        Some((
+            PathBuf::from(path),
+            cells.get(CELL_KIND).map(String::as_str) == Some("d"),
+        ))
+    }
+
+    /// 폴더 항목의 자식(하위 폴더 + 필터에 맞는 파일 · 정렬 규약 동일).
+    fn children_of(&mut self, dir: &Path) -> Vec<TreeNode> {
+        let exts = self.current_filter().exts.clone();
+        let mut items: Vec<Entry> = nexa_fs::list(dir, self.show_hidden)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
+            .collect();
+        nexa_fs::sort_by(&mut items, &self.sort_keys);
+        items.iter().map(|e| self.make_row(e)).collect()
+    }
+
+    /// 펼쳐진 폴더 행 중 자리표시 자식만 가진 것을 지연 열거(사이드바와 같은 규약).
+    fn lazy_load_grid(&mut self) {
+        let mut todo: Vec<(Vec<usize>, PathBuf)> = Vec::new();
+        for row in self.grid.rows() {
+            if !row.expanded {
+                continue;
+            }
+            if let Some(n) = Self::node_at(&self.grid.model().roots, &row.path) {
+                let pending = n.children.len() == 1
+                    && n.children[0].cells.first().map(String::as_str) == Some(PENDING);
+                if pending {
+                    if let Some(p) = n.cells.get(CELL_PATH) {
+                        todo.push((row.path.clone(), PathBuf::from(p)));
+                    }
+                }
+            }
+        }
+        for (path, dir) in todo {
+            let kids = self.children_of(&dir);
+            if let Some(n) = Self::node_at_mut(&mut self.grid.model_mut().roots, &path) {
+                n.children = kids;
+            }
+        }
+    }
+
     fn refresh_grid(&mut self, select: usize) {
         nexa_fs::sort_by(&mut self.entries, &self.sort_keys);
         let exts = self.current_filter().exts.clone();
-        self.shown = self
+        let top: Vec<Entry> = self
             .entries
             .iter()
-            .enumerate()
-            .filter(|(_, e)| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
-            .map(|(i, _)| i)
+            .filter(|e| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
+            .cloned()
             .collect();
-        // 아이콘·OS 종류 이름 — 표시 항목의 (폴더?, 확장자) 조합마다 1회(캐시 · 디스크 접근 없음).
-        let mut icons: HashMap<(bool, String), Rc<IconImage>> = HashMap::new();
-        let mut kind_names: HashMap<(bool, String), String> = HashMap::new();
-        let combos: Vec<(bool, String)> = {
-            let mut v: Vec<(bool, String)> = self
-                .shown
-                .iter()
-                .map(|&i| (self.entries[i].is_dir, self.entries[i].ext()))
-                .collect();
-            v.sort();
-            v.dedup();
-            v
-        };
-        for (is_dir, ext) in combos {
-            let img = self.kind_icon(is_dir, &ext);
-            icons.insert((is_dir, ext.clone()), img);
-            if let Some(k) = self.kind_name(is_dir, &ext) {
-                kind_names.insert((is_dir, ext), k);
-            }
-        }
-        let nodes: Vec<TreeNode> = self
-            .shown
-            .iter()
-            .map(|&i| {
-                let e = &self.entries[i];
-                let modified = e
-                    .modified
-                    .map(|t| nexa_fs::local_time(t).short())
-                    .unwrap_or_default();
-                let size = if e.is_dir {
-                    String::new()
-                } else {
-                    nexa_fs::fmt_size(e.size)
-                };
-                let ext = e.ext();
-                let kind = kind_names
-                    .get(&(e.is_dir, ext.clone()))
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        if e.is_dir {
-                            self.labels.kind_folder.clone()
-                        } else if ext.is_empty() {
-                            self.labels.kind_file.clone()
-                        } else {
-                            format!("{} {}", ext.to_uppercase(), self.labels.kind_file)
-                        }
-                    });
-                let icon = icons.get(&(e.is_dir, ext)).cloned();
-                let logical = [modified, size, kind];
-                let cells: Vec<String> = self
-                    .col_order
-                    .iter()
-                    .map(|&c| logical[c - 1].clone())
-                    .collect();
-                let node = TreeNode::leaf(e.name.clone()).with_cells(cells);
-                match icon {
-                    Some(img) => node.with_image(img),
-                    None => node,
-                }
-            })
-            .collect();
+        let nodes: Vec<TreeNode> = top.iter().map(|e| self.make_row(e)).collect();
+        let n_rows = nodes.len();
         // 정렬 배지 — ▲/▼ + 결합 순번(키가 둘 이상일 때) · 키가 비면 이름 ▲.
         let keys = &self.sort_keys;
         let mark = |k: SortKey| -> String {
@@ -882,23 +1000,26 @@ impl FilePicker {
         let mut grid = TreeGrid::new(TreeModel::new(nodes), cols);
         grid.set_scale(self.base.scale);
         grid.set_focused(focused);
-        grid.set_selected_row(select.min(self.shown.len().saturating_sub(1)));
+        grid.set_selected_row(select.min(n_rows.saturating_sub(1)));
         let mut inv = Invalidations::default();
         grid.set_bounds(self.grid_rect, &mut inv);
         self.grid = grid;
         self.last_row_click = None;
     }
 
-    fn selected_entry(&self) -> Option<&Entry> {
-        let row = self.grid.selected_row();
-        self.shown.get(row).and_then(|&i| self.entries.get(i))
+    /// 선택 행 → (경로, 폴더?).
+    fn selected_item(&self) -> Option<(PathBuf, bool)> {
+        let rows = self.grid.rows();
+        let r = rows.get(self.grid.selected_row())?;
+        Self::row_item(&r.cells, &r.label)
     }
 
     fn select_name(&mut self, name: &str) {
         if let Some(row) = self
-            .shown
+            .grid
+            .rows()
             .iter()
-            .position(|&i| self.entries[i].name == name)
+            .position(|r| r.depth == 0 && r.label == name)
         {
             self.grid.set_selected_row(row);
         }
@@ -906,19 +1027,30 @@ impl FilePicker {
 
     /// 행 활성화(더블클릭·Enter) — 폴더 진입 / 파일 확정.
     fn activate_row(&mut self, row: usize) {
-        let Some(&i) = self.shown.get(row) else {
+        let rows = self.grid.rows();
+        let Some(r) = rows.get(row) else { return };
+        let Some((path, is_dir)) = Self::row_item(&r.cells, &r.label) else {
             return;
         };
-        let e = self.entries[i].clone();
-        if e.is_dir {
-            self.go(&e.path);
+        let name = r.label.clone();
+        if is_dir {
+            self.go(&path);
         } else {
-            self.name_box.set_text(&e.name);
+            // 펼친 하위 폴더 안 파일이면 그 폴더로 옮긴 뒤 확정(파일명 상자는 현재 폴더 기준).
+            if let Some(parent) = path.parent() {
+                if parent != self.dir {
+                    self.go(parent);
+                }
+            }
+            self.name_box.set_text(&name);
             self.confirm();
         }
     }
 
     fn go_up(&mut self) {
+        if nexa_fs::is_virtual_root(&self.dir) {
+            return;
+        }
         if let Some(parent) = self.dir.parent().map(Path::to_path_buf) {
             let child = self
                 .dir
@@ -928,13 +1060,24 @@ impl FilePicker {
             if let Some(c) = child {
                 self.select_name(&c);
             }
+        } else {
+            // 드라이브/볼륨 루트 위 = 가상 최상위(dir2 X-17 · 세 OS 동일).
+            let here = self.dir.clone();
+            self.go(Path::new(nexa_fs::VIRTUAL_ROOT));
+            let name = nexa_fs::drive_entries()
+                .into_iter()
+                .find(|e| e.path == here)
+                .map(|e| e.name);
+            if let Some(n) = name {
+                self.select_name(&n);
+            }
         }
     }
 
     /// 경로 상자 Enter — 폴더면 이동 · 파일이면 확정 · 없으면 오류.
     fn commit_path(&mut self, text: &str) {
         let p = nexa_fs::path::resolve(text, &self.dir);
-        if p.is_dir() {
+        if nexa_fs::is_virtual_root(&p) || p.is_dir() {
             self.go(&p);
         } else if p.is_file() {
             if let Some(parent) = p.parent() {
@@ -953,12 +1096,15 @@ impl FilePicker {
     fn confirm(&mut self) {
         let mut name = self.name_box.text().trim().to_string();
         if name.is_empty() {
-            if let Some(e) = self.selected_entry().cloned() {
-                if e.is_dir {
-                    self.go(&e.path);
+            if let Some((path, is_dir)) = self.selected_item() {
+                if is_dir {
+                    self.go(&path);
                     return;
                 }
-                name = e.name;
+                name = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
             } else {
                 return;
             }
@@ -1046,6 +1192,75 @@ impl FilePicker {
             1 => SortKey::Modified,
             2 => SortKey::Size,
             _ => SortKey::Kind,
+        }
+    }
+
+    /// 우클릭 메뉴(dir2 파일 그리드 관례): 열기 · 경로 복사 · 이름 복사 · ─ · 새 폴더 · 새로 고침 · ─ · 숨김 파일 표시(✓).
+    fn open_menu(&mut self, x: i32, y: i32) {
+        let has = self.menu_row.and_then(|r| {
+            let rows = self.grid.rows();
+            rows.get(r)
+                .and_then(|rr| Self::row_item(&rr.cells, &rr.label))
+        });
+        let hidden_label = format!(
+            "{} {}",
+            if self.show_hidden { "✓" } else { "  " },
+            self.labels.show_hidden
+        );
+        let items = vec![
+            CtxItem::maybe("open", self.labels.menu_open.clone(), has.is_some()),
+            CtxItem::maybe(
+                "copy_path",
+                self.labels.menu_copy_path.clone(),
+                has.is_some(),
+            ),
+            CtxItem::maybe(
+                "copy_name",
+                self.labels.menu_copy_name.clone(),
+                has.is_some(),
+            ),
+            CtxItem::Separator,
+            CtxItem::item("new_folder", self.labels.new_folder.clone()),
+            CtxItem::item("refresh", self.labels.menu_refresh.clone()),
+            CtxItem::Separator,
+            CtxItem::item("hidden", hidden_label),
+        ];
+        self.menu.set_scale(self.base.scale);
+        self.menu
+            .open_at(x, y, items, self.base.bounds, self.s(170));
+    }
+
+    fn menu_pick(&mut self, id: &str) {
+        let item = self.menu_row.and_then(|r| {
+            let rows = self.grid.rows();
+            rows.get(r).and_then(|rr| {
+                Self::row_item(&rr.cells, &rr.label).map(|(p, d)| (p, d, rr.label.clone()))
+            })
+        });
+        match id {
+            "open" => {
+                if let Some(r) = self.menu_row {
+                    self.activate_row(r);
+                }
+            }
+            "copy_path" => {
+                if let Some((p, _, _)) = item {
+                    self.action = PickerAction::CopyText(p.to_string_lossy().into_owned());
+                }
+            }
+            "copy_name" => {
+                if let Some((_, _, name)) = item {
+                    self.action = PickerAction::CopyText(name);
+                }
+            }
+            "new_folder" => self.make_new_folder(),
+            "refresh" => self.reload(),
+            "hidden" => {
+                self.show_hidden = !self.show_hidden;
+                self.hidden_chk.set_checked(self.show_hidden);
+                self.reload();
+            }
+            _ => {}
         }
     }
 
@@ -1360,6 +1575,20 @@ impl Widget for FilePicker {
                 | InputEvent::RightDown { .. }
         );
         let is_wheel = matches!(ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. });
+        // 열린 우클릭 메뉴 = 모달(바깥 클릭은 닫고 통과 · 항목 선택은 그 클릭으로 끝).
+        if self.menu.is_open() {
+            self.menu.set_scale(self.base.scale);
+            let consumed = self.menu.on_event(ev);
+            if let Some(id) = self.menu.take_picked() {
+                self.menu_pick(&id);
+                inv.push(self.base.bounds);
+                return;
+            }
+            if consumed || self.menu.is_open() || !matches!(ev, InputEvent::MouseDown { .. }) {
+                inv.push(self.base.bounds);
+                return;
+            }
+        }
         // 열린 콤보 = 모달(바깥 클릭은 닫고 그 클릭을 계속 진행 — 팝업 UX 규칙).
         if self.filter_combo.is_open() {
             self.filter_combo.on_event(ev, inv);
@@ -1577,24 +1806,45 @@ impl Widget for FilePicker {
                 }
                 InputEvent::Char { c: '\u{8}', .. } => self.go_up(),
                 InputEvent::MouseDown { x, y, .. } => {
+                    let hit = self.grid.row_hit(x, y);
                     self.grid.on_event(ev, inv);
-                    if let Some((row, _)) = self.grid.row_hit(x, y) {
-                        let now = Instant::now();
-                        let dbl = matches!(self.last_row_click, Some((r, t)) if r == row && now.duration_since(t) <= DOUBLE_CLICK);
-                        self.last_row_click = Some((row, now));
-                        if let Some(e) = self.selected_entry().cloned() {
-                            if !e.is_dir {
-                                self.name_box.set_text(&e.name);
-                                self.pending_overwrite = None;
-                            }
-                        }
-                        if dbl {
+                    self.lazy_load_grid();
+                    if let Some((row, on_chev)) = hit {
+                        if on_chev {
+                            // 셰브론 = 인라인 펼침/접힘만(더블클릭 체인·파일명 갱신 없음).
                             self.last_row_click = None;
-                            self.activate_row(row);
+                        } else {
+                            let now = Instant::now();
+                            let dbl = matches!(self.last_row_click, Some((r, t)) if r == row && now.duration_since(t) <= DOUBLE_CLICK);
+                            self.last_row_click = Some((row, now));
+                            if let Some((path, is_dir)) = self.selected_item() {
+                                if !is_dir {
+                                    if let Some(n) = path.file_name() {
+                                        self.name_box.set_text(&n.to_string_lossy());
+                                    }
+                                    self.pending_overwrite = None;
+                                }
+                            }
+                            if dbl {
+                                self.last_row_click = None;
+                                self.activate_row(row);
+                            }
                         }
                     }
                 }
-                _ => self.grid.on_event(ev, inv),
+                InputEvent::RightDown { x, y } => {
+                    if let Some((row, _)) = self.grid.row_hit(x, y) {
+                        self.grid.set_selected_row(row);
+                        self.menu_row = Some(row);
+                    } else {
+                        self.menu_row = None;
+                    }
+                    self.open_menu(x, y);
+                }
+                _ => {
+                    self.grid.on_event(ev, inv);
+                    self.lazy_load_grid();
+                }
             }
         }
         // 어디에도 포커스가 없을 때 Enter = 확정(OS 대화상자 관례).
@@ -1705,6 +1955,7 @@ impl Widget for FilePicker {
         if self.path_editing {
             self.path_box.paint_popup(ctx, theme);
         }
+        self.menu.paint(ctx, theme);
         self.name_box.paint_popup(ctx, theme);
     }
 }
@@ -1798,7 +2049,7 @@ mod tests {
             ],
             labels(),
         );
-        let names: Vec<String> = p.shown.iter().map(|&i| p.entries[i].name.clone()).collect();
+        let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
         assert_eq!(names, vec!["sub", "a.sql"]);
         let _ = std::fs::remove_dir_all(&d);
     }
