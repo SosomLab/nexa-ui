@@ -434,13 +434,13 @@ impl FilePicker {
         let mut std_places: Vec<TreeNode> = Vec::new();
         for p in places.iter().filter(|p| p.kind != PlaceKind::Drive) {
             let img = self.path_icon(&p.path);
-            std_places.push(Self::folder_node(label_of(p, &self.labels), &p.path, img));
+            std_places.push(self.folder_node(label_of(p, &self.labels), &p.path, img));
         }
         nodes.extend(std_places);
         let mut drives: Vec<TreeNode> = Vec::new();
         for p in places.iter().filter(|p| p.kind == PlaceKind::Drive) {
             let img = self.path_icon(&p.path);
-            drives.push(Self::folder_node(p.name.clone(), &p.path, img));
+            drives.push(self.folder_node(p.name.clone(), &p.path, img));
         }
         if !drives.is_empty() {
             // 그룹 행 자체가 가상 최상위(클릭 = 드라이브 목록 · 탐색기 "내 PC").
@@ -454,7 +454,7 @@ impl FilePicker {
             let kids: Vec<TreeNode> = self
                 .recent
                 .iter()
-                .map(|p| Self::folder_node(nexa_fs::path::display(p), p, folder.clone()))
+                .map(|p| self.folder_node(nexa_fs::path::display(p), p, folder.clone()))
                 .collect();
             let mut b = TreeNode::branch(self.labels.place_recent.clone(), kids);
             b.expanded = true;
@@ -467,13 +467,16 @@ impl FilePicker {
 
     /// 장소 가시 행 → 경로(그룹 행은 None).
     /// 폴더 노드 — `cells[0]` = 전체 경로 · 자리표시 자식 1개(펼치면 하위 폴더를 읽어 채운다 · 없으면 글리프 제거).
-    fn folder_node(label: String, path: &Path, icon: Rc<IconImage>) -> TreeNode {
-        let mut n = TreeNode::branch(
-            label,
-            vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])],
-        )
-        .with_cells(vec![path.to_string_lossy().into_owned()])
-        .with_image(icon);
+    /// 사이드바 폴더 노드 — 하위 **폴더**가 하나라도 있을 때만 자리표시 자식(= 셰브론) · 숨김 규칙은 현재 설정.
+    fn folder_node(&self, label: String, path: &Path, icon: Rc<IconImage>) -> TreeNode {
+        let kids = if self.dir_has_subfolder(path) {
+            vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])]
+        } else {
+            Vec::new()
+        };
+        let mut n = TreeNode::branch(label, kids)
+            .with_cells(vec![path.to_string_lossy().into_owned()])
+            .with_image(icon);
         n.expanded = false;
         n
     }
@@ -523,7 +526,7 @@ impl FilePicker {
             nexa_fs::sort_by(&mut subs, &[]);
             let kids: Vec<TreeNode> = subs
                 .iter()
-                .map(|e| Self::folder_node(e.name.clone(), &e.path, folder_icon.clone()))
+                .map(|e| self.folder_node(e.name.clone(), &e.path, folder_icon.clone()))
                 .collect();
             if let Some(n) = Self::node_at_mut(&mut self.places_view.model_mut().roots, &path) {
                 n.children = kids; // 비면 자식 0 = 글리프 없음(dir2 X-43)
@@ -893,7 +896,10 @@ impl FilePicker {
         cells.push(e.path.to_string_lossy().into_owned());
         cells.push(if e.is_dir { "d".into() } else { "f".into() });
         cells.push(ext);
-        let children = if e.is_dir {
+        // ★ 현재 보기(숨김 · 확장자 필터)로 보여줄 자식이 없으면 셰브론 없음(dir2 X-43 · 사용자 09-15) —
+        //   숨김 표시를 켜면 `reload`가 다시 판정해 바로 나타난다.
+        let exts = self.current_filter().exts.clone();
+        let children = if e.is_dir && nexa_fs::has_visible_child(&e.path, self.show_hidden, &exts) {
             vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])]
         } else {
             Vec::new()
@@ -903,6 +909,11 @@ impl FilePicker {
             .with_image(icon);
         n.expanded = false;
         n
+    }
+
+    /// 하위 폴더가 있는가(사이드바 트리는 폴더만 보인다 · 첫 폴더에서 멈춤 · 숨김 규칙 = 현재 설정).
+    fn dir_has_subfolder(&self, path: &Path) -> bool {
+        nexa_fs::has_subfolder(path, self.show_hidden)
     }
 
     /// 행의 숨은 셀 → (경로, 폴더?, 이름).
@@ -1523,6 +1534,11 @@ impl FilePicker {
         if let Some(on) = self.hidden_chk.take_toggled() {
             self.show_hidden = on;
             self.reload();
+            // 사이드바 트리도 다시 판정(빈 폴더 글리프 · 숨김 하위 폴더).
+            let sel = self.places_view.selected_row();
+            self.rebuild_places();
+            self.places_view.set_selected_row(sel);
+            self.last_place_row = sel;
         }
         // 장소 선택 변화 → 이동.
         let pr = self.places_view.selected_row();

@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-15 (9차 · win)** — `nexa-fs::has_visible_child/has_subfolder`(첫 일치 프로브 · dir2 X-43) · `FilePicker` 빈 폴더 셰브론 억제(현재 보기 기준 · 숨김 토글 즉시 재판정). → [journal](journal/2026-09-15.md)
 - **2026-09-15 (8차 · win)** — 공용 **90° 셰브론**(`draw_chevron_90` · 트리 셀 전부 · 크기 = 글꼴 높이 · 접힘 흐림/펼침·hover 본문) · `FilePicker` 오른쪽 목록 = **트리**(폴더 인라인 펼침 · 지연 열거 · 숨은 셀 경로/종류/확장자) · **우클릭 메뉴**(열기 · 경로/이름 복사 · 새 폴더 · 새로 고침 · 숨김 ✓ · `PickerAction::CopyText`) · `nexa-fs::VIRTUAL_ROOT`("내 PC" · 3-OS 드라이브/볼륨 · 루트 ↑) · `parent_chain` 맨 앞 = PC. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (7차 · win)** — `FilePicker` 경로 바(dir2 이식): ⌂ ← → ↑ · **브레드크럼**(세그먼트 클릭 · 빈 곳/우클릭 = 편집 · Esc) · `nexa-fs::History` · `shell:` 별칭(`SHParseDisplayName` raw FFI · 3-OS 공통 표) · `$env:NAME` 확장 · **장소 = 지연 로딩 폴더 트리** · COM 초기화 스레드별. → [journal](journal/2026-09-15.md)
 - **2026-09-15 (6차 · win)** — `nexa-fs::sort_by`(결합 정렬) · `FilePicker` 헤더 Shift+클릭 결합 정렬(▲1 ▼2) · 헤더 드래그 컬럼 이동(이름 고정 · 드롭선 피드백) · 기본 순서 이름·크기·일시·유형. → [journal](journal/2026-09-15.md)

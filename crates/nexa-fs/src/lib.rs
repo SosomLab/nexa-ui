@@ -153,6 +153,70 @@ pub fn list(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
     Ok(out)
 }
 
+/// 현재 보기 규칙(숨김 · 확장자 필터)으로 **보여줄 자식이 하나라도 있는가** — 첫 일치에서 멈추는 프로브
+/// (nexa-dir2 X-43 "빈 폴더 펼침 글리프 억제" 이식 · 사용자 09-15). 읽기 실패 = `true`(글리프 유지 · 클라우드/권한 보호).
+/// `exts`가 비면 모든 파일 · 폴더는 언제나 자식으로 친다.
+#[must_use]
+pub fn has_visible_child(dir: &Path, show_hidden: bool, exts: &[String]) -> bool {
+    if is_virtual_root(dir) {
+        return !drives().is_empty();
+    }
+    let Ok(rd) = fs::read_dir(dir) else {
+        return true;
+    };
+    for de in rd.flatten() {
+        let name = de.file_name().to_string_lossy().into_owned();
+        let meta = fs::metadata(de.path()).or_else(|_| de.metadata());
+        let (is_dir, hidden) = match &meta {
+            Ok(m) => (m.is_dir(), is_hidden_meta(m, &name)),
+            Err(_) => (
+                de.file_type().map(|t| t.is_dir()).unwrap_or(false),
+                name.starts_with('.'),
+            ),
+        };
+        if hidden && !show_hidden {
+            continue;
+        }
+        if is_dir {
+            return true;
+        }
+        if exts.is_empty() {
+            return true;
+        }
+        let ext = Path::new(&name)
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if exts.contains(&ext) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 하위 **폴더**가 하나라도 있는가(폴더 트리용 · 첫 폴더에서 멈춤 · 숨김 규칙 동일 · 읽기 실패 = `true`).
+#[must_use]
+pub fn has_subfolder(dir: &Path, show_hidden: bool) -> bool {
+    if is_virtual_root(dir) {
+        return !drives().is_empty();
+    }
+    let Ok(rd) = fs::read_dir(dir) else {
+        return true;
+    };
+    for de in rd.flatten() {
+        let name = de.file_name().to_string_lossy().into_owned();
+        let meta = fs::metadata(de.path()).or_else(|_| de.metadata());
+        let (is_dir, hidden) = match &meta {
+            Ok(m) => (m.is_dir(), is_hidden_meta(m, &name)),
+            Err(_) => (false, name.starts_with('.')),
+        };
+        if is_dir && (show_hidden || !hidden) {
+            return true;
+        }
+    }
+    false
+}
+
 /// 자연 정렬 비교 — 숫자 덩어리는 값으로, 나머지는 대소문자 무관(한글은 코드 순).
 #[must_use]
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
