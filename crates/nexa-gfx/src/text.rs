@@ -7,6 +7,21 @@
 //! **폰트 바이트는 밖에서 온다** — 이 크레이트는 파일을 읽지 않는다(플랫폼 중립).
 //! 시스템 폰트 경로 발견은 `<app>-plat` 소관(ADR-0001 — 폰트 열거는 플랫폼 계층).
 
+/// ★ 탭 폭(칸 · 기본 4) — 프로세스 전역(nexa-sql `editor.tab_size` · 09-15). 측정·그리기·캐럿이 같은 값을 쓴다.
+static TAB_COLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(4);
+
+/// 탭 폭 설정(1~16 · 그 밖은 4).
+pub fn set_tab_cols(n: u32) {
+    let n = if (1..=16).contains(&n) { n } else { 4 };
+    TAB_COLS.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 탭 폭(칸).
+#[must_use]
+pub fn tab_cols() -> u32 {
+    TAB_COLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 use crate::surface::{Color, Surface};
 use ab_glyph::{Font as _, FontRef, ScaleFont as _};
 
@@ -130,7 +145,7 @@ impl Font {
     fn control_advance(&self, c: char, size: f32) -> Option<f32> {
         if c == '\t' {
             let face = self.face_for(' ');
-            return Some(face.as_scaled(size).h_advance(face.glyph_id(' ')) * 4.0);
+            return Some(face.as_scaled(size).h_advance(face.glyph_id(' ')) * tab_cols() as f32);
         }
         c.is_control().then_some(0.0)
     }

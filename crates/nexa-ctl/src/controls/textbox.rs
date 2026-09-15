@@ -102,6 +102,9 @@ pub struct TextBox {
     ml_user_scrolled: bool,
     /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
     line_numbers: bool,
+    /// 들여쓰기(nexa-sql 09-15 · docs/31): 탭 폭(칸) · Tab 키 = 공백(다음 탭 정지까지) 여부.
+    tab_size: u8,
+    indent_spaces: bool,
     gutter_px: std::cell::Cell<i32>,
     /// 멀티라인 스크롤바(08-18 · 대화 입력창과 동일 컨트롤 · 상하+좌우 · 자동 숨김).
     ml_bars: super::ScrollBars,
@@ -171,6 +174,8 @@ impl TextBox {
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
             line_numbers: false,
+            tab_size: 4,
+            indent_spaces: false,
             gutter_px: std::cell::Cell::new(0),
             ml_bars: super::ScrollBars::new(),
             ml_content: std::cell::Cell::new((0, 0)),
@@ -215,6 +220,66 @@ impl TextBox {
     /// 세로 안내선 열 목록(0 = 없음) — 설정 `editor.rulers`(기본 80).
     pub fn set_rulers(&mut self, cols: Vec<usize>) {
         self.rulers = cols;
+    }
+
+    /// 들여쓰기 설정 — 탭 폭(칸 · 1~8) · Tab 키가 공백을 넣는지(Sublime `translate_tabs_to_spaces`).
+    pub fn set_indent(&mut self, tab_size: u8, spaces: bool) {
+        self.tab_size = tab_size.clamp(1, 8);
+        self.indent_spaces = spaces;
+    }
+
+    /// 캐럿이 있는 줄의 열(0 기준 · 탭은 다음 정지까지).
+    fn caret_column(&self) -> usize {
+        let text = self.edit.text();
+        let chars: Vec<char> = text.chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let line_start = chars[..caret]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map_or(0, |p| p + 1);
+        let ts = usize::from(self.tab_size.max(1));
+        let mut col = 0usize;
+        for &c in &chars[line_start..caret] {
+            col = if c == '\t' {
+                (col / ts + 1) * ts
+            } else {
+                col + 1
+            };
+        }
+        col
+    }
+
+    /// 줄머리 들여쓰기 변환(공백 ↔ 탭 · 본문 전체 · 되돌리기 히스토리는 새로 시작).
+    pub fn convert_indent(&mut self, to_spaces: bool) {
+        let ts = usize::from(self.tab_size.max(1));
+        let mut out = String::new();
+        for (i, line) in self.edit.text().split('\n').enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            let body_at = line
+                .char_indices()
+                .find(|(_, c)| *c != ' ' && *c != '\t')
+                .map_or(line.len(), |(b, _)| b);
+            let (lead, body) = line.split_at(body_at);
+            let mut col = 0usize;
+            for c in lead.chars() {
+                col = if c == '\t' {
+                    (col / ts + 1) * ts
+                } else {
+                    col + 1
+                };
+            }
+            if to_spaces {
+                out.push_str(&" ".repeat(col));
+            } else {
+                out.push_str(&"\t".repeat(col / ts));
+                out.push_str(&" ".repeat(col % ts));
+            }
+            out.push_str(body);
+        }
+        self.edit.set_text(&out);
+        self.changed = true;
     }
 
     pub fn set_line_numbers(&mut self, on: bool) {
@@ -1177,10 +1242,25 @@ impl Widget for TextBox {
                 // 멀티라인 드래그 자동 스크롤(08-17) — 상/하 밖 = 줄 단위 세로 이동
                 // (vscroll이 따라온다), 좌/우 밖 = 한 글자 가로 이동(mhscroll이 따라온다).
                 let b = self.base.bounds;
+                // 첫/마지막 줄에서 위/아래로 끌면 **본문 처음/끝까지**(Sublime·VS Code 관례 · nexa-sql 09-15:
+                // 첫 줄 앞 글자 몇 개가 빠진 채 선택되던 문제 — 줄 이동만으로는 열이 유지됐다).
+                let text = self.edit.text();
+                let caret = self.edit.caret();
+                let on_first = !text.chars().take(caret).any(|c| c == '\n');
+                let on_last = !text.chars().skip(caret).any(|c| c == '\n');
                 if y < b.y {
-                    self.ml_move_vert(false, true);
+                    if on_first {
+                        self.edit.set_caret(0, true);
+                    } else {
+                        self.ml_move_vert(false, true);
+                    }
                 } else if y > b.bottom() {
-                    self.ml_move_vert(true, true);
+                    if on_last {
+                        let n = text.chars().count();
+                        self.edit.set_caret(n, true);
+                    } else {
+                        self.ml_move_vert(true, true);
+                    }
                 } else if x > b.right() - self.s(8) {
                     self.edit.key(EditKey::Right, true);
                 } else if x < b.x + self.s(8) {
@@ -1212,8 +1292,14 @@ impl Widget for TextBox {
                 if c == '\u{8}' {
                     self.edit.backspace();
                 } else if c == '\t' && self.multiline && self.room() > 0 {
-                    // 멀티라인(편집기)은 Tab = 탭 문자 삽입(nexa-sql 사용자 09-15) — 단일 행은 호스트가 포커스 이동에 쓴다.
-                    self.edit.insert('\t');
+                    // 멀티라인(편집기)은 Tab = 탭 문자 또는 다음 탭 정지까지 공백(`set_indent` · 09-15) — 단일 행은 호스트가 포커스 이동에 쓴다.
+                    if self.indent_spaces {
+                        let ts = usize::from(self.tab_size.max(1));
+                        let n = ts - self.caret_column() % ts;
+                        self.edit.insert_str(&" ".repeat(n));
+                    } else {
+                        self.edit.insert('\t');
+                    }
                 } else if !c.is_control() && self.accepts(c) && self.room() > 0 {
                     self.edit.insert(c);
                 }
@@ -1226,6 +1312,7 @@ impl Widget for TextBox {
                 primary,
             } if self.base.focused => {
                 self.last_click.1 = 0; // 키 개입 = 클릭 체인 끊김
+                self.dragging = false; // 키 입력 = 드래그 끝(MouseUp을 못 받은 경우 방어 · nexa-sql 09-15)
                 self.ml_user_scrolled = false; // 키 이동/편집 = 캐럿 이동 → 캐럿 추종 재개
                 match key {
                     Key::Enter => {
