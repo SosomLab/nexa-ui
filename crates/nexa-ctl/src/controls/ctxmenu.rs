@@ -204,7 +204,15 @@ pub struct ContextMenu {
     /// 열린 하위 메뉴(+ 어느 항목의 것인가).
     child: Option<Box<ContextMenu>>,
     child_of: Option<usize>,
+    /// 마지막 커서 위치(하위 메뉴로 **가는 중**인지 판정용 · 09-16).
+    last_pos: Option<Point>,
+    /// 하위 메뉴가 열린 채 다른 부모 행 위에 머문 시각 — 유예([`SUBMENU_GRACE_MS`]) 안이면 자식을 유지한다.
+    pending_since: Option<std::time::Instant>,
 }
+
+/// 하위 메뉴 유예(ms) — 자식이 화면 안에 맞추느라 부모 행과 세로가 어긋나면 대각선 이동 중 다른 부모 행을 지난다.
+/// 그 사이 자식이 닫히던 것(nexa-sql 사용자 09-16 "Copy SQL 메뉴 유실") → 자식 쪽으로 움직이는 동안은 유지.
+const SUBMENU_GRACE_MS: u128 = 400;
 
 impl ContextMenu {
     /// 새 메뉴(닫힌 상태).
@@ -452,6 +460,12 @@ impl ContextMenu {
         if !self.is_open() {
             return false;
         }
+        // 커서 직전 위치(하위 메뉴 쪽으로 가는 중인지 판정) — 자식 유무와 무관하게 기록.
+        let last = if let InputEvent::MouseMove { x, y } = *ev {
+            self.last_pos.replace(Point { x, y })
+        } else {
+            self.last_pos
+        };
         // ── 하위 메뉴가 열려 있으면: 그 안의 사건은 자식이 · 부모 행 위 이동은 부모가(다른 항목 = 자식 교체).
         let child_open = self.child.as_ref().is_some_and(|c| c.is_open());
         if child_open {
@@ -463,15 +477,38 @@ impl ContextMenu {
                 InputEvent::MouseMove { x, y } => {
                     let p = Point { x, y };
                     if child_rect.contains(p) {
+                        self.pending_since = None;
                         return self.forward_child(ev);
                     }
                     if let Some(i) = self.hit(p) {
                         if Some(i) != self.child_of {
+                            // ★ 자식 쪽으로 움직이는 중(가로로 자식에 가까워지고 · 부모 행~자식 사이 세로 띠 안)이면
+                            //   유예 동안 자식을 유지 — 대각선 이동 중 다른 부모 행을 스쳐도 잃지 않는다.
+                            let parent_row = self.child_of.and_then(|c| self.row_rect(c));
+                            let toward = match (last, parent_row) {
+                                (Some(l), Some(pr)) => {
+                                    let child_right = child_rect.x >= pr.right() - self.s(8);
+                                    let closer = if child_right { p.x > l.x } else { p.x < l.x };
+                                    let top = pr.y.min(child_rect.y);
+                                    let bottom = pr.bottom().max(child_rect.bottom());
+                                    closer && p.y >= top && p.y <= bottom
+                                }
+                                _ => false,
+                            };
+                            let since = *self
+                                .pending_since
+                                .get_or_insert_with(std::time::Instant::now);
+                            if toward && since.elapsed().as_millis() < SUBMENU_GRACE_MS {
+                                return true;
+                            }
+                            self.pending_since = None;
                             self.close_child();
                             self.hover = Some(i);
                             if self.items[i].has_children() {
                                 self.open_child(i, false);
                             }
+                        } else {
+                            self.pending_since = None;
                         }
                         return true;
                     }
@@ -958,6 +995,40 @@ mod tests {
         m.on_event(&key(Key::Enter)); // INSERT
         assert_eq!(m.take_picked().as_deref(), Some("ins"));
         assert!(!m.is_open());
+    }
+
+    /// 자식 쪽으로 가는 대각선 이동(다른 부모 행을 스침)은 자식을 유지 · 자식에서 멀어지는 이동은 닫는다(09-16).
+    #[test]
+    fn moving_toward_submenu_keeps_it_open() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, nested(), host(), 100);
+        let adv = m.row_rect(1).unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: adv.x + 5,
+            y: adv.y + 2,
+        });
+        assert!(m.child_for_test().is_some());
+        let copy = m.row_rect(0).unwrap();
+        // 실제 상황: 자식이 화면 안에 맞추느라 위로 밀려 부모 행 0까지 세로로 겹친다.
+        let child = m.child_for_test().unwrap().rect.get();
+        m.child_for_test().unwrap().rect.set(Rect::new(
+            child.x,
+            copy.y - 10,
+            child.w,
+            child.h + 40,
+        ));
+        // 자식 쪽(오른쪽)으로 x가 커지며 다른 부모 행(0) 위를 지난다 → 유지.
+        m.on_event(&InputEvent::MouseMove {
+            x: adv.x + 20,
+            y: copy.y + 2,
+        });
+        assert!(m.child_for_test().is_some(), "자식 쪽으로 이동 중엔 유지");
+        // 자식에서 멀어지며(x 감소) 다른 부모 행 위 → 닫힌다.
+        m.on_event(&InputEvent::MouseMove {
+            x: adv.x + 6,
+            y: copy.y + 2,
+        });
+        assert!(m.child_for_test().is_none(), "멀어지면 닫힘");
     }
 
     #[test]
