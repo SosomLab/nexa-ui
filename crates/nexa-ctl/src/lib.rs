@@ -42,7 +42,7 @@ pub mod widget;
 
 pub use controls::{
     rgba_from_hex, rgba_to_hex, FiredBy, HAlign, MenuBar, MenuDef, MenuEntry, TabAction, TabBar,
-    TimeoutButton, ToolIcon, ToolItem, Toolbar, VAlign,
+    TimeoutButton, ToolIcon, ToolItem, ToolTone, Toolbar, VAlign,
 };
 pub use controls::{
     BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, ColorPanel, ColorPicker, Combo,

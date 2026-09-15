@@ -56,7 +56,7 @@ pub use switch::Switch;
 pub use tabbar::{TabAction, TabBar};
 pub use textbox::{EditCtxAction, TextBox, WhitespaceMode, WhitespaceStyle};
 pub use timeout_button::{FiredBy, TimeoutButton};
-pub use toolbar::{ToolIcon, ToolItem, Toolbar, DEFAULT_ICON};
+pub use toolbar::{ToolIcon, ToolItem, ToolTone, Toolbar, DEFAULT_ICON};
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};
 
 use crate::draw::{DrawCtx, FontSlot};

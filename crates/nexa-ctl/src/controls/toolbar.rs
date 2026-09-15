@@ -61,6 +61,21 @@ pub enum ToolIcon {
     },
 }
 
+/// 마스크 아이콘의 기본 색조(09-16 nexa-sql "연결이 하나라도 있으면 Connect 버튼을 밝은 녹색으로").
+/// hover/pressed는 색조와 무관하게 accent · 비활성은 흐림.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolTone {
+    /// 테마 기준색(`Theme::text`).
+    #[default]
+    Default,
+    /// 밝은 녹색(Switch 켜짐과 같은 색 — 상태 "켜짐/연결됨").
+    Ok,
+    /// 강조색(`Theme::accent`).
+    Accent,
+    /// 위험색(`Theme::danger`).
+    Danger,
+}
+
 /// 툴바 항목 — 액션 id + 아이콘 (+ 오른쪽 정렬 여부).
 #[derive(Clone, Debug)]
 pub struct ToolItem {
@@ -76,6 +91,8 @@ pub struct ToolItem {
     pub tip: String,
     /// 활성 여부(09-15 nexa-sql 접속 해제 버튼): `false`면 흐리게 그리고 hover·클릭을 받지 않는다.
     pub enabled: bool,
+    /// 마스크 아이콘 색조(09-16) — 상태를 색으로(연결됨 = `Ok`).
+    pub tone: ToolTone,
 }
 
 impl ToolItem {
@@ -88,7 +105,15 @@ impl ToolItem {
             visible: true,
             tip: String::new(),
             enabled: true,
+            tone: ToolTone::Default,
         }
+    }
+
+    /// 색조(체이닝).
+    #[must_use]
+    pub fn tone(mut self, tone: ToolTone) -> Self {
+        self.tone = tone;
+        self
     }
 
     /// 시작부터 비활성(체이닝) — 호스트가 [`Toolbar::set_item_enabled`]로 켠다.
@@ -275,6 +300,16 @@ impl Toolbar {
     }
 
     /// 항목 활성/비활성(09-15) — 비활성은 흐리게 · hover/클릭 없음. 미지 id는 무시.
+    /// 항목 색조 변경(09-16) — 상태 표시(연결됨 = 밝은 녹색). 미지 id는 무시.
+    pub fn set_item_tone(&mut self, id: &str, tone: ToolTone, inv: &mut Invalidations) {
+        if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
+            if it.tone != tone {
+                it.tone = tone;
+                inv.push(self.base.bounds);
+            }
+        }
+    }
+
     pub fn set_item_enabled(&mut self, id: &str, enabled: bool, inv: &mut Invalidations) {
         if let Some(i) = self.items.iter().position(|it| it.id == id) {
             if self.items[i].enabled != enabled {
@@ -447,7 +482,12 @@ impl Widget for Toolbar {
                     } else if is_hover || is_pressed {
                         theme.accent
                     } else {
-                        theme.text
+                        match it.tone {
+                            ToolTone::Default => theme.text,
+                            ToolTone::Ok => super::switch::ON_GREEN,
+                            ToolTone::Accent => theme.accent,
+                            ToolTone::Danger => theme.danger,
+                        }
                     };
                     let img = self.tinted(i, *w, *h, alpha, color);
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
