@@ -2,9 +2,9 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
-## 2026-09-16 (1차 · mac) — 두부 방지 폰트 폴백 ✅ · TreeGrid 가로 클립 ✅ · `Splitter` ✅ · FilePicker 4건 ✅
+## 2026-09-16 (1~4차 · mac) — 두부 방지 폰트 폴백 ✅ · TreeGrid 가로 클립 ✅ · `Splitter` ✅ · Material 글리프/`Button::glyph` ✅ · `ToolTone` ✅ · 잉크 기준 세로 정렬 ✅
 
-맥 실기 첫날. 기호 폴백은 OS별 고정 경로 + 이름 검색(재귀) 2중에 `UI_SYMBOLS` 회귀 테스트(CI 3-OS)로 고정. 3-OS clippy 전부 green. **다음**: F-8 macOS `NSWorkspace` 아이콘 · nexa-sql 쪽 실기 계속. → [journal](journal/2026-09-16.md)
+맥 실기 첫날(nexa-sql 세션). 기호 폴백은 OS별 고정 경로 + 이름 검색(재귀) 2중에 `UI_SYMBOLS` 회귀 테스트(CI 3-OS). `DrawCtx::text_center_y`(잉크 가운데)를 컨트롤 전반에 적용 — Windows 쪽 재검증 필요(F-9). 3-OS clippy 전부 green. **다음**: F-8 macOS `NSWorkspace` 아이콘. → [journal](journal/2026-09-16.md)
 
 ## 2026-09-15 (2차 · win) — `nexa-fs` + `nexa-dlg::FilePicker` ✅(docs/20 1차) · 편집기 다중 선택 ✅
 
