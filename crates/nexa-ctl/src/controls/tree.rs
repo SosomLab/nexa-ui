@@ -599,6 +599,13 @@ impl TreeGrid {
         self.border = border;
     }
 
+    /// 열 폭 변경(논리 px · 헤더 경계 드래그 — 모델·스크롤을 유지한 채 폭만).
+    pub fn set_column_width(&mut self, i: usize, width: i32) {
+        if let Some(c) = self.columns.get_mut(i) {
+            c.width = width.max(24);
+        }
+    }
+
     /// 전체 열 폭 합(물리 px).
     fn columns_width(&self) -> i32 {
         self.columns.iter().map(|c| self.s(c.width)).sum()

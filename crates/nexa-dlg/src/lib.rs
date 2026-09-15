@@ -138,6 +138,8 @@ pub struct FilePicker {
     col_order: Vec<usize>,
     /// 헤더 드래그(표시 위치 · 시작 x · 현재 x · 4px 이상 움직임 · Shift).
     hdr_drag: Option<(usize, i32, i32, bool, bool)>,
+    /// 헤더 경계 드래그 = 컬럼 폭 조절(논리 컬럼 · 시작 x · 시작 폭 · 사용자 09-15).
+    hdr_resize: Option<(usize, i32, i32)>,
     show_hidden: bool,
     places: Vec<Place>,
     recent: Vec<PathBuf>,
@@ -222,6 +224,7 @@ impl FilePicker {
             sort_keys: Vec::new(),
             col_order: vec![2, 1, 3],
             hdr_drag: None,
+            hdr_resize: None,
             show_hidden: false,
             places: nexa_fs::places(),
             recent: Vec::new(),
@@ -848,6 +851,24 @@ impl FilePicker {
         out
     }
 
+    /// 헤더 경계(오른쪽 끝 ±4px) 위인가 → 그 표시 위치(폭 조절 대상).
+    fn header_edge_at(&self, x: i32, y: i32) -> Option<usize> {
+        let g = self.grid_rect;
+        if y < g.y || y >= g.y + self.s(HEADER_H) {
+            return None;
+        }
+        let tol = self.s(4);
+        self.header_cells()
+            .iter()
+            .position(|&(_, x1)| (x - x1).abs() <= tol)
+    }
+
+    /// 커서가 헤더 경계 위인가(호스트가 ↔ 커서를 보여 줄 근거).
+    #[must_use]
+    pub fn header_edge_hover(&self, x: i32, y: i32) -> bool {
+        self.hdr_resize.is_some() || self.header_edge_at(x, y).is_some()
+    }
+
     /// 헤더 클릭 → 표시 위치.
     fn header_hit(&self, x: i32, y: i32) -> Option<usize> {
         let g = self.grid_rect;
@@ -1128,11 +1149,41 @@ impl Widget for FilePicker {
         // 헤더: 클릭 = 정렬(Shift = 결합) · 드래그 = 컬럼 이동(이름 열은 고정 · 사용자 09-15).
         match *ev {
             InputEvent::MouseDown { x, y, shift, .. } => {
+                if let Some(pos) = self.header_edge_at(x, y) {
+                    let col = self.logical_col(pos);
+                    self.hdr_resize = Some((col, x, self.col_w[col]));
+                    inv.push(self.base.bounds);
+                    return;
+                }
                 if let Some(pos) = self.header_hit(x, y) {
                     self.hdr_drag = Some((pos, x, x, false, shift));
                     inv.push(self.base.bounds);
                     return;
                 }
+            }
+            InputEvent::MouseMove { x, .. } if self.hdr_resize.is_some() => {
+                if let Some((col, x0, w0)) = self.hdr_resize {
+                    let dw = ((x - x0) as f32 / self.base.scale).round() as i32;
+                    let w = (w0 + dw).max(24);
+                    self.col_w[col] = w;
+                    // 표시 위치 = 이름(0) 또는 col_order 안 인덱스 + 1.
+                    let pos = if col == 0 {
+                        0
+                    } else {
+                        self.col_order
+                            .iter()
+                            .position(|&c| c == col)
+                            .map_or(0, |i| i + 1)
+                    };
+                    self.grid.set_column_width(pos, w);
+                }
+                inv.push(self.base.bounds);
+                return;
+            }
+            InputEvent::MouseUp { .. } if self.hdr_resize.is_some() => {
+                self.hdr_resize = None;
+                inv.push(self.base.bounds);
+                return;
             }
             InputEvent::MouseMove { x, .. } if self.hdr_drag.is_some() => {
                 let thresh = self.s(4);
