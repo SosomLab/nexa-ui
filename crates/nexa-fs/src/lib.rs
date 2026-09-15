@@ -114,6 +114,11 @@ pub fn drive_entries() -> Vec<Entry> {
 /// 폴더 열거 — 한 항목의 실패(권한 등)가 전체를 막지 않는다(메타데이터 실패 = 크기·시각만 기본값).
 /// `show_hidden`이 거짓이면 숨김 항목을 뺀다. 가상 최상위는 드라이브 목록.
 pub fn list(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
+    list_opts(dir, show_hidden, true)
+}
+
+/// [`list`] + **점 파일 토글**(`.git` · `.cargo` … 이름이 `.`으로 시작 — Windows에서는 숨김 속성과 별개 · dir2 "숨김/점 필터" · 사용자 09-15).
+pub fn list_opts(dir: &Path, show_hidden: bool, show_dot: bool) -> io::Result<Vec<Entry>> {
     if is_virtual_root(dir) {
         return Ok(drive_entries());
     }
@@ -141,6 +146,9 @@ pub fn list(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
         if hidden && !show_hidden {
             continue;
         }
+        if !show_dot && name.starts_with('.') {
+            continue;
+        }
         out.push(Entry {
             name,
             path,
@@ -157,7 +165,7 @@ pub fn list(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
 /// (nexa-dir2 X-43 "빈 폴더 펼침 글리프 억제" 이식 · 사용자 09-15). 읽기 실패 = `true`(글리프 유지 · 클라우드/권한 보호).
 /// `exts`가 비면 모든 파일 · 폴더는 언제나 자식으로 친다.
 #[must_use]
-pub fn has_visible_child(dir: &Path, show_hidden: bool, exts: &[String]) -> bool {
+pub fn has_visible_child(dir: &Path, show_hidden: bool, show_dot: bool, exts: &[String]) -> bool {
     if is_virtual_root(dir) {
         return !drives().is_empty();
     }
@@ -175,6 +183,9 @@ pub fn has_visible_child(dir: &Path, show_hidden: bool, exts: &[String]) -> bool
             ),
         };
         if hidden && !show_hidden {
+            continue;
+        }
+        if !show_dot && name.starts_with('.') {
             continue;
         }
         if is_dir {
@@ -196,7 +207,7 @@ pub fn has_visible_child(dir: &Path, show_hidden: bool, exts: &[String]) -> bool
 
 /// 하위 **폴더**가 하나라도 있는가(폴더 트리용 · 첫 폴더에서 멈춤 · 숨김 규칙 동일 · 읽기 실패 = `true`).
 #[must_use]
-pub fn has_subfolder(dir: &Path, show_hidden: bool) -> bool {
+pub fn has_subfolder(dir: &Path, show_hidden: bool, show_dot: bool) -> bool {
     if is_virtual_root(dir) {
         return !drives().is_empty();
     }
@@ -210,7 +221,7 @@ pub fn has_subfolder(dir: &Path, show_hidden: bool) -> bool {
             Ok(m) => (m.is_dir(), is_hidden_meta(m, &name)),
             Err(_) => (false, name.starts_with('.')),
         };
-        if is_dir && (show_hidden || !hidden) {
+        if is_dir && (show_hidden || !hidden) && (show_dot || !name.starts_with('.')) {
             return true;
         }
     }

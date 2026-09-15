@@ -72,6 +72,8 @@ pub struct PickerLabels {
     pub new_folder_name: String,
     /// 숨김 파일 표시.
     pub show_hidden: String,
+    /// 점 파일(`.git` …) 표시.
+    pub show_dot: String,
     /// 열 제목.
     pub col_name: String,
     /// 열 제목.
@@ -176,6 +178,8 @@ pub struct FilePicker {
     name_box: TextBox,
     filter_combo: Combo,
     hidden_chk: Checkbox,
+    dot_chk: Checkbox,
+    show_dot: bool,
     /// 하단 부가 콤보(앱이 주입 · 예: 인코딩 — Golden/DBeaver 하단 줄 · 사용자 09-15) — (라벨, 콤보).
     extra: Option<(String, Combo)>,
     ok_btn: Button,
@@ -277,6 +281,8 @@ impl FilePicker {
             filter_combo: Combo::new(items, 0),
             hidden_chk: Checkbox::new(labels.show_hidden.clone(), false)
                 .with_label_side(LabelSide::Right),
+            dot_chk: Checkbox::new(labels.show_dot.clone(), true).with_label_side(LabelSide::Right),
+            show_dot: true,
             extra: None,
             ok_btn: Button::new(ok_label),
             cancel_btn: Button::new(labels.cancel.clone()),
@@ -315,6 +321,27 @@ impl FilePicker {
         self.show_hidden = on;
         self.hidden_chk.set_checked(on);
         self.reload();
+    }
+
+    /// 점 파일 표시 초기값(앱 설정).
+    pub fn set_show_dot(&mut self, on: bool) {
+        self.show_dot = on;
+        self.dot_chk.set_checked(on);
+        self.reload();
+        self.rebuild_places_keep_selection();
+    }
+
+    /// 점 파일 표시 상태(앱이 설정에 되돌려 저장).
+    #[must_use]
+    pub fn show_dot(&self) -> bool {
+        self.show_dot
+    }
+
+    fn rebuild_places_keep_selection(&mut self) {
+        let sel = self.places_view.selected_row();
+        self.rebuild_places();
+        self.places_view.set_selected_row(sel);
+        self.last_place_row = sel;
     }
 
     /// 하단 부가 콤보(예: 인코딩) — `(값, 라벨)` 목록과 초기 선택. 확정 뒤 [`Self::extra_value`]로 읽는다.
@@ -495,6 +522,7 @@ impl FilePicker {
     /// 펼쳐진 노드 중 아직 자리표시 자식만 가진 것을 **지연 열거**(하위 폴더만 · 자연 정렬 · 숨김 규칙 동일).
     fn lazy_load_places(&mut self) {
         let show_hidden = self.show_hidden;
+        let show_dot = self.show_dot;
         let folder_icon = self.kind_icon(true, "");
         let mut todo: Vec<Vec<usize>> = Vec::new();
         for row in self.places_view.rows() {
@@ -518,7 +546,7 @@ impl FilePicker {
             else {
                 continue;
             };
-            let mut subs: Vec<Entry> = nexa_fs::list(Path::new(&dir), show_hidden)
+            let mut subs: Vec<Entry> = nexa_fs::list_opts(Path::new(&dir), show_hidden, show_dot)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|e| e.is_dir)
@@ -765,7 +793,7 @@ impl FilePicker {
 
     /// 히스토리에 넣지 않는 이동(뒤로/앞으로) — 성공하면 true.
     fn go_no_history(&mut self, dir: &Path) -> bool {
-        match nexa_fs::list(dir, self.show_hidden) {
+        match nexa_fs::list_opts(dir, self.show_hidden, self.show_dot) {
             Ok(entries) => {
                 self.dir = dir.to_path_buf();
                 self.entries = entries;
@@ -848,7 +876,7 @@ impl FilePicker {
 
     fn reload(&mut self) {
         let sel = self.grid.selected_row();
-        if let Ok(entries) = nexa_fs::list(&self.dir, self.show_hidden) {
+        if let Ok(entries) = nexa_fs::list_opts(&self.dir, self.show_hidden, self.show_dot) {
             self.entries = entries;
         }
         self.refresh_grid(sel);
@@ -899,7 +927,9 @@ impl FilePicker {
         // ★ 현재 보기(숨김 · 확장자 필터)로 보여줄 자식이 없으면 셰브론 없음(dir2 X-43 · 사용자 09-15) —
         //   숨김 표시를 켜면 `reload`가 다시 판정해 바로 나타난다.
         let exts = self.current_filter().exts.clone();
-        let children = if e.is_dir && nexa_fs::has_visible_child(&e.path, self.show_hidden, &exts) {
+        let children = if e.is_dir
+            && nexa_fs::has_visible_child(&e.path, self.show_hidden, self.show_dot, &exts)
+        {
             vec![TreeNode::leaf(String::new()).with_cells(vec![PENDING.into()])]
         } else {
             Vec::new()
@@ -913,7 +943,7 @@ impl FilePicker {
 
     /// 하위 폴더가 있는가(사이드바 트리는 폴더만 보인다 · 첫 폴더에서 멈춤 · 숨김 규칙 = 현재 설정).
     fn dir_has_subfolder(&self, path: &Path) -> bool {
-        nexa_fs::has_subfolder(path, self.show_hidden)
+        nexa_fs::has_subfolder(path, self.show_hidden, self.show_dot)
     }
 
     /// 행의 숨은 셀 → (경로, 폴더?, 이름).
@@ -932,7 +962,7 @@ impl FilePicker {
     /// 폴더 항목의 자식(하위 폴더 + 필터에 맞는 파일 · 정렬 규약 동일).
     fn children_of(&mut self, dir: &Path) -> Vec<TreeNode> {
         let exts = self.current_filter().exts.clone();
-        let mut items: Vec<Entry> = nexa_fs::list(dir, self.show_hidden)
+        let mut items: Vec<Entry> = nexa_fs::list_opts(dir, self.show_hidden, self.show_dot)
             .unwrap_or_default()
             .into_iter()
             .filter(|e| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
@@ -1218,6 +1248,11 @@ impl FilePicker {
             if self.show_hidden { "✓" } else { "  " },
             self.labels.show_hidden
         );
+        let dot_label = format!(
+            "{} {}",
+            if self.show_dot { "✓" } else { "  " },
+            self.labels.show_dot
+        );
         let items = vec![
             CtxItem::maybe("open", self.labels.menu_open.clone(), has.is_some()),
             CtxItem::maybe(
@@ -1235,6 +1270,7 @@ impl FilePicker {
             CtxItem::item("refresh", self.labels.menu_refresh.clone()),
             CtxItem::Separator,
             CtxItem::item("hidden", hidden_label),
+            CtxItem::item("dot", dot_label),
         ];
         self.menu.set_scale(self.base.scale);
         self.menu
@@ -1270,6 +1306,13 @@ impl FilePicker {
                 self.show_hidden = !self.show_hidden;
                 self.hidden_chk.set_checked(self.show_hidden);
                 self.reload();
+                self.rebuild_places_keep_selection();
+            }
+            "dot" => {
+                self.show_dot = !self.show_dot;
+                self.dot_chk.set_checked(self.show_dot);
+                self.reload();
+                self.rebuild_places_keep_selection();
             }
             _ => {}
         }
@@ -1374,6 +1417,7 @@ impl FilePicker {
         self.grid.set_scale(s);
         self.filter_combo.set_scale(s);
         self.hidden_chk.set_scale(s);
+        self.dot_chk.set_scale(s);
         let pad = self.s(PAD);
         let gap = self.s(GAP);
         let row = self.s(ROW);
@@ -1409,7 +1453,12 @@ impl FilePicker {
         self.ok_btn
             .set_bounds(Rect::new(x1 - bw * 2 - gap, y_btn, bw, row), &mut inv);
         self.hidden_chk
-            .set_bounds(Rect::new(x0, y_btn, self.s(220), row), &mut inv);
+            .set_bounds(Rect::new(x0, y_btn, self.s(180), row), &mut inv);
+        self.dot_chk.set_scale(s);
+        self.dot_chk.set_bounds(
+            Rect::new(x0 + self.s(180) + gap, y_btn, self.s(160), row),
+            &mut inv,
+        );
         let ew = self.s(170);
         if let Some((_, c)) = &mut self.extra {
             c.set_scale(s);
@@ -1456,6 +1505,8 @@ impl FilePicker {
         let grid = self.grid.bounds().contains(p);
         let combo = self.filter_combo.bounds().contains(p);
         let chk = self.hidden_chk.bounds().contains(p);
+        let dot = self.dot_chk.bounds().contains(p);
+        self.dot_chk.set_focused(dot);
         let ex = self
             .extra
             .as_ref()
@@ -1535,10 +1586,12 @@ impl FilePicker {
             self.show_hidden = on;
             self.reload();
             // 사이드바 트리도 다시 판정(빈 폴더 글리프 · 숨김 하위 폴더).
-            let sel = self.places_view.selected_row();
-            self.rebuild_places();
-            self.places_view.set_selected_row(sel);
-            self.last_place_row = sel;
+            self.rebuild_places_keep_selection();
+        }
+        if let Some(on) = self.dot_chk.take_toggled() {
+            self.show_dot = on;
+            self.reload();
+            self.rebuild_places_keep_selection();
         }
         // 장소 선택 변화 → 이동.
         let pr = self.places_view.selected_row();
@@ -1723,6 +1776,7 @@ impl Widget for FilePicker {
             self.ok_btn.on_event(ev, inv);
             self.cancel_btn.on_event(ev, inv);
             self.hidden_chk.on_event(ev, inv);
+            self.dot_chk.on_event(ev, inv);
             self.filter_combo.on_event(ev, inv);
             if let Some((_, c)) = &mut self.extra {
                 c.on_event(ev, inv);
@@ -1731,6 +1785,8 @@ impl Widget for FilePicker {
             if let Some((_, c)) = &mut self.extra {
                 c.on_event(ev, inv);
             }
+        } else if self.dot_chk.is_focused() {
+            self.dot_chk.on_event(ev, inv);
         } else if self.hidden_chk.is_focused() {
             self.hidden_chk.on_event(ev, inv);
         } else if self.filter_combo.is_focused() {
@@ -1931,11 +1987,12 @@ impl Widget for FilePicker {
         }
         self.name_box.paint(ctx, theme);
         self.hidden_chk.paint(ctx, theme);
+        self.dot_chk.paint(ctx, theme);
         self.ok_btn.paint(ctx, theme);
         self.cancel_btn.paint(ctx, theme);
         // 메시지(체크박스 오른쪽 · 버튼 왼쪽).
         if let Some((msg, err)) = &self.message {
-            let cb = self.hidden_chk.bounds();
+            let cb = self.dot_chk.bounds();
             let x = cb.right() + self.s(GAP);
             let left_edge = self
                 .extra
