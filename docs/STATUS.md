@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-16 (25차 · mac) — 미니맵 ✅ · 찾기 범위/전부 선택 ✅ · 자원 상한 세터 ✅ · ★ `nexa-sys` 크레이트 ✅(D-60)
+
+TextBox 미니맵(창 한정 캐시 비트맵 · 클릭/드래그 · 테스트 5) · `set_find_scope`/`set_regions_pub`/`set_history_max` · glyph/icon 캐시 상한 세터 · OS 신호 크레이트 `nexa-sys`(배터리·원격·동작 줄이기 · 3-OS · 외부 crate 0). 워크스페이스 green · check-3os ✓. **다음**: F-8 · 미니맵 wrap 모드 · Performance 신호 60초 캐시 실기. → [journal](journal/2026-09-16.md)
+
 ## 2026-09-16 (24차 · mac) — TextBox 픽셀 스크롤 ✅ · `set_scroll_snap` ✅ · `EditState::command` 14종 ✅ · 찾기 일치 표시 ✅
 
 nexa-sql 트랙패드 QA: 휠 잔여 이월 → 픽셀 스크롤(세로 클립) → 행 단위 모드는 표시만 스냅. `edit/ops.rs` 조각 편집 재매핑(되돌리기 1 · 테스트 10) · `edit_command`/`goto_line`/`set_find_marks`/여러 줄 Tab. 헤드리스 휠 시뮬로 편집기 대칭 증명. 227 green · clippy 0. **다음**: F-8 · 캡처 창 2단 코드. → [journal](journal/2026-09-16.md)
