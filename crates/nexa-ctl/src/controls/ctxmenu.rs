@@ -473,10 +473,13 @@ impl ContextMenu {
                 .child
                 .as_ref()
                 .map_or(Rect::default(), |c| c.rect.get());
+            // ★ 자식 영역 = 자식 + 그 아래 열린 손자까지(`bounds`) — `rect`만 보면 손자 항목 클릭이 "바깥"으로 오인돼
+            //   메뉴가 통째로 닫히고 클릭이 아래 컨트롤로 흘렀다(nexa-sql 09-16: Advanced Copy ▸ Copy SQL ▸ MERGE 무반응).
+            let child_area = self.child.as_ref().map_or(Rect::default(), |c| c.bounds());
             match *ev {
                 InputEvent::MouseMove { x, y } => {
                     let p = Point { x, y };
-                    if child_rect.contains(p) {
+                    if child_area.contains(p) {
                         self.pending_since = None;
                         return self.forward_child(ev);
                     }
@@ -517,7 +520,7 @@ impl ContextMenu {
                 }
                 InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y } => {
                     let p = Point { x, y };
-                    if child_rect.contains(p) {
+                    if child_area.contains(p) {
                         return self.forward_child(ev);
                     }
                     // 부모 항목(하위 메뉴 있는 것) 클릭 = 유지 · 다른 부모 항목 = 일반 처리 · 바깥 = 전부 닫기.
@@ -998,6 +1001,51 @@ mod tests {
     }
 
     /// 자식 쪽으로 가는 대각선 이동(다른 부모 행을 스침)은 자식을 유지 · 자식에서 멀어지는 이동은 닫는다(09-16).
+    #[test]
+    fn grandchild_pick_reaches_root_and_closes_all() {
+        // nexa-sql 09-16: Advanced Copy ▸ Copy SQL ▸ MERGE — 손자 항목 클릭이 최상위 pick으로 와야 한다.
+        let sql = vec![CtxItem::item("sql_merge", "MERGE")];
+        let adv = vec![CtxItem::submenu("copy_sql", "Copy SQL", sql)];
+        let items = vec![
+            CtxItem::submenu("adv", "Advanced Copy", adv),
+            CtxItem::item("all", "Select All"),
+        ];
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items, host(), 100);
+        let r0 = m.row_rect_of(0).unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: r0.x + 5,
+            y: r0.y + 2,
+        });
+        let c_row = m
+            .child_for_test()
+            .expect("자식 열림")
+            .row_rect_of(0)
+            .unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: c_row.x + 5,
+            y: c_row.y + 2,
+        });
+        let g_row = m
+            .child_for_test()
+            .and_then(|c| c.child_for_test())
+            .expect("손자 열림")
+            .row_rect_of(0)
+            .unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: g_row.x + 5,
+            y: g_row.y + 2,
+        });
+        m.on_event(&InputEvent::MouseDown {
+            x: g_row.x + 5,
+            y: g_row.y + 2,
+            shift: false,
+            primary: false,
+        });
+        assert_eq!(m.take_picked().as_deref(), Some("sql_merge"));
+        assert!(!m.is_open(), "선택 뒤 전부 닫힘");
+    }
+
     #[test]
     fn moving_toward_submenu_keeps_it_open() {
         let mut m = ContextMenu::new();

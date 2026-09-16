@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (9차 · win)** — ContextMenu 손자(3단) 항목 클릭 유실 수정(자식 포함 판정 = `bounds()` · 테스트). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (8차 · win)** — 라운드 사각형 채움/외곽선을 모서리·가장자리만 SDF(전면 → 띠 · 픽셀 동일 테스트) — 편집기 배경 4.6ms → 0.35ms(드래그 지연 원인). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (7차 · win)** — **탭 정지점**(Golden 방식 · `Font::tab_advance/measure_from` · `draw_styled` 탭 원점 · `DrawCtx::set_tab_origin` · `TextBox::set_tab_stops` 정지점/절대). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (6차 · win)** — `TextBox::set_focus_ring`(편집기처럼 상시 포커스인 상자는 링 생략 · nexa-sql 사용자 09-16). → [journal](journal/2026-09-16.md)
