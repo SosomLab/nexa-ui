@@ -116,6 +116,8 @@ pub struct TextBox {
     line_numbers: bool,
     /// 줄번호 오른쪽 **표시 띠**(Golden식 · 3px 색 막대 자리 4px + 첫 글자 앞 2px 여백 · nexa-sql 09-16).
     gutter_marks: bool,
+    /// 첫 글자 앞 추가 여백(논리 px · 기본 0 · nexa-sql `editor.text_pad_left` 3).
+    text_inset: i32,
     /// 논리 줄(0부터)별 표시 색 — 북마크·오류·변경 등 호스트가 정한다.
     line_marks: Vec<(usize, Color)>,
     /// 들여쓰기(nexa-sql 09-15 · docs/31): 탭 폭(칸) · Tab 키 = 공백(다음 탭 정지까지) 여부.
@@ -204,6 +206,7 @@ impl TextBox {
             ml_user_scrolled: false,
             line_numbers: false,
             gutter_marks: false,
+            text_inset: 0,
             line_marks: Vec::new(),
             tab_size: 4,
             indent_spaces: false,
@@ -416,6 +419,11 @@ impl TextBox {
     /// 포커스 링 표시 여부 — 끄면 포커스여도 헤일로를 그리지 않는다(캐럿·선택은 그대로).
     pub fn set_focus_ring(&mut self, on: bool) {
         self.focus_ring = on;
+    }
+
+    /// 첫 글자 앞 추가 여백(논리 px) — 텍스트 원점만 옮긴다(거터·히트 테스트는 같은 원점을 쓴다).
+    pub fn set_text_inset(&mut self, px: i32) {
+        self.text_inset = px.clamp(0, 64);
     }
 
     /// 줄번호 오른쪽 표시 띠(4px) + 첫 글자 앞 여백(2px) 켬/끔 — 줄번호 거터가 있을 때만 그려진다.
@@ -984,7 +992,7 @@ impl TextBox {
             0
         };
         self.gutter_px.set(gw);
-        let tx = b.x + self.s(10) + gw;
+        let tx = b.x + self.s(10) + gw + self.s(self.text_inset);
         let top0 = b.y + self.s(8);
         let avail = (b.right() - self.s(10) - tx).max(self.s(20));
 
