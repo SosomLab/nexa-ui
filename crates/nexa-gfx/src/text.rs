@@ -16,6 +16,40 @@ pub fn set_tab_cols(n: u32) {
     TAB_COLS.store(n, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// ★ 텍스트 대비(커버리지 감마 · 기본 1.0 = 선형) — 프로세스 전역(nexa-sql `ui.text_contrast` · 09-16). GDI ClearType의
+///   진한 획에 가깝게 중간 알파를 올린다: `cov' = cov^(1/γ)` · γ 1.4 ≈ Windows 텍스트 감마.
+static TEXT_GAMMA: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
+/// ★ 글리프 원점 정수 스냅(기본 끔) — 켜면 가로 서브픽셀(1/3px) 배치를 끄고 펜 x를 반올림해 세로획이 한 픽셀에 앉는다
+///   (힌팅 없는 래스터에서 흐림의 주원인 · 작은 UI 글꼴에 효과 · nexa-sql `ui.text_snap`).
+static TEXT_SNAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 텍스트 대비 감마(0.5~3.0 · 그 밖은 1.0).
+pub fn set_text_contrast(gamma: f32) {
+    let g = if (0.5..=3.0).contains(&gamma) {
+        gamma
+    } else {
+        1.0
+    };
+    TEXT_GAMMA.store(g.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 텍스트 대비 감마.
+#[must_use]
+pub fn text_contrast() -> f32 {
+    f32::from_bits(TEXT_GAMMA.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// 글리프 정수 스냅 켬/끔.
+pub fn set_text_snap(on: bool) {
+    TEXT_SNAP.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 글리프 정수 스냅 상태.
+#[must_use]
+pub fn text_snap() -> bool {
+    TEXT_SNAP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 현재 탭 폭(칸).
 #[must_use]
 pub fn tab_cols() -> u32 {
@@ -49,6 +83,8 @@ struct GlyphKey {
     gid: u16,
     size: u32,
     sub: u8,
+    /// 대비 감마 비트(바뀌면 다른 비트맵 · 캐시를 비울 필요 없음).
+    gamma: u32,
 }
 
 /// 래스터된 글리프 — 원점(펜 정수 x · 베이스라인 정수 y) 기준 오프셋 + 8비트 커버리지.
@@ -190,11 +226,13 @@ impl Font {
     ) -> Option<Arc<GlyphBitmap>> {
         let face = &self.faces[face_i];
         let gid = face.glyph_id(ch);
+        let gamma_bits = TEXT_GAMMA.load(std::sync::atomic::Ordering::Relaxed);
         let key = GlyphKey {
             face: face_i as u8,
             gid: gid.0,
             size: size.to_bits(),
             sub,
+            gamma: gamma_bits,
         };
         if let Ok(c) = self.cache.lock() {
             if let Some(bm) = c.get(&key) {
@@ -210,10 +248,21 @@ impl Font {
             (b.max.y - b.min.y).ceil().max(0.0) as usize + 1,
         );
         let mut cov = vec![0u8; w * h];
+        let gamma = f32::from_bits(gamma_bits);
+        let inv = if (gamma - 1.0).abs() < 1e-3 {
+            None
+        } else {
+            Some(1.0 / gamma)
+        };
         outlined.draw(|gx, gy, c| {
             let (gx, gy) = (gx as usize, gy as usize);
             if gx < w && gy < h {
-                cov[gy * w + gx] = (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                let c = c.clamp(0.0, 1.0);
+                let c = match inv {
+                    Some(e) => c.powf(e),
+                    None => c,
+                };
+                cov[gy * w + gx] = (c * 255.0 + 0.5) as u8;
             }
         });
         let bm = Arc::new(GlyphBitmap {
@@ -384,8 +433,16 @@ impl Font {
             let face = &self.faces[face_i];
             let scaled = face.as_scaled(size);
             let gid = face.glyph_id(ch);
-            let pen_i = pen.floor();
-            let sub = ((pen - pen_i) * SUBPX).floor().clamp(0.0, SUBPX - 1.0) as u8;
+            // 정수 스냅이면 펜을 반올림하고 서브픽셀 0(세로획이 한 픽셀에) · 아니면 1/3px 배치.
+            let (pen_i, sub) = if text_snap() {
+                (pen.round(), 0u8)
+            } else {
+                let pi = pen.floor();
+                (
+                    pi,
+                    ((pen - pi) * SUBPX).floor().clamp(0.0, SUBPX - 1.0) as u8,
+                )
+            };
             if let Some(bm) = self.glyph_bitmap(face_i, ch, size, sub) {
                 let gx0 = pen_i as i32 + i32::from(bm.ox);
                 if gx0 >= clip.2 {
