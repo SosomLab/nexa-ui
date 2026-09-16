@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (16차 · win)** — TextBox 동일 출현 외곽선 · 안내선 표시/색/투명도. → [journal](journal/2026-09-16.md)
 - **2026-09-16 (15차 · win)** — nexa-gfx 텍스트 대비 감마 `set_text_contrast` · 정수 스냅 `set_text_snap`(GDI 수준 선명도 · 캐시 키에 감마). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (14차 · win)** — `draw_tooltip_in`(가로 클램프 사각형 · Toolbar는 자기 x부터). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (13차 · win)** — TextBox 거터 표시 띠(`set_gutter_marks/set_line_marks`) · CtxItem `with_active`. → [journal](journal/2026-09-16.md)

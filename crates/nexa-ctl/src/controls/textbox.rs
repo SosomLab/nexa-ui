@@ -137,6 +137,13 @@ pub struct TextBox {
     highlighter: Option<Rc<dyn crate::highlight::Highlighter>>,
     /// 세로 안내선(글자 열 · 예 `[80]` · 여러 개) — 멀티라인 고정폭에서 그린다.
     rulers: Vec<usize>,
+    /// 안내선 표시 여부(설정 `editor.rulers_show`).
+    rulers_show: bool,
+    /// 안내선 색(None = 테마 경계선) · 투명도(0~1 · 기본 0.25 — 종전 불투명 경계선은 너무 진했다 · nexa-sql 09-16).
+    ruler_color: Option<Color>,
+    ruler_alpha: f32,
+    /// ★ 선택한 글과 같은 다른 출현을 외곽선으로(Sublime · nexa-sql 09-16) — 선택된 출현은 채움 그대로.
+    occurrence_hl: bool,
     /// 공백 문자 표시(설정 `editor.whitespace*`).
     whitespace: WhitespaceStyle,
 }
@@ -208,6 +215,10 @@ impl TextBox {
             hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Slow),
             highlighter: None,
             rulers: Vec::new(),
+            rulers_show: true,
+            ruler_color: None,
+            ruler_alpha: 0.25,
+            occurrence_hl: true,
             whitespace: WhitespaceStyle::default(),
         }
     }
@@ -240,6 +251,22 @@ impl TextBox {
     /// 공백 표시 방식(어떤 공백을 · 어떤 글자로 · 무슨 색/투명도로).
     pub fn set_whitespace(&mut self, ws: WhitespaceStyle) {
         self.whitespace = ws;
+    }
+
+    /// 안내선 표시 여부.
+    pub fn set_rulers_visible(&mut self, on: bool) {
+        self.rulers_show = on;
+    }
+
+    /// 안내선 색(None = 테마 경계선)과 투명도(0~1).
+    pub fn set_ruler_style(&mut self, color: Option<Color>, alpha: f32) {
+        self.ruler_color = color;
+        self.ruler_alpha = alpha.clamp(0.0, 1.0);
+    }
+
+    /// 선택한 글과 같은 다른 출현 외곽선 켬/끔.
+    pub fn set_occurrence_highlight(&mut self, on: bool) {
+        self.occurrence_hl = on;
     }
 
     /// 세로 안내선 열 목록(0 = 없음) — 설정 `editor.rulers`(기본 80).
@@ -1093,6 +1120,19 @@ impl TextBox {
         } else {
             Vec::new()
         };
+        // ★ 동일 출현 외곽선의 바늘: 주 선택(마지막 구간)의 글 — 한 줄 · 공백만이 아님 · 200자 이하.
+        let needle: Option<Vec<char>> = if self.occurrence_hl && preedit_n == 0 {
+            self.edit.selection().and_then(|(a, e)| {
+                let n: Vec<char> = chars.get(a..e)?.to_vec();
+                (n.len() <= 200
+                    && !n.is_empty()
+                    && !n.contains(&'\n')
+                    && n.iter().any(|c| !c.is_whitespace()))
+                .then_some(n)
+            })
+        } else {
+            None
+        };
         let carets: Vec<usize> = if preedit_n == 0 {
             self.edit.carets()
         } else {
@@ -1124,12 +1164,13 @@ impl TextBox {
                 Vec::new()
             };
         // 세로 안내선(열 × 'M' 폭 · 뷰포트 안에서만).
-        if !self.rulers.is_empty() {
+        if self.rulers_show && !self.rulers.is_empty() {
             let cw = ctx.text_width("M").max(1);
+            let rc = self.ruler_color.unwrap_or(theme.border);
             for &col in &self.rulers {
                 let rx = dx + cw * col as i32;
                 if rx >= vx0 && rx < vx1 {
-                    ctx.fill_rect(Rect::new(rx, b.y + 1, 1, b.h - 2), theme.border);
+                    ctx.fill_rect_alpha(Rect::new(rx, b.y + 1, 1, b.h - 2), rc, self.ruler_alpha);
                 }
             }
         }
@@ -1223,6 +1264,40 @@ impl TextBox {
                                 theme.sel_bg_inactive
                             },
                         );
+                    }
+                }
+            }
+            // 동일 출현 외곽선(선택에 든 출현은 채움이 이미 그려졌으니 건너뜀).
+            if let Some(nd) = &needle {
+                let lchars: Vec<char> = line_str.chars().collect();
+                let n = nd.len();
+                let ls = *start_idx;
+                let mut i = 0usize;
+                while i + n <= lchars.len() {
+                    if lchars[i..i + n] == nd[..] {
+                        let (a0, a1) = (ls + i, ls + i + n);
+                        let in_sel = sels.iter().any(|(a, e)| *a < a1 && a0 < *e);
+                        if !in_sel {
+                            let x0 = dx + w.get(i).copied().unwrap_or(0);
+                            let x1 = dx + w.get(i + n).copied().unwrap_or(0);
+                            if x1 > x0 && x1 > vx0 && x0 < vx1 {
+                                ctx.stroke_round_rect_alpha(
+                                    Rect::new(
+                                        x0.max(vx0),
+                                        y + 1,
+                                        (x1.min(vx1) - x0.max(vx0)).max(1),
+                                        lh - 2,
+                                    ),
+                                    self.s(2),
+                                    theme.accent,
+                                    1.0,
+                                    0.7,
+                                );
+                            }
+                        }
+                        i += n;
+                    } else {
+                        i += 1;
                     }
                 }
             }
