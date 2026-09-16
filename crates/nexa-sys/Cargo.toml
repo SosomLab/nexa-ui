@@ -1,0 +1,17 @@
+# nexa-sys — OS 신호 읽기(배터리 전원 · 원격 세션 · 동작 줄이기 · CPU 코어 수). ★ nexa 계열 공용(nexa-sql docs/39 §4-4 · D-60).
+# 규칙: 외부 crate 0 · OS 분기(`cfg(target_os)`)는 이 크레이트 안에만 · FFI는 수동 extern(Windows kernel32/user32 · macOS IOKit/CoreFoundation)
+#       · 모든 실패 = `None`(호출자는 신호가 없으면 아무것도 바꾸지 않는다) · 프로세스 생성 0(`pmset`·`defaults`·`gsettings` 금지).
+[package]
+name = "nexa-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa UI OS 신호 — 배터리 전원·원격 세션·동작 줄이기·CPU 코어 수 (의존 0 · 3-OS cfg + no-op 폴백)"
+
+[lints]
+workspace = true
+
+[dependencies]

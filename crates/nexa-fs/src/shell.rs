@@ -101,8 +101,36 @@ impl std::fmt::Debug for IconService {
     }
 }
 
-/// 캐시 상한(아이콘 수).
+/// 캐시 상한 기본값(아이콘 수).
 pub const ICON_CACHE_MAX: usize = 512;
+/// 현재 상한(전역 · 호스트가 설정 `file.icon_cache`로 [`set_icon_cache_max`] · nexa-sql docs/39 §3-6 T-90d).
+static ICON_CACHE_LIMIT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(ICON_CACHE_MAX);
+
+/// OS 아이콘 캐시 상한을 바꾼다(0은 1로) — 전역 서비스가 이미 넘쳐 있으면 오래된 것부터 즉시 버린다.
+pub fn set_icon_cache_max(n: usize) {
+    ICON_CACHE_LIMIT.store(n.max(1), Ordering::Relaxed);
+    if let Some(svc) = GLOBAL.get() {
+        let mut g = svc.lock();
+        trim(&mut g);
+    }
+}
+
+/// 현재 아이콘 캐시 상한.
+#[must_use]
+pub fn icon_cache_max() -> usize {
+    ICON_CACHE_LIMIT.load(Ordering::Relaxed)
+}
+
+/// LRU 순서(`order`)에서 상한을 넘는 만큼 앞(오래된 것)에서 버린다.
+fn trim(g: &mut Inner) {
+    let max = icon_cache_max();
+    while g.order.len() > max {
+        if let Some(old) = g.order.pop_front() {
+            g.icons.remove(&old);
+        }
+    }
+}
 
 static GLOBAL: OnceLock<IconService> = OnceLock::new();
 
@@ -199,11 +227,7 @@ impl IconService {
         g.pending_icons.remove(&(key.clone(), large));
         g.order.push_back((key.clone(), large));
         g.icons.insert((key, large), v);
-        while g.order.len() > ICON_CACHE_MAX {
-            if let Some(old) = g.order.pop_front() {
-                g.icons.remove(&old);
-            }
-        }
+        trim(&mut g);
         drop(g);
         self.version.fetch_add(1, Ordering::AcqRel);
     }
@@ -262,7 +286,7 @@ impl IconService {
         g.pending_names.clear();
     }
 
-    /// 캐시 비우기(진단·계측 — 앱은 상한 512로 그대로 둔다).
+    /// 캐시 비우기(진단·계측 — 앱은 상한([`icon_cache_max`] · 기본 512)으로 그대로 둔다).
     pub fn clear(&self) {
         let mut g = self.lock();
         g.icons.clear();
@@ -841,6 +865,30 @@ mod service_tests {
                 assert!(matches!(svc.icon(&key, false), Lookup::Ready(_)));
             }
         }
+    }
+
+    /// T-90d(nexa-sql docs/39 §3-6): 아이콘 캐시 상한 — 넘치면 오래된 것부터 · 상한을 줄이면 즉시 잘린다 · 끝나면 기본값 복원.
+    #[test]
+    fn icon_cache_max_is_enforced() {
+        let svc = IconService::global();
+        set_icon_cache_max(3);
+        assert_eq!(icon_cache_max(), 3);
+        for i in 0..6 {
+            svc.store_icon(
+                IconKey::Kind {
+                    ext: format!("cap-test-{i}"),
+                    is_dir: false,
+                },
+                false,
+                None,
+            );
+        }
+        assert!(svc.cached() <= 3, "상한 3: {}", svc.cached());
+        set_icon_cache_max(1);
+        assert!(svc.cached() <= 1, "줄이면 즉시 잘린다: {}", svc.cached());
+        set_icon_cache_max(0);
+        assert_eq!(icon_cache_max(), 1, "0은 1로");
+        set_icon_cache_max(ICON_CACHE_MAX);
     }
 }
 

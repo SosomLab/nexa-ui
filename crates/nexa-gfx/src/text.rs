@@ -244,8 +244,22 @@ pub struct GlyphBitmap {
     pub rgb: bool,
 }
 
-/// 캐시 상한(항목 수) — 넘으면 비우고 다시 채운다(글꼴 크기를 여러 번 바꿔도 메모리가 제자리).
-const GLYPH_CACHE_MAX: usize = 8192;
+/// 캐시 상한 기본값(항목 수) — 넘으면 비우고 다시 채운다(글꼴 크기를 여러 번 바꿔도 메모리가 제자리).
+pub const GLYPH_CACHE_MAX: usize = 8192;
+/// 현재 상한(전역 · 호스트가 설정 `ui.glyph_cache`로 [`set_glyph_cache_max`] · nexa-sql docs/39 §3-6 T-90d).
+static GLYPH_CACHE_LIMIT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(GLYPH_CACHE_MAX);
+
+/// 글리프 비트맵 캐시 상한을 바꾼다(0은 1로). 이미 넘친 캐시는 **다음 삽입** 때 비워진다(폰트 인스턴스마다 캐시가 있어 즉시 순회하지 않는다).
+pub fn set_glyph_cache_max(n: usize) {
+    GLYPH_CACHE_LIMIT.store(n.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 글리프 캐시 상한.
+#[must_use]
+pub fn glyph_cache_max() -> usize {
+    GLYPH_CACHE_LIMIT.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// 가로 서브픽셀 단계(1/3 px — 비례 글꼴의 자간 떨림을 막으면서 캐시 적중을 높인다).
 const SUBPX: f32 = 3.0;
 
@@ -568,7 +582,7 @@ impl Font {
                 rgb: true,
             });
             if let Ok(mut c) = self.cache.lock() {
-                if c.len() >= GLYPH_CACHE_MAX {
+                if c.len() >= glyph_cache_max() {
                     c.clear();
                 }
                 c.insert(key, Arc::clone(&bm));
@@ -621,7 +635,7 @@ impl Font {
             rgb: false,
         });
         if let Ok(mut c) = self.cache.lock() {
-            if c.len() >= GLYPH_CACHE_MAX {
+            if c.len() >= glyph_cache_max() {
                 c.clear();
             }
             c.insert(key, Arc::clone(&bm));
@@ -916,6 +930,17 @@ impl Font {
 #[cfg(test)]
 mod hint_tests {
     use super::*;
+
+    /// T-90d(nexa-sql docs/39 §3-6): 글리프 캐시 상한 세터 — 기본 8192 · 0은 1로 · 삽입 경로가 `glyph_cache_max()`를 본다.
+    #[test]
+    fn glyph_cache_max_setter() {
+        assert_eq!(glyph_cache_max(), GLYPH_CACHE_MAX);
+        set_glyph_cache_max(16);
+        assert_eq!(glyph_cache_max(), 16);
+        set_glyph_cache_max(0);
+        assert_eq!(glyph_cache_max(), 1);
+        set_glyph_cache_max(GLYPH_CACHE_MAX);
+    }
 
     #[test]
     fn snap_stems_merges_vertical_stem_but_keeps_diagonal() {

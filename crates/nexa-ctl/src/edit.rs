@@ -27,7 +27,7 @@ pub enum EditKey {
 }
 
 /// 편집 상태 — 버퍼(char)·캐럿(`0..=len`)·선택(anchor↔caret).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EditState {
     buf: Vec<char>,
     caret: usize,
@@ -37,9 +37,12 @@ pub struct EditState {
     /// 클릭·세로 이동(`set_caret`)·전체 선택은 이 목록을 비운다(하나로 접힘).
     extra: Vec<(usize, usize)>,
     /// ★ 되돌리기 히스토리(nexa-sql 사용자 09-15) — 변경 **직전** 스냅샷(버퍼·캐럿·앵커). 연속 타이핑/삭제는 한 묶음
-    /// (공백·개행·선택 대체·캐럿 이동이 경계). 상한 [`Self::HISTORY_MAX`] · `set_text`(프로그램 교체)는 히스토리를 비운다.
+    /// (공백·개행·선택 대체·캐럿 이동이 경계). 상한 [`Self::history_max`](기본 [`Self::HISTORY_MAX`] · 호스트가 설정
+    /// `editor.undo_max`로 [`Self::set_history_max`] · nexa-sql docs/39 T-90d) · `set_text`(프로그램 교체)는 히스토리를 비운다.
     undo: Vec<Snap>,
     redo: Vec<Snap>,
+    /// 되돌리기 스냅샷 상한(≥ 1).
+    history_max: usize,
     last_op: Option<EditOp>,
     /// 직전에 삽입한 문자가 공백이었나 — 공백 뒤 첫 글자 = 새 단어 = 새 묶음(Sublime 단어 단위 되돌리기).
     last_ws: bool,
@@ -66,9 +69,51 @@ enum EditOp {
     Other,
 }
 
+impl Default for EditState {
+    fn default() -> Self {
+        EditState {
+            buf: Vec::new(),
+            caret: 0,
+            anchor: None,
+            extra: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            last_op: None,
+            last_ws: false,
+            preedit: String::new(),
+            history_max: Self::HISTORY_MAX,
+        }
+    }
+}
+
 impl EditState {
-    /// 히스토리 상한(스냅샷 수).
+    /// 히스토리 상한 기본값(스냅샷 수) — 호스트가 바꾸지 않으면 이 값.
     pub const HISTORY_MAX: usize = 500;
+
+    /// 되돌리기 스냅샷 상한을 바꾼다(0은 1로) — 넘치는 오래된 스냅샷은 즉시 버린다(메모리 상한 = 설정 즉시 반영).
+    pub fn set_history_max(&mut self, n: usize) {
+        self.history_max = n.max(1);
+        if self.undo.len() > self.history_max {
+            let drop_n = self.undo.len() - self.history_max;
+            self.undo.drain(..drop_n);
+        }
+        if self.redo.len() > self.history_max {
+            let drop_n = self.redo.len() - self.history_max;
+            self.redo.drain(..drop_n);
+        }
+    }
+
+    /// 현재 되돌리기 상한.
+    #[must_use]
+    pub fn history_max(&self) -> usize {
+        self.history_max
+    }
+
+    /// 쌓인 되돌리기 스냅샷 수(진단·테스트).
+    #[must_use]
+    pub fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
 
     fn snap(&self) -> Snap {
         Snap {
@@ -86,7 +131,7 @@ impl EditState {
         }
         let s = self.snap();
         self.undo.push(s);
-        if self.undo.len() > Self::HISTORY_MAX {
+        if self.undo.len() > self.history_max {
             self.undo.remove(0);
         }
         self.redo.clear();
@@ -155,12 +200,7 @@ impl EditState {
             buf,
             caret,
             anchor,
-            extra: Vec::new(),
-            preedit: String::new(),
-            undo: Vec::new(),
-            redo: Vec::new(),
-            last_op: None,
-            last_ws: false,
+            ..Self::default()
         }
     }
 
@@ -734,5 +774,25 @@ mod undo_tests {
         assert_eq!(e.regions(), vec![(1, 3), (6, 8), (11, 13)]);
         e.insert('.');
         assert_eq!(e.text(), "a.d\ne.h\ni.l");
+    }
+
+    /// T-90d(nexa-sql docs/39 §3-6): 되돌리기 깊이 상한 — 경계마다 새 스냅샷 · 상한을 넘으면 오래된 것부터 버린다 · 줄이면 즉시 잘린다.
+    #[test]
+    fn history_max_bounds_undo_depth() {
+        let mut e = EditState::new();
+        assert_eq!(e.history_max(), EditState::HISTORY_MAX);
+        e.set_history_max(3);
+        for _ in 0..10 {
+            e.insert('a');
+            e.insert(' '); // 공백 = 묶음 경계 → 다음 글자가 새 스냅샷
+        }
+        assert!(e.undo_len() <= 3, "상한 3을 넘지 않는다: {}", e.undo_len());
+        assert_eq!(e.undo_len(), 3);
+        e.set_history_max(1);
+        assert_eq!(e.undo_len(), 1, "줄이면 즉시 잘린다");
+        assert!(e.undo());
+        assert!(!e.undo(), "스냅샷 하나만 남았었다");
+        e.set_history_max(0);
+        assert_eq!(e.history_max(), 1, "0은 1로");
     }
 }

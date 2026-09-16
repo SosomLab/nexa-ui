@@ -120,6 +120,8 @@ pub struct TextBox {
     line_comment: Option<String>,
     /// 찾기 일치 구간(전부 · 호스트가 갱신) — 반투명 채움으로 표시(nexa-sql T-73 · 09-16).
     find_marks: Vec<(usize, usize)>,
+    /// 찾기 범위(선택 범위에서 찾기 · 호스트가 켤 때의 선택) — 은은한 채움으로 표시(VS Code Find in Selection · 09-16).
+    find_scope: Option<(usize, usize)>,
     /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
     line_numbers: bool,
     /// 줄번호 오른쪽 **표시 띠**(Golden식 · 3px 색 막대 자리 4px + 첫 글자 앞 2px 여백 · nexa-sql 09-16).
@@ -156,6 +158,61 @@ pub struct TextBox {
     occurrence_hl: bool,
     /// 공백 문자 표시(설정 `editor.whitespace*`).
     whitespace: WhitespaceStyle,
+    /// ★ 미니맵(Sublime식 · nexa-sql T-97 · 사용자 09-16) — 멀티라인일 때만 본문 오른쪽(스크롤바 안쪽)에 세로 띠.
+    minimap: bool,
+    /// 미니맵 폭(논리 px · 기본 [`MINIMAP_DEFAULT_WIDTH`]).
+    minimap_w: i32,
+    /// 미니맵 픽셀 캐시 — 창(띠에 보이는 행 범위)·텍스트 해시·폭·배율·테마 색이 키. 매 프레임은 블릿만.
+    minimap_cache: std::cell::RefCell<Option<MinimapCache>>,
+    /// 캐시 재생성 횟수(테스트·진단 — 텍스트 변경 없이는 늘지 않아야 한다).
+    minimap_builds: std::cell::Cell<u32>,
+    /// 미니맵 띠 위치(마지막 페인트 실측 · 히트 테스트 근거 · 꺼져 있으면 빈 Rect).
+    minimap_rect: std::cell::Cell<Rect>,
+    /// 미니맵 배치(마지막 페인트 실측): (띠 자체 스크롤 px, 행 높이 px, 표시 행 총수, 본문 보이는 행 수).
+    minimap_lay: std::cell::Cell<(i32, i32, usize, usize)>,
+    /// 미니맵 뷰포트 상자 hover 페이드(버튼과 같은 `Fast` · 기존 부품).
+    minimap_hover: crate::tokens::Fade,
+    /// 미니맵 드래그 중(클릭 위치를 뷰포트 가운데로 · 따라감).
+    minimap_drag: bool,
+    /// 본문 텍스트 가용 폭(마지막 페인트 실측 · 테스트).
+    ml_avail: std::cell::Cell<i32>,
+}
+
+/// 미니맵 기본 폭(논리 px).
+pub const MINIMAP_DEFAULT_WIDTH: i32 = 80;
+/// 미니맵이 한 번에 래스터하는 행 상한 — 띠에 보이는 행만 그리므로 창 높이가 정하지만, 거대한 창에서도 시간이
+/// 튀지 않게 상한을 둔다(넘는 행은 빈 칸).
+pub const MINIMAP_MAX_LINES: usize = 4000;
+/// 미니맵 글자 불투명도(공백 제외).
+const MINIMAP_ALPHA: f32 = 0.62;
+
+/// 미니맵 캐시 비트맵 — `key`가 같으면 재사용(블릿만).
+#[derive(Debug)]
+struct MinimapCache {
+    key: MinimapKey,
+    img: IconImage,
+}
+
+/// 미니맵 캐시 키 — 이 값이 하나라도 바뀌면 다시 래스터한다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MinimapKey {
+    /// 띠에 보이는 첫 행(표시 행 인덱스).
+    start: usize,
+    /// 래스터한 행 수.
+    rows: usize,
+    /// 비트맵 크기(px).
+    w: i32,
+    h: i32,
+    /// 행 높이 · 글자 폭(px · 배율 반영).
+    row_h: i32,
+    cw: i32,
+    /// 창 안 행들의 앞 `cols`글자 해시(FNV-1a · 탭 폭 포함) — 창 밖 편집은 비트맵에 영향이 없으므로 키에 안 든다.
+    hash: u64,
+    /// 창 첫 행의 구문 강조 상태(블록 주석 안이면 색이 달라진다).
+    hl_state: u32,
+    has_hl: bool,
+    /// 테마 색(본문·배경·구문 4종).
+    colors: [u32; 6],
 }
 
 /// 멀티라인 한 줄의 화면 배치(클릭 매핑용 · 페인트가 채운다).
@@ -216,6 +273,7 @@ impl TextBox {
             scroll_snap: false,
             line_comment: None,
             find_marks: Vec::new(),
+            find_scope: None,
             line_numbers: false,
             gutter_marks: false,
             text_inset: 0,
@@ -235,6 +293,15 @@ impl TextBox {
             ruler_alpha: 0.25,
             occurrence_hl: true,
             whitespace: WhitespaceStyle::default(),
+            minimap: false,
+            minimap_w: MINIMAP_DEFAULT_WIDTH,
+            minimap_cache: std::cell::RefCell::new(None),
+            minimap_builds: std::cell::Cell::new(0),
+            minimap_rect: std::cell::Cell::new(Rect::default()),
+            minimap_lay: std::cell::Cell::new((0, 1, 0, 1)),
+            minimap_hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Fast),
+            minimap_drag: false,
+            ml_avail: std::cell::Cell::new(0),
         }
     }
 
@@ -243,13 +310,168 @@ impl TextBox {
     pub fn tick(&mut self, now_ms: u64) -> bool {
         let a = self.ml_bars.tick(now_ms);
         let b = self.hover.tick(now_ms);
-        a || b
+        let c = self.minimap_hover.tick(now_ms);
+        a || b || c
     }
 
     /// hover 페이드가 움직이는 중인가(호스트가 프레임을 예약할지).
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.hover.is_animating()
+        self.hover.is_animating() || self.minimap_hover.is_animating()
+    }
+
+    /// ★ 미니맵 켬/끔(멀티라인에서만 그려진다 · 기본 끔 · nexa-sql `editor.minimap`). 끄면 캐시를 비운다.
+    pub fn set_minimap(&mut self, on: bool) {
+        self.minimap = on;
+        if !on {
+            self.minimap_cache.replace(None);
+            self.minimap_rect.set(Rect::default());
+            self.minimap_hover.jump(false);
+            self.minimap_drag = false;
+        }
+    }
+
+    /// 미니맵이 켜져 있는가.
+    #[must_use]
+    pub fn minimap(&self) -> bool {
+        self.minimap
+    }
+
+    /// 미니맵 폭(논리 px · 20~400 · 기본 [`MINIMAP_DEFAULT_WIDTH`] · nexa-sql `editor.minimap_width`).
+    pub fn set_minimap_width(&mut self, px: i32) {
+        self.minimap_w = px.clamp(20, 400);
+    }
+
+    /// 미니맵 폭(논리 px).
+    #[must_use]
+    pub fn minimap_width(&self) -> i32 {
+        self.minimap_w
+    }
+
+    /// 미니맵 띠 영역(마지막 페인트 실측 · 꺼져 있거나 단일 행이면 빈 Rect) — 호스트 히트 테스트·테스트용.
+    #[must_use]
+    pub fn minimap_rect(&self) -> Rect {
+        self.minimap_rect.get()
+    }
+
+    /// 미니맵 비트맵을 다시 만든 횟수(진단 — 텍스트·폭·테마가 안 바뀌면 늘지 않는다).
+    #[must_use]
+    pub fn minimap_builds(&self) -> u32 {
+        self.minimap_builds.get()
+    }
+
+    /// 미니맵 띠 안의 y → 본문 첫 행. 클릭 지점이 뷰포트 **가운데**에 오도록 잡는다(Sublime).
+    fn minimap_top_for_y(&self, y: i32) -> usize {
+        let band = self.minimap_rect.get();
+        let (off, row_h, lines, rows) = self.minimap_lay.get();
+        let rel = (y - band.y + off).max(0) as usize / row_h.max(1) as usize;
+        let max_top = lines.saturating_sub(rows);
+        rel.saturating_sub(rows / 2).min(max_top)
+    }
+
+    /// 미니맵 클릭/드래그 = 스크롤(캐럿 불변 · 잔여 px 0 · 자유 스크롤 상태로).
+    fn minimap_scroll_to(&mut self, y: i32, inv: &mut Invalidations) {
+        let top = self.minimap_top_for_y(y);
+        self.vscroll.set(top);
+        self.ml_wheel_rem.set(0);
+        self.ml_user_scrolled = true;
+        inv.push(self.base.bounds);
+    }
+
+    /// 창 안 행들의 앞 `cols`글자 해시(FNV-1a 64) — 캐시 키. 탭은 그대로 섞는다(탭 폭은 별도 키).
+    fn minimap_hash(lines: &[(usize, String)], cols: usize, tab_size: u8) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut mix = |v: u32| {
+            h ^= u64::from(v);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        };
+        mix(u32::from(tab_size));
+        for (_, s) in lines {
+            for c in s.chars().take(cols) {
+                mix(u32::from(c));
+            }
+            mix(0x1_0000); // 행 구분(빈 행도 자리를 차지)
+        }
+        h
+    }
+
+    /// 미니맵 비트맵 래스터 — `lines[start..start+rows]`를 글자당 `cw`px × 행당 `row_h`px로. 공백은 투명.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn minimap_raster(
+        &self,
+        lines: &[(usize, String)],
+        key: &MinimapKey,
+        theme: &Theme,
+        hl_state: u32,
+    ) -> IconImage {
+        let (w, h) = (key.w.max(1) as u32, key.h.max(1) as u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        let cw = key.cw.max(1);
+        let row_h = key.row_h.max(1);
+        // 글자 표시 높이 — 행 사이에 1px 틈(배율 2 이상은 s(1))을 둬 행이 구분된다.
+        let mark_h = (row_h - self.s(1).max(1)).max(1);
+        let cols = (key.w / cw).max(1) as usize;
+        let ts = usize::from(self.tab_size.max(1));
+        let a = (MINIMAP_ALPHA * 255.0).round() as u8;
+        let a_plain = (MINIMAP_ALPHA * 0.75 * 255.0).round() as u8;
+        let mut state = hl_state;
+        let mut spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
+        let mut put = |x: i32, y: i32, c: Color, alpha: u8| {
+            if x < 0 || y < 0 || x >= key.w || y >= key.h {
+                return;
+            }
+            let i = ((y as u32 * w + x as u32) * 4) as usize;
+            let (r, g, b) = c.rgb();
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = alpha;
+        };
+        for (ri, (_, line)) in lines.iter().enumerate().take(key.rows) {
+            let y0 = ri as i32 * row_h;
+            // 색 구간 — 강조기가 없으면 줄 전체가 Plain.
+            spans.clear();
+            if let Some(hl) = &self.highlighter {
+                hl.line_spans(line, &mut state, &mut spans);
+            }
+            let mut col = 0usize; // 표시 열(탭 확장)
+            let mut si = 0usize; // 현재 스팬
+            let mut left = spans.first().map_or(usize::MAX, |s| s.0);
+            for ch in line.chars() {
+                if col >= cols {
+                    break;
+                }
+                while left == 0 && si + 1 < spans.len() {
+                    si += 1;
+                    left = spans[si].0;
+                }
+                let kind = spans
+                    .get(si)
+                    .map_or(crate::highlight::TokenKind::Plain, |s| s.1);
+                left = left.saturating_sub(1);
+                if ch == '\t' {
+                    col += Self::tab_cells(ts, col, self.tab_stops);
+                    continue;
+                }
+                if ch.is_whitespace() {
+                    col += 1;
+                    continue;
+                }
+                let (color, alpha) = if kind == crate::highlight::TokenKind::Plain {
+                    (theme.text, a_plain)
+                } else {
+                    (kind.color(theme), a)
+                };
+                let x0 = col as i32 * cw;
+                for dy in 0..mark_h {
+                    for dx in 0..cw {
+                        put(x0 + dx, y0 + dy, color, alpha);
+                    }
+                }
+                col += 1;
+            }
+        }
+        IconImage::from_rgba(w, h, rgba)
     }
 
     /// 줄번호 거터 켜기/끄기(멀티라인에서만 그려진다 · 기본 끔).
@@ -326,6 +548,23 @@ impl TextBox {
     /// 찾기 일치 구간 전부(문자 인덱스 · 빈 목록 = 표시 없음).
     pub fn set_find_marks(&mut self, marks: Vec<(usize, usize)>) {
         self.find_marks = marks;
+    }
+
+    /// 찾기 범위(문자 인덱스 · `None` = 전체).
+    pub fn set_find_scope(&mut self, scope: Option<(usize, usize)>) {
+        self.find_scope = scope;
+    }
+
+    /// 되돌리기 깊이 상한(설정 `editor.undo_max` · T-90d).
+    pub fn set_history_max(&mut self, n: usize) {
+        self.edit.set_history_max(n);
+    }
+
+    /// 구간 목록으로 선택을 통째로 바꾼다(찾기 "일치 전부 선택" Alt+Enter · 마지막이 주 선택).
+    pub fn set_regions_pub(&mut self, regions: &[(usize, usize)]) {
+        self.edit.set_regions(regions);
+        self.last_click.1 = 0;
+        self.ml_user_scrolled = false;
     }
 
     /// ★ Sublime식 편집 명령(줄 복제/삭제/합치기/이동 · 주석 토글 · 들여쓰기 ± · 줄 선택/나누기 · 캐럿 추가 · 대소문자).
@@ -1052,7 +1291,21 @@ impl TextBox {
         self.gutter_px.set(gw);
         let tx = b.x + self.s(10) + gw + self.s(self.text_inset);
         let top0 = b.y + self.s(8);
-        let avail = (b.right() - self.s(10) - tx).max(self.s(20));
+        // ★ 미니맵 띠(멀티라인 + 켬) — 스크롤바(THICK 11 + MARGIN 2 = 13) 안쪽 · 본문은 띠 왼쪽 4px 앞에서 끝난다.
+        let band = if self.minimap && self.multiline {
+            let mw = self.s(self.minimap_w);
+            Rect::new(b.right() - self.s(13) - mw, b.y + 1, mw, b.h - 2)
+        } else {
+            Rect::default()
+        };
+        self.minimap_rect.set(band);
+        let right_edge = if band.w > 0 {
+            band.x - self.s(4)
+        } else {
+            b.right() - self.s(10)
+        };
+        let avail = (right_edge - tx).max(self.s(20));
+        self.ml_avail.set(avail);
 
         // 표시 텍스트 — 조합 중이면 캐럿 자리에 preedit를 끼워 그린다(편집 불변).
         let chars: Vec<char> = text.chars().collect();
@@ -1240,20 +1493,6 @@ impl TextBox {
                 }
             }
         }
-        // 구문 강조 상태(블록 주석)를 첫 표시 행까지 이어 온다.
-        let mut hl_state = 0u32;
-        let mut hl_spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
-        if let Some(h) = &self.highlighter {
-            for (_, l) in lines.iter().take(top) {
-                hl_spans.clear();
-                h.line_spans(l, &mut hl_state, &mut hl_spans);
-            }
-        }
-        // 캐럿이 속한 표시 행(다중 캐럿 포함) — 시작이 캐럿 이하인 마지막 행.
-        let caret_rows: Vec<(usize, usize)> = carets
-            .iter()
-            .map(|&c| (lines.iter().rposition(|(st, _)| *st <= c).unwrap_or(0), c))
-            .collect();
         // ★ 픽셀 스크롤(nexa-sql 사용자 09-16): 휠 잔여 px(`ml_wheel_rem`)만큼 행을 위로 밀어 그린다 — 줄 단위 반올림은
         //   위/아래 반응이 비대칭이었다(내림이면 위로는 1px에 한 줄, 아래로는 한 줄 높이를 채워야). 캐럿 추종 중이거나
         //   맨 아래면 잔여를 버린다. 밀린 만큼 아래에 한 행을 더 그리고, 채움·캐럿·텍스트는 본문 영역으로 세로 클립.
@@ -1265,6 +1504,51 @@ impl TextBox {
         };
         // 행 단위 모드: 잔여는 누적만 하고 그리기는 줄 경계에.
         let rem = if self.scroll_snap { 0 } else { rem };
+        // ★ 미니맵 배치 — 행당 s(2)px · 문서가 띠보다 길면 띠 자체가 비례 스크롤(본문 스크롤 px : 최대 = 띠 오프셋 : 여유).
+        //   창 첫 행(`mm_start`)의 강조 상태는 아래 hl 루프가 지나가며 잡는다(mm_start ≤ top이라 추가 비용 0).
+        let mm_row_h = self.s(2).max(1);
+        let (mm_off, mm_start, mm_rows) = if band.w > 0 {
+            let total = lines.len() as i64 * i64::from(mm_row_h);
+            let travel = (total - i64::from(band.h)).max(0);
+            let doc_px = i64::from(top as i32 * lh + rem);
+            let doc_max = (max_top as i64 * i64::from(lh)).max(1);
+            let off = if travel > 0 {
+                (doc_px * travel / doc_max).clamp(0, travel) as i32
+            } else {
+                0
+            };
+            let start = (off / mm_row_h) as usize;
+            // 띠에 보이는 행 + 부분 행 1 — 상한으로 시간이 튀지 않게.
+            let visible = (band.h / mm_row_h) as usize + 2;
+            let rows = visible
+                .min(MINIMAP_MAX_LINES)
+                .min(lines.len().saturating_sub(start));
+            (off, start, rows)
+        } else {
+            (0, 0, 0)
+        };
+        self.minimap_lay.set((mm_off, mm_row_h, lines.len(), rows));
+        // 구문 강조 상태(블록 주석)를 첫 표시 행까지 이어 온다.
+        let mut hl_state = 0u32;
+        let mut mm_hl_state = 0u32;
+        let mut hl_spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
+        if let Some(h) = &self.highlighter {
+            for (i, (_, l)) in lines.iter().enumerate().take(top) {
+                if i == mm_start {
+                    mm_hl_state = hl_state;
+                }
+                hl_spans.clear();
+                h.line_spans(l, &mut hl_state, &mut hl_spans);
+            }
+            if mm_start >= top {
+                mm_hl_state = hl_state;
+            }
+        }
+        // 캐럿이 속한 표시 행(다중 캐럿 포함) — 시작이 캐럿 이하인 마지막 행.
+        let caret_rows: Vec<(usize, usize)> = carets
+            .iter()
+            .map(|&c| (lines.iter().rposition(|(st, _)| *st <= c).unwrap_or(0), c))
+            .collect();
         let (vy0, vy1) = (top0, b.y + b.h - self.s(4));
         let clipv = |r: Rect| -> Option<Rect> {
             let y0 = r.y.max(vy0);
@@ -1352,6 +1636,18 @@ impl TextBox {
                                 theme.sel_bg_inactive
                             },
                         );
+                    }
+                }
+            }
+            // 찾기 범위(선택 범위에서 찾기) — 이 행과 겹치는 구간을 은은하게(일치·선택 아래).
+            if let Some((a, e)) = self.find_scope {
+                let (ls, le) = (*start_idx, *start_idx + line_len);
+                if e > ls && a < le {
+                    let (s0, s1) = (a.max(ls) - ls, e.min(le) - ls);
+                    let x0 = (dx + w.get(s0).copied().unwrap_or(0)).max(vx0);
+                    let x1 = (dx + w.get(s1).copied().unwrap_or(0)).min(vx1);
+                    if let (true, Some(r)) = (x1 > x0, clipv(Rect::new(x0, y, x1 - x0, lh))) {
+                        ctx.fill_rect_alpha(r, theme.accent, 0.08);
                     }
                 }
             }
@@ -1497,6 +1793,126 @@ impl TextBox {
             });
         }
         drop(lay);
+        // ★ 미니맵(스크롤바 아래 · 팝업 아래) — 캐시 비트맵 블릿 + 선택/동일 출현 점 + 뷰포트 상자.
+        if band.w > 0 {
+            let mm_cw = self.s(1).max(1);
+            let colors = [
+                theme.text.0,
+                theme.field_bg.0,
+                theme.syn_keyword.0,
+                theme.syn_string.0,
+                theme.syn_comment.0,
+                theme.syn_number.0,
+            ];
+            let cols = (band.w / mm_cw).max(1) as usize;
+            let window = &lines[mm_start.min(lines.len())..(mm_start + mm_rows).min(lines.len())];
+            let key = MinimapKey {
+                start: mm_start,
+                rows: mm_rows,
+                w: band.w,
+                h: (mm_rows as i32 * mm_row_h).max(1),
+                row_h: mm_row_h,
+                cw: mm_cw,
+                hash: Self::minimap_hash(window, cols, self.tab_size),
+                hl_state: mm_hl_state,
+                has_hl: self.highlighter.is_some(),
+                colors,
+            };
+            ctx.fill_rect(band, theme.field_bg);
+            ctx.fill_rect(Rect::new(band.x, band.y, 1, band.h), theme.border);
+            {
+                let mut cache = self.minimap_cache.borrow_mut();
+                if cache.as_ref().is_none_or(|c| c.key != key) {
+                    let img = self.minimap_raster(window, &key, theme, mm_hl_state);
+                    *cache = Some(MinimapCache { key, img });
+                    self.minimap_builds
+                        .set(self.minimap_builds.get().wrapping_add(1));
+                }
+                if let Some(c) = cache.as_ref() {
+                    // 부분 행 오프셋(띠 스크롤 px의 행 나머지)만큼 위로 밀어 찍는다.
+                    ctx.image(band.x, band.y - mm_off % mm_row_h, &c.img, band);
+                }
+            }
+            // 선택 구간·동일 출현 = 강조색 점(창 안 행만 · 매 프레임 · 캐시 밖).
+            let mm_x = |col: usize| band.x + (col.min(cols) as i32) * mm_cw;
+            let mm_y = |row: usize| band.y + (row as i32) * mm_row_h - mm_off;
+            let ts = usize::from(self.tab_size.max(1));
+            for (wi, (start_idx, line_str)) in window.iter().enumerate() {
+                let row = mm_start + wi;
+                let y = mm_y(row);
+                if y + mm_row_h <= band.y || y >= band.bottom() {
+                    continue;
+                }
+                let line_len = line_str.chars().count();
+                let (ls, le) = (*start_idx, *start_idx + line_len);
+                // 문자 인덱스 → 표시 열(탭 확장) — 선택/출현이 있는 행만 센다.
+                let has_sel = sels.iter().any(|&(a, e)| a < le + 1 && e > ls);
+                if !has_sel && needle.is_none() {
+                    continue;
+                }
+                let lchars: Vec<char> = line_str.chars().collect();
+                let mut colv = Vec::with_capacity(lchars.len() + 1);
+                let mut col = 0usize;
+                colv.push(0);
+                for &c in &lchars {
+                    col += if c == '\t' {
+                        Self::tab_cells(ts, col, self.tab_stops)
+                    } else {
+                        1
+                    };
+                    colv.push(col);
+                }
+                let dot = |ctx: &mut dyn DrawCtx, c0: usize, c1: usize, alpha: f32| {
+                    let (x0, x1) = (mm_x(c0), mm_x(c1).max(mm_x(c0) + mm_cw));
+                    let r = Rect::new(x0, y, x1 - x0, mm_row_h).intersection(&band);
+                    if !r.is_empty() {
+                        ctx.fill_rect_alpha(r, theme.accent, alpha);
+                    }
+                };
+                if has_sel {
+                    for &(a, e) in &sels {
+                        let (s0, s1) = (a.max(ls), e.min(le));
+                        if s1 >= s0 && (s1 > s0 || (e > le && a <= le)) {
+                            let c1 = if e > le {
+                                colv[line_len] + 1
+                            } else {
+                                colv[s1 - ls]
+                            };
+                            dot(ctx, colv[s0 - ls], c1, 0.55);
+                        }
+                    }
+                }
+                if let Some(nd) = &needle {
+                    let n = nd.len();
+                    let mut i = 0usize;
+                    while i + n <= lchars.len() {
+                        if lchars[i..i + n] == nd[..] {
+                            let (a0, a1) = (ls + i, ls + i + n);
+                            if !sels.iter().any(|(a, e)| *a < a1 && a0 < *e) {
+                                dot(ctx, colv[i], colv[i + n], 0.35);
+                            }
+                            i += n;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            // 뷰포트 상자 — 지금 보이는 행 범위(픽셀 잔여 반영) · 반투명 채움 + 테두리 · hover 시 진하게.
+            let hov = self.minimap_hover.value().clamp(0.0, 1.0);
+            let vy = band.y
+                + ((top as i64 * i64::from(lh) + i64::from(rem)) * i64::from(mm_row_h)
+                    / i64::from(lh.max(1))) as i32
+                - mm_off;
+            let vh = (rows as i32 * mm_row_h).min(band.h);
+            let vbox = Rect::new(band.x + 1, vy, band.w - 1, vh).intersection(&band);
+            if !vbox.is_empty() {
+                ctx.fill_rect_alpha(vbox, theme.text, 0.07 + 0.10 * hov);
+                ctx.stroke_round_rect_alpha(vbox, 0, theme.text_dim, 1.0, 0.45 + 0.4 * hov);
+            }
+        } else {
+            self.minimap_cache.replace(None);
+        }
         // 스크롤바 오버레이(08-18 · 대화 입력창과 동일) — 상하+좌우 · 자동 숨김.
         // content_w에 좌우 여백 s(20)을 더해 스크롤 범위를 max_hs와 맞춘다(끝 글자
         // 가림 수정 · on_event와 같은 값).
@@ -1504,7 +1920,7 @@ impl TextBox {
             ctx,
             theme,
             b,
-            (content_w + self.s(20) + gw).max(b.w),
+            (content_w + self.s(20) + gw + band.w).max(b.w),
             content_h.max(b.h),
             hs,
             (top as i32) * lh + rem,
@@ -1535,10 +1951,20 @@ impl Widget for TextBox {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        // hover 목표(단일 행만) — 밝기는 `tick`이 옮긴다.
+        // hover 목표(단일 행만) — 밝기는 `tick`이 옮긴다. 미니맵 뷰포트 상자도 같은 부품(띠 위 = 진하게).
         if let InputEvent::MouseMove { x, y } = *ev {
             self.hover
                 .set(!self.multiline && self.base.bounds.contains(Point { x, y }));
+            let band = self.minimap_rect.get();
+            self.minimap_hover
+                .set(self.minimap_drag || (!band.is_empty() && band.contains(Point { x, y })));
+        }
+        // 미니맵 위 우클릭 = 편집 메뉴 없음(캐럿·선택 대상이 아니다).
+        if let InputEvent::RightDown { x, y } = *ev {
+            let band = self.minimap_rect.get();
+            if !self.ctx_menu.is_open() && !band.is_empty() && band.contains(Point { x, y }) {
+                return;
+            }
         }
         // 우클릭 편집 메뉴가 열려 있으면 가장 먼저 먹는다(팝업 최상위).
         if self.ctx_menu.is_open() {
@@ -1594,7 +2020,7 @@ impl Widget for TextBox {
             // ★ 스크롤바는 뷰포트를 vp.w로 보지만 실제 텍스트 뷰포트는 좌우 여백
             //   s(20)을 뺀 값이다(08-18 실기: 끝 ~2글자가 여백만큼 안 보였다).
             //   content_w에 그 여백을 더해 스크롤 범위를 paint의 max_hs와 맞춘다.
-            let cw_bars = cw + self.s(20);
+            let cw_bars = cw + self.s(20) + self.minimap_rect.get().w;
             // ★ 세로 오프셋은 줄 단위(`vscroll`)지만 휠은 px로 온다 — 줄로 반올림하고 남은 px를 버리면 트랙패드의
             //   느린 이동(사건당 1~3px)이 영원히 한 줄을 못 넘는다(nexa-sql 사용자 09-16). 잔여 px를 `ml_wheel_rem`에
             //   보관해 다음 휠 사건에 더한다 · 휠이 아닌 사건(썸 드래그·클릭)은 잔여를 버리고 가장 가까운 줄로.
@@ -1641,6 +2067,20 @@ impl Widget for TextBox {
             }
         }
         match *ev {
+            InputEvent::MouseDown { x, y, .. }
+                if self.multiline
+                    && !self.minimap_rect.get().is_empty()
+                    && self.minimap_rect.get().contains(Point { x, y }) =>
+            {
+                // ★ 미니맵 클릭 = 그 자리가 뷰포트 가운데 오도록 스크롤 · 드래그 = 따라감(마우스 라우팅 규칙: x·y 둘 다로
+                //   히트 테스트 · 캐럿 이동/선택은 시작되지 않는다).
+                self.base.focused = true;
+                self.minimap_drag = true;
+                self.dragging = false;
+                self.col_anchor = None;
+                self.last_click.1 = 0;
+                self.minimap_scroll_to(y, inv);
+            }
             InputEvent::MouseDown { x, y, shift, .. } => {
                 let badge = self.help_badge_rect(self.base.bounds);
                 if self.handle_help_click(x, y, badge) {
@@ -1747,6 +2187,10 @@ impl Widget for TextBox {
                     inv.push(self.base.bounds);
                 }
             }
+            // 미니맵 드래그 — 세로만 따라간다(띠 밖으로 나가도 y로 계속).
+            InputEvent::MouseMove { y, .. } if self.minimap_drag => {
+                self.minimap_scroll_to(y, inv);
+            }
             // 열 선택 드래그 — 줄마다 같은 x 구간(폭 0이면 캐럿만).
             InputEvent::MouseMove { x, y } if self.dragging && self.col_anchor.is_some() => {
                 if let Some((ax, ay)) = self.col_anchor {
@@ -1802,9 +2246,15 @@ impl Widget for TextBox {
                 self.edit.set_caret(idx, true); // 앵커 유지 = 범위 확장
                 inv.push(self.base.bounds);
             }
-            InputEvent::MouseUp { .. } => {
+            InputEvent::MouseUp { x, y } => {
                 self.dragging = false;
                 self.col_anchor = None;
+                if self.minimap_drag {
+                    self.minimap_drag = false;
+                    let band = self.minimap_rect.get();
+                    self.minimap_hover
+                        .set(!band.is_empty() && band.contains(Point { x, y }));
+                }
             }
             InputEvent::Char { c, .. } if self.base.focused => {
                 self.last_click.1 = 0; // 타이핑 = 클릭 체인 끊김(클릭-타이핑-클릭 ≠ 더블클릭)
@@ -2704,6 +3154,244 @@ mod tests {
         assert!(!t.column_dragging());
         t.on_event(&ch('.'), &mut inv);
         assert_eq!(t.text(), "a.d\ne.h\ni.l", "블록이 한 번에 대체된다");
+    }
+}
+
+#[cfg(test)]
+mod minimap_tests {
+    use super::*;
+    use crate::controls::ProbeCtx;
+
+    /// `image` 블릿과 fill을 기록하는 캔버스 — 미니맵이 띠 안에만 그려지는지.
+    struct BlitCtx {
+        images: Vec<(i32, i32, u32, u32, Rect)>,
+        fills: Vec<Rect>,
+    }
+    impl crate::draw::DrawCtx for BlitCtx {
+        fn fill_rect(&mut self, r: Rect, _c: Color) {
+            self.fills.push(r);
+        }
+        fn text_opaque(&mut self, _x: i32, _y: i32, _c: Rect, _t: &str, _f: Color, _b: Color) {}
+        fn text(&mut self, _x: i32, _y: i32, _c: Rect, _t: &str, _f: Color) {}
+        fn text_width(&mut self, text: &str) -> i32 {
+            text.chars().count() as i32 * 7
+        }
+        fn image(&mut self, x: i32, y: i32, img: &IconImage, clip: Rect) {
+            self.images.push((x, y, img.w, img.h, clip));
+        }
+    }
+
+    fn editor(lines: usize) -> TextBox {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 300), &mut inv);
+        let text: String = (1..=lines)
+            .map(|i| format!("select col_{i} from t where x = '{i}'\n"))
+            .collect();
+        t.set_text(&text);
+        t.base.focused = true;
+        t.edit.set_caret(0, false);
+        t
+    }
+    fn paint(t: &TextBox) {
+        let theme = crate::theme::Theme::dark();
+        t.paint(&mut ProbeCtx, &theme);
+    }
+    fn down(x: i32, y: i32) -> InputEvent {
+        InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        }
+    }
+
+    /// ① 켜면 본문 가용 폭이 미니맵 폭 + 여백만큼 줄고, 띠는 스크롤바 안쪽(오른쪽 13px 앞)에 놓인다.
+    #[test]
+    fn minimap_narrows_text_area_and_sits_inside_scrollbar() {
+        let mut t = editor(50);
+        paint(&t);
+        let avail_off = t.ml_avail.get();
+        assert!(t.minimap_rect().is_empty(), "기본은 꺼짐");
+        t.set_minimap(true);
+        paint(&t);
+        let band = t.minimap_rect();
+        assert_eq!(band.w, MINIMAP_DEFAULT_WIDTH, "기본 폭 80(배율 1)");
+        assert_eq!(band.right(), 400 - 13, "스크롤바(11+2) 안쪽");
+        assert_eq!(band.y, 1);
+        assert_eq!(band.h, 298);
+        let avail_on = t.ml_avail.get();
+        // 종전 오른쪽 여백 10 → 띠 앞 4 + 띠 80 + 스크롤바 13.
+        assert_eq!(
+            avail_off - avail_on,
+            80 + 4 + 13 - 10,
+            "본문 폭이 그만큼 준다"
+        );
+        t.set_minimap_width(120);
+        paint(&t);
+        assert_eq!(t.minimap_rect().w, 120);
+        assert_eq!(avail_off - t.ml_avail.get(), 120 + 7);
+        // 단일 행 상자에는 그려지지 않는다.
+        let mut s = TextBox::new("p");
+        s.set_minimap(true);
+        s.set_bounds(Rect::new(0, 0, 200, 30), &mut Invalidations::default());
+        paint(&s);
+        assert!(s.minimap_rect().is_empty());
+    }
+
+    /// ② 미니맵 클릭 = 그 자리가 뷰포트 가운데 오도록 스크롤 · 드래그 = 따라감 · 캐럿·선택은 불변.
+    #[test]
+    fn minimap_click_and_drag_scroll_without_moving_caret() {
+        let mut t = editor(200);
+        t.set_minimap(true);
+        paint(&t);
+        let band = t.minimap_rect();
+        let lh = t.line_h();
+        let rows = ((300 - 12) / lh) as usize; // 14
+        let mut inv = Invalidations::default();
+        // 문서 200행 × 2px = 400 > 띠 298 → 띠 자체 스크롤이 있으나 top=0이면 오프셋 0.
+        t.on_event(&down(band.x + 10, band.y + 250), &mut inv);
+        paint(&t);
+        assert_eq!(t.vscroll.get(), 125 - rows / 2, "클릭 행 125가 가운데");
+        assert_eq!(t.edit.caret(), 0, "캐럿 불변");
+        assert!(t.edit.selection().is_none(), "선택 시작 없음");
+        assert!(!t.dragging, "텍스트 드래그가 아니다");
+        assert!(!inv.is_empty());
+        // 드래그(띠 밖 x라도 y로 따라간다) — 띠가 스크롤됐으므로 오프셋을 더한 행.
+        let (off, row_h, _, _) = t.minimap_lay.get();
+        assert!(off > 0, "비례 스크롤로 띠가 밀렸다");
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: band.x - 30,
+                y: band.y + 40,
+            },
+            &mut inv,
+        );
+        paint(&t);
+        let want = ((40 + off) / row_h) as usize - rows / 2;
+        assert_eq!(t.vscroll.get(), want, "드래그 = 따라감");
+        t.on_event(
+            &InputEvent::MouseUp {
+                x: band.x - 30,
+                y: band.y + 40,
+            },
+            &mut inv,
+        );
+        assert!(!t.minimap_drag);
+        // 띠가 끝까지 밀린 상태에서 맨 아래 클릭 = max_top으로 클램프(띠 오프셋을 더해 매핑한다).
+        t.ml_user_scrolled = true;
+        t.vscroll.set(10_000);
+        paint(&t);
+        t.on_event(&down(band.x + 1, band.bottom() - 1), &mut inv);
+        paint(&t);
+        assert_eq!(t.vscroll.get(), 201 - rows, "끝(201행)을 넘지 않는다");
+        // 띠 밖(본문) 클릭은 종전대로 캐럿 이동.
+        t.on_event(&down(20, 20), &mut inv);
+        assert!(t.dragging, "본문 클릭 = 텍스트 드래그 시작");
+    }
+
+    /// ③ 캐시는 텍스트·폭·테마가 안 바뀌면 재생성되지 않는다(캐럿 깜빡임·캐럿 이동·hover는 블릿만).
+    #[test]
+    fn minimap_cache_rebuilds_only_on_content_or_key_change() {
+        let mut t = editor(60);
+        t.set_minimap(true);
+        t.set_highlighter(Some(Rc::new(crate::highlight::SyntaxSpec::sql())));
+        let theme = crate::theme::Theme::dark();
+        let mut probe = ProbeCtx;
+        t.paint(&mut probe, &theme);
+        assert_eq!(t.minimap_builds(), 1, "첫 페인트가 만든다");
+        for _ in 0..5 {
+            t.paint(&mut probe, &theme);
+        }
+        assert_eq!(t.minimap_builds(), 1, "변경 없음 = 블릿만");
+        // 캐럿 이동·선택은 오버레이(캐시 밖).
+        t.edit.set_caret(30, false);
+        t.edit.set_selection(7, 12);
+        t.paint(&mut probe, &theme);
+        assert_eq!(t.minimap_builds(), 1, "캐럿·선택은 재생성 사유가 아니다");
+        // 타이핑 = 재생성.
+        let mut inv = Invalidations::default();
+        t.on_event(&InputEvent::Char { c: 'Z', now_ms: 0 }, &mut inv);
+        t.paint(&mut probe, &theme);
+        assert_eq!(t.minimap_builds(), 2, "텍스트 변경 = 1회 재생성");
+        t.paint(&mut probe, &theme);
+        assert_eq!(t.minimap_builds(), 2);
+        // 폭·테마 변경 = 재생성.
+        t.set_minimap_width(100);
+        t.paint(&mut probe, &theme);
+        assert_eq!(t.minimap_builds(), 3, "폭 변경");
+        t.paint(&mut ProbeCtx, &crate::theme::Theme::light());
+        assert_eq!(t.minimap_builds(), 4, "테마 변경");
+        // 끄면 캐시를 비우고 띠도 없다.
+        t.set_minimap(false);
+        t.paint(&mut probe, &theme);
+        assert!(t.minimap_cache.borrow().is_none());
+        assert!(t.minimap_rect().is_empty());
+    }
+
+    /// 비트맵은 띠 크기·행 높이에 맞고(줄당 2px · 글자당 1px) 띠 안으로만 블릿된다 · 공백은 투명.
+    #[test]
+    fn minimap_bitmap_geometry_and_blit_clip() {
+        let mut t = editor(20);
+        t.set_minimap(true);
+        let theme = crate::theme::Theme::dark();
+        let mut rec = BlitCtx {
+            images: Vec::new(),
+            fills: Vec::new(),
+        };
+        t.paint(&mut rec, &theme);
+        let band = t.minimap_rect();
+        assert_eq!(rec.images.len(), 1, "블릿 한 번");
+        let (x, y, w, h, clip) = rec.images[0];
+        assert_eq!((x, y), (band.x, band.y), "짧은 문서 = 오프셋 0");
+        assert_eq!(w as i32, band.w);
+        assert_eq!(h, 21 * 2, "20행 + 마지막 빈 줄 = 21행 × 2px");
+        assert_eq!(clip, band, "띠로 클립");
+        let img = &t.minimap_cache.borrow().as_ref().map(|c| c.img.clone());
+        let img = img.as_ref().expect("캐시");
+        // 첫 행 "select ..." — 0열은 글자(불투명) · 6열(공백)은 투명 · 2번째 px 행(틈)은 투명.
+        let px = |cx: u32, cy: u32| img.rgba[((cy * img.w + cx) * 4 + 3) as usize];
+        assert!(px(0, 0) > 0, "글자 자리 불투명");
+        assert_eq!(px(6, 0), 0, "공백은 투명");
+        assert_eq!(px(0, 1), 0, "행 사이 틈");
+        assert!(px(0, 2) > 0, "둘째 행");
+        // 뷰포트 상자·미니맵 배경 등 채움은 띠 밖으로 나가지 않는다(본문 채움 제외 — 띠 안 x만 검사).
+        for r in rec.fills.iter().filter(|r| r.x >= band.x) {
+            assert!(
+                r.right() <= band.right() + 1 && r.y >= band.y && r.bottom() <= band.bottom(),
+                "띠 밖 채움 {r:?} vs {band:?}"
+            );
+        }
+    }
+
+    /// 긴 문서 — 띠가 비례 스크롤되어 마지막 행에서 뷰포트 상자가 띠 끝에 닿고 hover 페이드가 tick으로 움직인다.
+    #[test]
+    fn minimap_proportional_scroll_and_hover() {
+        let mut t = editor(1000);
+        t.set_minimap(true);
+        t.edit.set_caret(t.text().chars().count(), false); // 끝으로 → 캐럿 추종
+        paint(&t);
+        let (off, row_h, lines, rows) = t.minimap_lay.get();
+        assert_eq!(lines, 1001);
+        assert_eq!(row_h, 2);
+        let band = t.minimap_rect();
+        assert_eq!(off, lines as i32 * row_h - band.h, "끝 = 띠 오프셋 최대");
+        assert!(rows > 0);
+        // hover — 띠 위로 이동하면 목표 on · tick이 값을 올린다.
+        let mut inv = Invalidations::default();
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: band.x + 5,
+                y: band.y + 5,
+            },
+            &mut inv,
+        );
+        assert!(t.is_animating(), "목표 on = 움직이는 중");
+        t.tick(0); // 기준 시각
+        t.tick(2000);
+        assert!(t.minimap_hover.value() > 0.9, "hover 진행");
+        t.on_event(&InputEvent::MouseMove { x: 5, y: 5 }, &mut inv);
+        assert!(t.is_animating(), "띠를 벗어나면 꺼지는 중");
     }
 }
 

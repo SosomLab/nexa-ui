@@ -12,6 +12,7 @@ members = [
   "crates/nexa-font",  # 시스템 폰트 발견 — 한글 UI·고정폭(D2Coding 우선)·기호 폴백 (의존: nexa-gfx · memmap2)
   "crates/nexa-fs",    # 파일시스템 중립 모델 — 장소·열거·정렬·이름 규칙·로컬 시각 (의존 0 · OS 분기는 여기만 · docs/20)
   "crates/nexa-dlg",   # 대화상자 조립 — FilePicker(열기/저장) (의존: nexa-ctl · nexa-fs)
+  "crates/nexa-sys",   # OS 신호 — 배터리·원격 세션·동작 줄이기·CPU 코어 수 (의존 0 · 수동 FFI · nexa-sql D-60)
 ]
 
 [workspace.package]
@@ -39,5 +40,6 @@ nexa-conf = { path = "crates/nexa-conf" }
 nexa-font = { path = "crates/nexa-font" }
 nexa-fs = { path = "crates/nexa-fs" }
 nexa-dlg = { path = "crates/nexa-dlg" }
+nexa-sys = { path = "crates/nexa-sys" }
 
 # 라이브러리 워크스페이스 — 릴리스 프로필은 소비 앱이 정한다(여기서는 기본값).
