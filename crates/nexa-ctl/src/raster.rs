@@ -465,7 +465,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
                 self.cur_style(),
                 origin,
             );
-            fx += f.measure_from(&run, s, fx - origin);
+            fx += f.measure_from_styled(&run, s, fx - origin, self.cur.bold);
         }
     }
 
@@ -474,15 +474,20 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         let own = size * self.mono_mult;
         if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
         {
-            return self.font.measure(text, own).ceil() as i32;
+            return self
+                .font
+                .measure_from_styled(text, own, 0.0, self.cur.bold)
+                .ceil() as i32;
         }
         // 런을 이어 재되 탭 정지점은 문자열 시작(원점 0)부터 — 런 시작 위치를 넘긴다(접기 순서는 종전과 동일).
         let mut acc = 0f32;
         for (fallback, run) in split_runs(text, |c| self.font.has_glyph(c)) {
             acc += if fallback {
-                self.fonts.base.measure_from(&run, size, acc)
+                self.fonts
+                    .base
+                    .measure_from_styled(&run, size, acc, self.cur.bold)
             } else {
-                self.font.measure_from(&run, own, acc)
+                self.font.measure_from_styled(&run, own, acc, self.cur.bold)
             };
         }
         acc.ceil() as i32
@@ -503,7 +508,9 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             // 빠른 경로 — measure()와 같은 문자 순서의 f32 누적 · 접두사마다 ceil.
             let mut sum = 0f32;
             for c in text.chars() {
-                sum += self.font.measure_from(c.encode_utf8(&mut buf), own, sum);
+                sum +=
+                    self.font
+                        .measure_from_styled(c.encode_utf8(&mut buf), own, sum, self.cur.bold);
                 out.push(sum.ceil() as i32);
             }
             return;
@@ -527,11 +534,15 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             }
             let at = completed + run_sum;
             run_sum += if fb {
-                self.fonts
-                    .base
-                    .measure_from(c.encode_utf8(&mut buf), size, at)
+                self.fonts.base.measure_from_styled(
+                    c.encode_utf8(&mut buf),
+                    size,
+                    at,
+                    self.cur.bold,
+                )
             } else {
-                self.font.measure_from(c.encode_utf8(&mut buf), own, at)
+                self.font
+                    .measure_from_styled(c.encode_utf8(&mut buf), own, at, self.cur.bold)
             };
             out.push((completed + run_sum).ceil() as i32);
         }

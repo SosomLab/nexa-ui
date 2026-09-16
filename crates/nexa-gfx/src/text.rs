@@ -47,9 +47,9 @@ static TEXT_HINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 /// ★ OS 래스터라이저(Windows GDI) 글리프 사용 여부(기본 끔 · 다른 OS에서는 늘 끔).
 static TEXT_GDI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// OS(GDI) 힌팅 글리프를 쓴다 — Windows에서만 효과. 켜면 그 face의 글리프 비트맵·전진 폭을 GDI에서 얻는다
-/// (Golden과 같은 래스터 · 오토힌트/굵기 보강은 그 face에 적용하지 않는다). face 패밀리 이름은
-/// [`Font::set_face_family`]로 알려 줘야 한다(없으면 ab_glyph 경로).
+/// OS(GDI) ClearType 글리프를 쓴다 — Windows에서만 효과. 켜면 그 face의 글리프(채널별 커버리지)·전진 폭·진짜
+/// 볼드를 GDI에서 얻는다(Windows·Golden과 같은 래스터 · 감마/오토힌트/굵기 보강은 그 face에 적용하지 않는다).
+/// face 패밀리 이름은 글꼴 `name` 테이블 + [`Font::set_face_family`](없으면 ab_glyph 경로).
 pub fn set_text_gdi(on: bool) {
     TEXT_GDI.store(on, std::sync::atomic::Ordering::Relaxed);
 }
@@ -223,6 +223,8 @@ struct GlyphKey {
     weight: u32,
     /// GDI 글리프 여부.
     gdi: bool,
+    /// 진짜 볼드 face(GDI) 여부 — ab_glyph 경로는 늘 false(faux 볼드는 그리기 때).
+    bold: bool,
 }
 
 /// 래스터된 글리프 — 원점(펜 정수 x · 베이스라인 정수 y) 기준 오프셋 + 8비트 커버리지.
@@ -236,8 +238,10 @@ pub struct GlyphBitmap {
     pub ox: i16,
     /// 원점 기준 좌상단 오프셋.
     pub oy: i16,
-    /// `w*h` 커버리지(0~255).
+    /// `w*h` 커버리지(0~255) · [`Self::rgb`]면 픽셀당 3바이트(R·G·B 서브픽셀 커버리지 · `w*h*3`).
     pub cov: Vec<u8>,
+    /// 채널별(ClearType) 커버리지 여부.
+    pub rgb: bool,
 }
 
 /// 캐시 상한(항목 수) — 넘으면 비우고 다시 채운다(글꼴 크기를 여러 번 바꿔도 메모리가 제자리).
@@ -246,7 +250,7 @@ const GLYPH_CACHE_MAX: usize = 8192;
 const SUBPX: f32 = 3.0;
 
 /// GDI 전진 폭 캐시 — (face, em px, 문자) → px.
-type GdiAdvCache = HashMap<(u8, i32, char), i32>;
+type GdiAdvCache = HashMap<(u8, i32, char, bool), i32>;
 /// (face, size 비트) → GDI face(패밀리 이름 후보들, em px) 또는 없음.
 type GdiFaceCache = HashMap<(u8, u32), Option<(Arc<[String]>, i32)>>;
 
@@ -420,23 +424,23 @@ impl Font {
         out
     }
 
-    /// 문자 하나의 전진 폭(px) — GDI face면 정수 전진(캐시) · 아니면 ab_glyph.
-    fn advance_of(&self, face_i: usize, ch: char, size: f32) -> f32 {
+    /// 문자 하나의 전진 폭(px) — GDI face면 정수 전진(캐시 · 굵게는 볼드 face 폭) · 아니면 ab_glyph(굵게 무시 = faux).
+    fn advance_of(&self, face_i: usize, ch: char, size: f32, bold: bool) -> f32 {
         if let Some((names, em_px)) = self.gdi_face(face_i, size) {
-            let key = (face_i as u8, em_px, ch);
+            let key = (face_i as u8, em_px, ch, bold);
             if let Ok(c) = self.gdi_adv.lock() {
                 if let Some(a) = c.get(&key) {
                     return *a as f32;
                 }
             }
             #[cfg(windows)]
-            if let Some(g) = crate::gdi::glyph(&names, em_px, ch) {
+            if let Some(g) = crate::gdi::glyph(&names, em_px, bold, ch) {
                 if let Ok(mut c) = self.gdi_adv.lock() {
                     c.insert(key, g.adv);
                 }
                 return g.adv as f32;
             }
-            let _ = names;
+            let _ = (names, bold);
         }
         let face = &self.faces[face_i];
         face.as_scaled(size).h_advance(face.glyph_id(ch))
@@ -524,12 +528,14 @@ impl Font {
         ch: char,
         size: f32,
         sub: u8,
+        bold: bool,
     ) -> Option<Arc<GlyphBitmap>> {
         let face = &self.faces[face_i];
         let gid = face.glyph_id(ch);
         let gamma_bits = TEXT_GAMMA.load(std::sync::atomic::Ordering::Relaxed);
         let hint = text_hint();
         let weight_bits = TEXT_WEIGHT.load(std::sync::atomic::Ordering::Relaxed);
+        let gdi = self.gdi_face(face_i, size);
         let key = GlyphKey {
             face: face_i as u8,
             gid: gid.0,
@@ -538,35 +544,28 @@ impl Font {
             gamma: gamma_bits,
             hint,
             weight: weight_bits,
-            gdi: self.gdi_face(face_i, size).is_some(),
+            gdi: gdi.is_some(),
+            bold: bold && gdi.is_some(),
         };
         if let Ok(c) = self.cache.lock() {
             if let Some(bm) = c.get(&key) {
                 return Some(Arc::clone(bm));
             }
         }
-        // ★ GDI 경로: OS 힌팅 비트맵을 그대로(감마만 적용 · 오토힌트/굵기 보강 없음).
+        // ★ GDI 경로: ClearType 채널별 커버리지를 그대로(감마·오토힌트·굵기 보강 없음 — GDI가 이미 했다).
         #[cfg(windows)]
-        if let Some((names, em_px)) = self.gdi_face(face_i, size) {
-            let g = crate::gdi::glyph(&names, em_px, ch)?;
+        if let Some((names, em_px)) = gdi {
+            let g = crate::gdi::glyph(&names, em_px, bold, ch)?;
             if g.w == 0 || g.h == 0 {
                 return None;
-            }
-            let gamma = f32::from_bits(gamma_bits);
-            let mut cov = g.cov;
-            if (gamma - 1.0).abs() >= 1e-3 {
-                let inv = 1.0 / gamma;
-                for v in &mut cov {
-                    let c = f32::from(*v) / 255.0;
-                    *v = (c.powf(inv) * 255.0 + 0.5) as u8;
-                }
             }
             let bm = Arc::new(GlyphBitmap {
                 w: g.w,
                 h: g.h,
                 ox: g.ox,
                 oy: g.oy,
-                cov,
+                cov: g.cov,
+                rgb: true,
             });
             if let Ok(mut c) = self.cache.lock() {
                 if c.len() >= GLYPH_CACHE_MAX {
@@ -619,6 +618,7 @@ impl Font {
             ox: b.min.x.floor() as i16,
             oy: b.min.y.floor() as i16,
             cov,
+            rgb: false,
         });
         if let Ok(mut c) = self.cache.lock() {
             if c.len() >= GLYPH_CACHE_MAX {
@@ -627,6 +627,79 @@ impl Font {
             c.insert(key, Arc::clone(&bm));
         }
         Some(bm)
+    }
+
+    /// 테스트용: 글리프의 **세로 획 가시성** — 열마다 "커버리지 ≥ 0.375(rgb는 최대 채널)인 행 수"를 재서 가장 높은 열의
+    /// 행 비율(0~1). ClearType은 서브픽셀에 걸친 줄기를 채널 하나에 반쯤 담을 수 있어 문턱을 중간 아래로 둔다.
+    /// 세로 획이 있는 글자(ㅏ·l·|)가 흐리면(반 픽셀에 걸쳐 두 열로 번짐) 이 값이 낮다(09-16 GGO 회색 `닫` = 0).
+    #[must_use]
+    pub fn glyph_stem_visibility(&self, ch: char, size: f32, bold: bool) -> f32 {
+        let face_i = self.face_index_for(ch);
+        let Some(bm) = self.glyph_bitmap(face_i, ch, size, 0, bold) else {
+            return 0.0;
+        };
+        let (w, h) = (bm.w as usize, bm.h as usize);
+        if w == 0 || h == 0 {
+            return 0.0;
+        }
+        let at = |r: usize, c: usize| -> u8 {
+            let i = r * w + c;
+            if bm.rgb {
+                bm.cov[i * 3].max(bm.cov[i * 3 + 1]).max(bm.cov[i * 3 + 2])
+            } else {
+                bm.cov[i]
+            }
+        };
+        let best = (0..w)
+            .map(|c| (0..h).filter(|&r| at(r, c) >= 96).count())
+            .max()
+            .unwrap_or(0);
+        best as f32 / h as f32
+    }
+
+    /// 테스트용: 글리프 커버리지 합(잉크 양 · rgb면 채널 평균).
+    #[must_use]
+    pub fn glyph_ink(&self, ch: char, size: f32, bold: bool) -> f32 {
+        let face_i = self.face_index_for(ch);
+        let Some(bm) = self.glyph_bitmap(face_i, ch, size, 0, bold) else {
+            return 0.0;
+        };
+        let sum: f32 = bm.cov.iter().map(|&v| f32::from(v) / 255.0).sum();
+        if bm.rgb {
+            sum / 3.0
+        } else {
+            sum
+        }
+    }
+
+    /// 진단·테스트용: 글리프 비트맵을 ASCII 아트로(행마다 `#`(≥192) `+`(≥96) `.`(>0) 공백) — 첫 줄은
+    /// `w×h ox,oy adv` 메타. 외곽선이 없으면 `"(none)"`. 자동 캡처 대신 래스터 결과를 곧바로 검사한다.
+    #[must_use]
+    pub fn glyph_ascii(&self, ch: char, size: f32) -> String {
+        let face_i = self.face_index_for(ch);
+        let adv = self.advance_of(face_i, ch, size, false);
+        let Some(bm) = self.glyph_bitmap(face_i, ch, size, 0, false) else {
+            return "(none)".to_string();
+        };
+        let mut out = format!("{}x{} {},{} adv {adv}\n", bm.w, bm.h, bm.ox, bm.oy);
+        for r in 0..bm.h as usize {
+            for c in 0..bm.w as usize {
+                let i = r * bm.w as usize + c;
+                let v = if bm.rgb {
+                    bm.cov[i * 3].max(bm.cov[i * 3 + 1]).max(bm.cov[i * 3 + 2])
+                } else {
+                    bm.cov[i]
+                };
+                out.push(match v {
+                    0 => ' ',
+                    1..=95 => '.',
+                    96..=191 => '+',
+                    _ => '#',
+                });
+            }
+            out.push('\n');
+        }
+        out
     }
 
     /// 소유 바이트에서 로드 — **의도적 누수**로 `'static`화(폰트는 프로세스 수명 자원).
@@ -661,6 +734,12 @@ impl Font {
     /// 같다(호출자가 런을 이어 붙여도 접두사 폭과 비트 동일 — nexa-ctl `text_prefix_widths` 계약).
     #[must_use]
     pub fn measure_from(&self, text: &str, size: f32, start_rel: f32) -> f32 {
+        self.measure_from_styled(text, size, start_rel, false)
+    }
+
+    /// [`Self::measure_from`]의 스타일 변형 — `bold`면 GDI face는 볼드 face 전진 폭(그리기와 일치) · ab_glyph는 같다.
+    #[must_use]
+    pub fn measure_from_styled(&self, text: &str, size: f32, start_rel: f32, bold: bool) -> f32 {
         let mut local = 0f32;
         for c in text.chars() {
             local += if c == '\t' {
@@ -668,7 +747,7 @@ impl Font {
                 rel + self.tab_advance(size, rel) - (start_rel + local)
             } else {
                 Self::control_advance(c)
-                    .unwrap_or_else(|| self.advance_of(self.face_index_for(c), c, size))
+                    .unwrap_or_else(|| self.advance_of(self.face_index_for(c), c, size, bold))
             };
         }
         local
@@ -678,7 +757,7 @@ impl Font {
     /// (탭 폭 = 공백 폭 × `tab_cols` · 정지점 위면 한 칸 전체) · 절대 방식이면 늘 탭 폭.
     #[must_use]
     pub fn tab_advance(&self, size: f32, rel: f32) -> f32 {
-        let tabw = self.advance_of(self.face_index_for(' '), ' ', size) * tab_cols() as f32;
+        let tabw = self.advance_of(self.face_index_for(' '), ' ', size, false) * tab_cols() as f32;
         if !tab_stops() || tabw <= 0.0 {
             return tabw;
         }
@@ -758,7 +837,6 @@ impl Font {
         tab_origin: f32,
     ) -> f32 {
         let slant = if style.italic { 0.22 } else { 0.0 };
-        let bold_pass = if style.bold { 2 } else { 1 };
         let mut pen = x;
         // 베이스라인은 정수로 스냅(캐시 비트맵은 y 서브픽셀을 갖지 않는다 — 한 줄 안에서 일관).
         let base_y = y.round() as i32;
@@ -775,8 +853,11 @@ impl Font {
                 continue;
             }
             let face_i = self.face_index_for(ch);
+            let gdi = self.gdi_face(face_i, size).is_some();
+            // 굵게: GDI face는 진짜 볼드 face · ab_glyph는 faux(x축 2회).
+            let bold_pass = if style.bold && !gdi { 2 } else { 1 };
             // 정수 스냅이면(또는 GDI 글리프 — 정수 전진) 펜을 반올림하고 서브픽셀 0 · 아니면 1/3px 배치.
-            let (pen_i, sub) = if text_snap() || self.gdi_face(face_i, size).is_some() {
+            let (pen_i, sub) = if text_snap() || gdi {
                 (pen.round(), 0u8)
             } else {
                 let pi = pen.floor();
@@ -785,7 +866,7 @@ impl Font {
                     ((pen - pi) * SUBPX).floor().clamp(0.0, SUBPX - 1.0) as u8,
                 )
             };
-            if let Some(bm) = self.glyph_bitmap(face_i, ch, size, sub) {
+            if let Some(bm) = self.glyph_bitmap(face_i, ch, size, sub, style.bold) {
                 let gx0 = pen_i as i32 + i32::from(bm.ox);
                 if gx0 >= clip.2 {
                     break;
@@ -795,7 +876,7 @@ impl Font {
                     surface.blend_mask(gx0 + dx, gy0, &bm, color, clip, slant, base_y);
                 }
             }
-            pen += self.advance_of(face_i, ch, size);
+            pen += self.advance_of(face_i, ch, size, style.bold);
         }
         pen - x
     }

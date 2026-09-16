@@ -524,6 +524,74 @@ mod tests {
         assert!(w2 > 0.0);
     }
 
+    /// ★ 자동 검증(사용자 09-16 "테스트 자동화"): GDI ClearType 경로에서 세로 획이 있는 글자(닫·기·l·|)의 줄기가
+    /// 한 열에 또렷이 서고(가시성 ≥ 0.6 · GGO 회색은 `닫` 0.0이었다) · 굵게는 진짜 볼드(잉크가 더 많다) ·
+    /// 전진 폭은 정수. UI 본(맑은 고딕 11px em)·고정폭 본(Consolas 13px) 모두.
+    #[cfg(windows)]
+    #[test]
+    fn gdi_cleartype_stems_bold_and_advances() {
+        let u = ui_font(None).expect("UI 본");
+        let m = mono_font(None).expect("고정폭 본");
+        nexa_gfx::text::set_text_gdi(true);
+        let mut report = String::new();
+        for (font, name, size) in [
+            (&u.font, "ui", 15.0),
+            (&u.font, "ui-small", 13.0),
+            (&m.font, "mono", 13.0),
+        ] {
+            for ch in ['닫', '기', '나', 'l', '|', 'H'] {
+                let v = font.glyph_stem_visibility(ch, size, false);
+                report.push_str(&format!("{name} '{ch}' {size}px stem {v:.2}\n"));
+                assert!(
+                    v >= 0.6,
+                    "{name} '{ch}' {size}px 세로 획 가시성 {v:.2} < 0.6\n{}",
+                    font.glyph_ascii(ch, size)
+                );
+            }
+            let (r, b) = (
+                font.glyph_ink('닫', size, false),
+                font.glyph_ink('닫', size, true),
+            );
+            assert!(b > r * 1.15, "{name} 볼드 잉크 {b:.1} ≤ 보통 {r:.1}×1.15");
+            let w = font.measure("Hello 한글 |l", size);
+            assert!(
+                (w - w.round()).abs() < 1e-3,
+                "{name} 정수 전진 폭이어야: {w}"
+            );
+            let wb = font.measure_from_styled("Hello 한글 |l", size, 0.0, true);
+            assert!(
+                (wb - wb.round()).abs() < 1e-3,
+                "{name} 볼드 정수 전진 폭이어야: {wb}"
+            );
+        }
+        nexa_gfx::text::set_text_gdi(false);
+        println!("{report}");
+    }
+
+    /// 진단: GDI 글리프 덤프(`cargo test -p nexa-font dump_gdi -- --nocapture --ignored`).
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn dump_gdi_glyphs() {
+        let u = ui_font(None).expect("UI 본");
+        for on in [false, true] {
+            nexa_gfx::text::set_text_gdi(on);
+            for (ch, size) in [
+                ('닫', 15.0),
+                ('닫', 13.0),
+                ('결', 13.0),
+                ('기', 15.0),
+                ('S', 15.0),
+            ] {
+                println!(
+                    "gdi={on} '{ch}' size {size}\n{}",
+                    u.font.glyph_ascii(ch, size)
+                );
+            }
+        }
+        nexa_gfx::text::set_text_gdi(false);
+    }
+
     #[test]
     fn mono_font_covers_hangul_via_fallback() {
         let m = mono_font(None).expect("고정폭 또는 UI 본");

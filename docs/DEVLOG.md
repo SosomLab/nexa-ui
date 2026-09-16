@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (23차 · win)** — ★ GDI 경로 = **ClearType**(DIB · 채널별 커버리지 · 진짜 볼드 · `measure_from_styled`) · 자동 검증(줄기 가시성·볼드·정수 폭). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (22차 · win)** — GDI 이름 후보 = `name` 테이블(`names.rs` · 영문 로케일 CI 실패 수정). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (21차 · win)** — 획 굵기 보강(`set_text_weight`) · ★ **Windows GDI 글리프 원천**(`set_text_gdi` · `gdi.rs` GetGlyphOutlineW 힌팅 비트맵 + 정수 전진 · `Font::set_face_family`). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (20차 · win)** — 힌트 시 소수 px 크기 정수화. → [journal](journal/2026-09-16.md)

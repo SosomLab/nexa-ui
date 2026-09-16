@@ -323,15 +323,36 @@ impl<'a> Surface<'a> {
             let src = (row * w) as usize;
             let line = py as usize * self.width;
             for col in 0..w {
-                let a = bm.cov[src + col as usize];
-                if a == 0 {
-                    continue;
-                }
                 let px = x + col + shear;
                 if px < x0 || px >= x1 {
                     continue;
                 }
                 let idx = line + px as usize;
+                // ★ 채널별(ClearType 서브픽셀) 커버리지 — R·G·B를 각각 섞는다.
+                if bm.rgb {
+                    let i = (src + col as usize) * 3;
+                    let (ar, ag, ab) = (
+                        u32::from(bm.cov[i]),
+                        u32::from(bm.cov[i + 1]),
+                        u32::from(bm.cov[i + 2]),
+                    );
+                    if ar | ag | ab == 0 {
+                        continue;
+                    }
+                    let bg = self.buf[idx];
+                    let mix = |b: u32, f: u8, a: u32| -> u32 {
+                        (b * (255 - a) + u32::from(f) * a + 127) / 255
+                    };
+                    let r = mix((bg >> 16) & 0xFF, fr, ar);
+                    let g = mix((bg >> 8) & 0xFF, fg, ag);
+                    let b = mix(bg & 0xFF, fb, ab);
+                    self.buf[idx] = (r << 16) | (g << 8) | b;
+                    continue;
+                }
+                let a = bm.cov[src + col as usize];
+                if a == 0 {
+                    continue;
+                }
                 if a == 255 {
                     self.buf[idx] = (u32::from(fr) << 16) | (u32::from(fg) << 8) | u32::from(fb);
                     continue;
