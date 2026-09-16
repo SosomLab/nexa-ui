@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (18차 · win)** — Toolbar `set_padding`(낮은 바 22px). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (17차 · win)** — Toolbar 드롭다운 항목(`with_dropdown` ▾) · TextBox `set_text_inset`. → [journal](journal/2026-09-16.md)
 - **2026-09-16 (16차 · win)** — TextBox 동일 출현 외곽선 · 안내선 표시/색/투명도. → [journal](journal/2026-09-16.md)
 - **2026-09-16 (15차 · win)** — nexa-gfx 텍스트 대비 감마 `set_text_contrast` · 정수 스냅 `set_text_snap`(GDI 수준 선명도 · 캐시 키에 감마). → [journal](journal/2026-09-16.md)

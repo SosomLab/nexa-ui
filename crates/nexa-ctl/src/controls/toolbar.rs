@@ -187,6 +187,9 @@ pub struct Toolbar {
     tint: RefCell<Vec<TintSlot>>,
     /// 툴팁을 슬롯 **위**에 그린다(창 아래 붙은 도구줄 — 아래로 그리면 상태줄/창 밖 · nexa-sql 결과 도구줄 09-16).
     tip_above: bool,
+    /// 슬롯 안쪽 여백 · 바 위아래 여백(논리 px · 기본 4/4 · 결과 도구줄처럼 낮은 바는 2/1 · nexa-sql 09-16 Golden 22px).
+    slot_pad: i32,
+    bar_pad: i32,
 }
 
 impl Toolbar {
@@ -203,7 +206,15 @@ impl Toolbar {
             clicked: None,
             tint: RefCell::new(vec![None; n]),
             tip_above: false,
+            slot_pad: SLOT_PAD,
+            bar_pad: BAR_PAD,
         }
+    }
+
+    /// 여백 지정(슬롯 안쪽 · 바 위아래 · 논리 px) — 권장 높이 = 아이콘 + (slot + bar) × 2.
+    pub fn set_padding(&mut self, slot_pad: i32, bar_pad: i32) {
+        self.slot_pad = slot_pad.max(0);
+        self.bar_pad = bar_pad.max(0);
     }
 
     /// 툴팁 위치 — `true` = 슬롯 위쪽(기본 아래).
@@ -225,7 +236,7 @@ impl Toolbar {
     /// 이 아이콘 크기에서의 툴바 권장 높이(논리 px) — 호스트 레이아웃용.
     #[must_use]
     pub fn preferred_height(&self) -> i32 {
-        self.icon_px + (SLOT_PAD + BAR_PAD) * 2
+        self.icon_px + (self.slot_pad + self.bar_pad) * 2
     }
 
     /// 클릭된 액션 id(1회성).
@@ -234,7 +245,7 @@ impl Toolbar {
     }
 
     fn slot(&self) -> i32 {
-        self.s(self.icon_px + SLOT_PAD * 2)
+        self.s(self.icon_px + self.slot_pad * 2)
     }
 
     /// 항목 슬롯 폭 — 상태 표시([`ToolIcon::StatusMask`])는 **아이콘 폭 그대로**
@@ -473,7 +484,7 @@ impl Widget for Toolbar {
             // hover/pressed 배경은 그리지 않는다(09-15 nexa-sql 사용자 — 슬롯 아래가 밑줄처럼 보였다) ·
             // 식별은 아이콘 색(accent)과 눌림 1px 내림으로.
             let _ = (PRESS_BG_ALPHA, HOVER_BG_ALPHA);
-            let pad = self.s(SLOT_PAD);
+            let pad = self.s(self.slot_pad);
             // 눌림 식별 — 아이콘을 1px 내려 그린다.
             let dy = i32::from(is_pressed);
             // 드롭다운 항목은 오른쪽 DROP_W를 ▾에 내주고 아이콘은 왼쪽 정사각 슬롯에.
