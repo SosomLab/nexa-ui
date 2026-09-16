@@ -657,6 +657,21 @@ impl Font {
         best as f32 / h as f32
     }
 
+    /// 테스트용: 글리프가 **서브픽셀(ClearType) 색 프린지**를 갖는가 — 채널 차가 32를 넘는 픽셀이 하나라도 있으면.
+    /// 회색으로 떨어진 환경(헤드리스 러너 · ClearType 끔)에서는 `false`.
+    #[must_use]
+    pub fn glyph_is_subpixel(&self, ch: char, size: f32) -> bool {
+        let face_i = self.face_index_for(ch);
+        let Some(bm) = self.glyph_bitmap(face_i, ch, size, 0, false) else {
+            return false;
+        };
+        bm.rgb
+            && bm.cov.chunks_exact(3).any(|p| {
+                let (mx, mn) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
+                mx - mn > 32
+            })
+    }
+
     /// 테스트용: 글리프 커버리지 합(잉크 양 · rgb면 채널 평균).
     #[must_use]
     pub fn glyph_ink(&self, ch: char, size: f32, bold: bool) -> f32 {
