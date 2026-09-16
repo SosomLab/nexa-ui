@@ -106,6 +106,9 @@ pub struct PickerLabels {
     pub err_not_found: String,
     /// 안내 — 같은 이름 존재(한 번 더 누르면 덮어씀).
     pub err_exists: String,
+    /// 덮어쓰기 확인 카드 문구(`{0}` = 파일 이름) · 확인 버튼(09-16 · nexa-sql 사용자 "경고 창 + 확인 절차").
+    pub overwrite_ask: String,
+    pub overwrite_yes: String,
     /// 오류 — 파일명 규칙 위반.
     pub err_bad_name: String,
     /// 오류 — 폴더를 읽을 수 없음.
@@ -200,6 +203,10 @@ pub struct FilePicker {
     cursor: (i32, i32),
     message: Option<(String, bool)>, // (본문, 오류인가)
     pending_overwrite: Option<PathBuf>,
+    /// 덮어쓰기 확인 카드(열려 있으면 모달 · Enter = 덮어쓰기 · Esc = 취소).
+    overwrite_ask: Option<PathBuf>,
+    overwrite_yes_btn: Button,
+    overwrite_no_btn: Button,
     last_row_click: Option<(usize, Instant)>,
     last_place_row: usize,
     action: PickerAction,
@@ -330,6 +337,9 @@ impl FilePicker {
             cursor: (0, 0),
             message: None,
             pending_overwrite: None,
+            overwrite_ask: None,
+            overwrite_yes_btn: Button::new(labels.overwrite_yes.clone()),
+            overwrite_no_btn: Button::new(labels.cancel.clone()),
             last_row_click: None,
             last_place_row: usize::MAX,
             action: PickerAction::None,
@@ -1456,8 +1466,10 @@ impl FilePicker {
                 }
                 let p = dir.join(&leaf);
                 if p.exists() && self.pending_overwrite.as_deref() != Some(p.as_path()) {
-                    self.pending_overwrite = Some(p);
-                    self.message = Some((self.labels.err_exists.clone(), false));
+                    // ★ 확인 카드(모달)로 묻는다 — 확인하면 저장 · 취소하면 이름 상자로(사용자 09-16).
+                    self.pending_overwrite = Some(p.clone());
+                    self.overwrite_ask = Some(p);
+                    self.layout_overwrite();
                     return;
                 }
                 self.action = PickerAction::Confirm(p);
@@ -1678,7 +1690,39 @@ impl FilePicker {
 
     // ───────────────────────── 배치 ─────────────────────────
 
+    /// 덮어쓰기 카드 사각형(가운데 · 폭 420 · 높이 120 논리 px).
+    fn overwrite_card(&self) -> Rect {
+        let sc = |v: f32| (v * self.base.scale).round() as i32;
+        let (w, h) = (sc(420.0).min(self.base.bounds.w - sc(20.0)), sc(120.0));
+        Rect::new(
+            self.base.bounds.x + (self.base.bounds.w - w) / 2,
+            self.base.bounds.y + (self.base.bounds.h - h) / 2,
+            w,
+            h,
+        )
+    }
+
+    /// 카드 안 버튼 배치(오른쪽 아래 · 취소 | 덮어쓰기).
+    fn layout_overwrite(&mut self) {
+        let card = self.overwrite_card();
+        let sc = |v: f32| (v * self.base.scale).round() as i32;
+        let (bw, bh, gap, pad) = (sc(96.0), sc(28.0), sc(8.0), sc(12.0));
+        let mut inv = Invalidations::default();
+        let y = card.bottom() - pad - bh;
+        self.overwrite_yes_btn
+            .set_bounds(Rect::new(card.right() - pad - bw, y, bw, bh), &mut inv);
+        self.overwrite_no_btn.set_bounds(
+            Rect::new(card.right() - pad - bw * 2 - gap, y, bw, bh),
+            &mut inv,
+        );
+        self.overwrite_yes_btn.set_scale(self.base.scale);
+        self.overwrite_no_btn.set_scale(self.base.scale);
+    }
+
     fn layout(&mut self) {
+        if self.overwrite_ask.is_some() {
+            self.layout_overwrite();
+        }
         let b = self.base.bounds;
         let s = self.base.scale;
         let mut inv = Invalidations::default();
@@ -1921,6 +1965,45 @@ impl Widget for FilePicker {
             x: self.cursor.0,
             y: self.cursor.1,
         };
+        // ★ 덮어쓰기 확인 카드가 열려 있으면 모달 — 두 버튼과 Enter/Esc만.
+        if let Some(path) = self.overwrite_ask.clone() {
+            match *ev {
+                InputEvent::Key {
+                    key: Key::Enter, ..
+                } => {
+                    self.overwrite_ask = None;
+                    self.action = PickerAction::Confirm(path);
+                }
+                InputEvent::Key {
+                    key: Key::Escape, ..
+                } => {
+                    self.overwrite_ask = None;
+                    self.pending_overwrite = None;
+                }
+                InputEvent::MouseDown { .. }
+                | InputEvent::MouseUp { .. }
+                | InputEvent::MouseMove { .. } => {
+                    // 마우스 라우팅 규칙 — 커서 아래 버튼에만(놓기는 둘 다).
+                    let up = matches!(*ev, InputEvent::MouseUp { .. });
+                    if up || self.overwrite_yes_btn.bounds().contains(p) {
+                        self.overwrite_yes_btn.on_event(ev, inv);
+                    }
+                    if up || self.overwrite_no_btn.bounds().contains(p) {
+                        self.overwrite_no_btn.on_event(ev, inv);
+                    }
+                    if self.overwrite_yes_btn.take_clicked() {
+                        self.overwrite_ask = None;
+                        self.action = PickerAction::Confirm(path);
+                    } else if self.overwrite_no_btn.take_clicked() {
+                        self.overwrite_ask = None;
+                        self.pending_overwrite = None;
+                    }
+                }
+                _ => {}
+            }
+            inv.push(self.base.bounds);
+            return;
+        }
         let is_mouse = matches!(
             ev,
             InputEvent::MouseDown { .. }
@@ -2315,6 +2398,24 @@ impl Widget for FilePicker {
         }
         self.menu.paint(ctx, theme);
         self.name_box.paint_popup(ctx, theme);
+        // ★ 덮어쓰기 확인 카드(모달 · 맨 위) — 뒤를 살짝 어둡게 · 문구 + 파일 이름 + [취소] [덮어쓰기].
+        if let Some(path) = &self.overwrite_ask {
+            let sc = |v: f32| (v * self.base.scale).round() as i32;
+            ctx.fill_rect_alpha(self.base.bounds, theme.text, 0.25);
+            let card = self.overwrite_card();
+            ctx.fill_round_rect(card, sc(8.0), theme.panel_bg);
+            ctx.stroke_round_rect(card, sc(8.0), theme.border, 1.0);
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let text = self.labels.overwrite_ask.replace("{0}", &name);
+            let pad = sc(14.0);
+            let clip = Rect::new(card.x + pad, card.y, card.w - pad * 2, card.h);
+            ctx.text(card.x + pad, card.y + pad, clip, &text, theme.text);
+            self.overwrite_no_btn.paint(ctx, theme);
+            self.overwrite_yes_btn.paint(ctx, theme);
+        }
     }
 }
 
@@ -2381,6 +2482,8 @@ mod tests {
             kind_folder: "Folder".into(),
             kind_file: "File".into(),
             err_exists: "exists".into(),
+            overwrite_ask: "{0} exists. Overwrite?".into(),
+            overwrite_yes: "Overwrite".into(),
             err_not_found: "not found".into(),
             ..PickerLabels::default()
         }
@@ -2447,6 +2550,16 @@ mod tests {
             "첫 확정 = 덮어쓰기 안내"
         );
         assert!(p.pending_overwrite.is_some());
+        assert!(p.overwrite_ask.is_some(), "확인 카드가 열린다");
+        let mut inv = Invalidations::default();
+        p.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
         p.confirm();
         assert_eq!(p.take_action(), PickerAction::Confirm(d.join("a.sql")));
         // 새 이름은 바로 확정 + 확장자 부여.

@@ -206,6 +206,36 @@ impl ScrollBars {
                         }
                     }
                 }
+                // ★ 썸 밖 **트랙** 클릭 = 그 자리로 썸 중심을 옮기고 드래그 시작 · 소비(nexa-sql 09-16: 가로 스크롤바 트랙을
+                //   누르고 끌면 클릭이 아래 그리드로 흘러 셀 드래그 선택이 됐다). 보이는 축만.
+                if self.is_active(Axis::V) && Self::v_needed(vp, content_h) {
+                    let track = Rect::new(vp.right() - thick, vp.y, thick, vp.h);
+                    if track.contains(p) {
+                        if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
+                            let travel = (vp.h - t.h).max(1);
+                            let scrollable = (content_h - vp.h).max(0);
+                            oy = (y - t.h / 2 - vp.y) * scrollable / travel;
+                            self.drag = Some((Axis::V, t.h / 2));
+                            self.wake(Axis::V);
+                            let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
+                            return (ox, oy, true);
+                        }
+                    }
+                }
+                if self.is_active(Axis::H) && Self::h_needed(vp, content_w) {
+                    let track = Rect::new(vp.x, vp.bottom() - thick, vp.w, thick);
+                    if track.contains(p) {
+                        if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
+                            let travel = (vp.w - t.w).max(1);
+                            let scrollable = (content_w - vp.w).max(0);
+                            ox = (x - t.w / 2 - vp.x) * scrollable / travel;
+                            self.drag = Some((Axis::H, t.w / 2));
+                            self.wake(Axis::H);
+                            let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
+                            return (ox, oy, true);
+                        }
+                    }
+                }
                 (ox, oy, false)
             }
             InputEvent::MouseMove { x, y } => {
@@ -382,6 +412,43 @@ mod tests {
     static DELAY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     fn lock_delay() -> std::sync::MutexGuard<'static, ()> {
         DELAY_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn track_click_outside_thumb_is_consumed_and_jumps() {
+        // nexa-sql 09-16: 트랙(썸 밖) 클릭이 아래로 흘러 셀 드래그 선택이 되던 것.
+        let mut b = ScrollBars::new();
+        let vp = Rect::new(0, 0, 200, 100);
+        let (cw, ch) = (1000, 100);
+        // 가로 휠로 깨워 가로 바를 보이게.
+        let _ = b.on_event(&InputEvent::HWheel { delta: 30 }, vp, cw, ch, 0, 0, 1.0);
+        let thick = sc(THICK, 1.0);
+        let (ox, _, consumed) = b.on_event(
+            &InputEvent::MouseDown {
+                x: 180,
+                y: vp.bottom() - thick / 2,
+                shift: false,
+                primary: false,
+            },
+            vp,
+            cw,
+            ch,
+            10,
+            0,
+            1.0,
+        );
+        assert!(consumed, "트랙 클릭은 소비된다");
+        assert!(ox > 10, "썸이 클릭 자리로 옮겨진다: {ox}");
+        let (_, _, up) = b.on_event(
+            &InputEvent::MouseUp { x: 180, y: 95 },
+            vp,
+            cw,
+            ch,
+            ox,
+            0,
+            1.0,
+        );
+        assert!(up);
     }
 
     #[test]
