@@ -347,11 +347,14 @@ impl Toolbar {
                     let gap = self.s(6);
                     anchor = Rect::new(anchor.x, anchor.y - gap - tip_h - gap - 1, anchor.w, 1);
                 }
-                crate::draw::draw_tooltip(
+                crate::draw::draw_tooltip_in(
                     ctx,
                     theme,
                     anchor,
-                    self.base.bounds.right().max(anchor.right() + self.s(240)),
+                    (
+                        self.base.bounds.x,
+                        self.base.bounds.right().max(anchor.right() + self.s(240)),
+                    ),
                     &self.items[i].tip,
                     self.base.scale,
                 );

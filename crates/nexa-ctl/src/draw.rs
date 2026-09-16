@@ -219,10 +219,24 @@ pub fn draw_tooltip(
     text: &str,
     scale: f32,
 ) {
+    draw_tooltip_in(ctx, theme, anchor, (0, clamp_w), text, scale);
+}
+
+/// [`draw_tooltip`]과 같되 가로 클램프를 `(x0, x1)`로 — 창 왼쪽이 아니라 **바 자신의 x부터** 놓아야 왼쪽 패널에
+/// 가려지지 않는다(nexa-sql 결과 도구줄 09-16: 툴팁이 활동 막대 밑으로 들어갔다).
+pub fn draw_tooltip_in(
+    ctx: &mut dyn DrawCtx,
+    theme: &crate::theme::Theme,
+    anchor: Rect,
+    clamp_x: (i32, i32),
+    text: &str,
+    scale: f32,
+) {
     if text.is_empty() {
         return;
     }
     let s = |v: i32| (v as f32 * scale).round() as i32;
+    let (clamp_x0, clamp_w) = clamp_x;
     ctx.select_font(FontSlot::Status, false);
     // ★ 여러 줄(`\n`) 카드 — 줄마다 폭을 재서 가장 넓은 줄 · 높이 = 줄 수(한 줄 상자에 여러 줄을 넣어 아래가 잘리던
     //   결함 · nexa-sql 탭 툴팁 · 사용자 09-16).
@@ -231,7 +245,8 @@ pub fn draw_tooltip(
     let th = ctx.text_height();
     let w = tw + s(12);
     let h = th * lines.len() as i32 + s(8);
-    let x = (anchor.x + (anchor.w - w) / 2).clamp(s(4), (clamp_w - w - s(4)).max(s(4)));
+    let lo = clamp_x0 + s(4);
+    let x = (anchor.x + (anchor.w - w) / 2).clamp(lo, (clamp_w - w - s(4)).max(lo));
     let r = Rect::new(x, anchor.bottom() + s(6), w, h);
     ctx.fill_round_rect_alpha(r, s(4), theme.text, 0.92);
     for (i, line) in lines.iter().enumerate() {

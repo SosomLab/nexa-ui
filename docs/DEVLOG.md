@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (14차 · win)** — `draw_tooltip_in`(가로 클램프 사각형 · Toolbar는 자기 x부터). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (13차 · win)** — TextBox 거터 표시 띠(`set_gutter_marks/set_line_marks`) · CtxItem `with_active`. → [journal](journal/2026-09-16.md)
 - **2026-09-16 (12차 · win)** — Toolbar 툴팁 위쪽(`set_tooltip_above`). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (11차 · win)** — Switch 트랙 배율(`set_track_scale`) · RasterCtx `set_fonts`(그리는 중 글꼴 설정 교체). → [journal](journal/2026-09-16.md)
