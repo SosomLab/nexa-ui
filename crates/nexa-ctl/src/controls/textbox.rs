@@ -4,7 +4,7 @@
 
 use super::{image_fit_contain, Control, ControlBase};
 use crate::draw::{DrawCtx, FontSlot};
-use crate::edit::{EditKey, EditState};
+use crate::edit::{EditCommand, EditKey, EditState};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::{Color, IconImage, Theme};
@@ -116,6 +116,10 @@ pub struct TextBox {
     ml_wheel_rem: std::cell::Cell<i32>,
     /// 줄 경계 스냅(행 단위 스크롤 모드).
     scroll_snap: bool,
+    /// 줄 주석 접두(`--` · `#` · `//` — 문법이 준다 · 주석 토글).
+    line_comment: Option<String>,
+    /// 찾기 일치 구간(전부 · 호스트가 갱신) — 반투명 채움으로 표시(nexa-sql T-73 · 09-16).
+    find_marks: Vec<(usize, usize)>,
     /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
     line_numbers: bool,
     /// 줄번호 오른쪽 **표시 띠**(Golden식 · 3px 색 막대 자리 4px + 첫 글자 앞 2px 여백 · nexa-sql 09-16).
@@ -210,6 +214,8 @@ impl TextBox {
             ml_user_scrolled: false,
             ml_wheel_rem: std::cell::Cell::new(0),
             scroll_snap: false,
+            line_comment: None,
+            find_marks: Vec::new(),
             line_numbers: false,
             gutter_marks: false,
             text_inset: 0,
@@ -310,6 +316,46 @@ impl TextBox {
     /// 누적되므로 느린 트랙패드 이동도 잃지 않는다(nexa-sql `editor.scroll` · 09-16).
     pub fn set_scroll_snap(&mut self, on: bool) {
         self.scroll_snap = on;
+    }
+
+    /// 줄 주석 접두(문법별 · `None` = 주석 토글 없음).
+    pub fn set_line_comment(&mut self, prefix: Option<String>) {
+        self.line_comment = prefix;
+    }
+
+    /// 찾기 일치 구간 전부(문자 인덱스 · 빈 목록 = 표시 없음).
+    pub fn set_find_marks(&mut self, marks: Vec<(usize, usize)>) {
+        self.find_marks = marks;
+    }
+
+    /// ★ Sublime식 편집 명령(줄 복제/삭제/합치기/이동 · 주석 토글 · 들여쓰기 ± · 줄 선택/나누기 · 캐럿 추가 · 대소문자).
+    /// 들여쓰기 단위·주석 접두는 이 상자의 설정을 쓴다. 바뀌었으면 `true`(호스트가 다시 그린다).
+    pub fn edit_command(&mut self, cmd: EditCommand) -> bool {
+        let unit = if self.indent_spaces {
+            " ".repeat(usize::from(self.tab_size.max(1)))
+        } else {
+            "\t".to_string()
+        };
+        let changed = self.edit.command(
+            cmd,
+            &unit,
+            usize::from(self.tab_size.max(1)),
+            self.line_comment.as_deref(),
+        );
+        if changed {
+            self.changed = true;
+            self.last_click.1 = 0;
+            self.ml_user_scrolled = false;
+        }
+        changed
+    }
+
+    /// `n`번째 줄(1 기준)로 캐럿 이동(Goto line · 넘치면 마지막 줄) — 캐럿을 따라 스크롤한다.
+    pub fn goto_line(&mut self, n: usize) {
+        let i = self.edit.line_start_index(n);
+        self.edit.set_caret(i, false);
+        self.last_click.1 = 0;
+        self.ml_user_scrolled = false;
     }
 
     /// 탭 정지점 방식인가.
@@ -1238,7 +1284,8 @@ impl TextBox {
             if gw > 0 {
                 if row_selected {
                     // 선택 행 표시 — 거터 배경을 선택색으로(텍스트 선택 블록과 같은 색 계열).
-                    if let Some(gr) = clipv(Rect::new(b.x + 1, y, self.s(10) + gw - self.s(4), lh)) {
+                    if let Some(gr) = clipv(Rect::new(b.x + 1, y, self.s(10) + gw - self.s(4), lh))
+                    {
                         ctx.fill_rect(
                             gr,
                             if self.base.focused {
@@ -1305,6 +1352,25 @@ impl TextBox {
                                 theme.sel_bg_inactive
                             },
                         );
+                    }
+                }
+            }
+            // 찾기 일치 전부(반투명 채움 · 선택 아래 · 이 행과 겹치는 구간만 · T-73).
+            if !self.find_marks.is_empty() {
+                let (ls, le) = (*start_idx, *start_idx + line_len);
+                for &(a, e) in &self.find_marks {
+                    if e <= ls || a >= le {
+                        continue;
+                    }
+                    let (s0, s1) = (a.max(ls) - ls, e.min(le) - ls);
+                    if s1 <= s0 {
+                        continue;
+                    }
+                    let x0 = (dx + w.get(s0).copied().unwrap_or(0)).max(vx0);
+                    let x1 = (dx + w.get(s1).copied().unwrap_or(0)).min(vx1);
+                    if let (true, Some(r)) = (x1 > x0, clipv(Rect::new(x0, y + 1, x1 - x0, lh - 2)))
+                    {
+                        ctx.fill_round_rect_alpha(r, self.s(2), theme.warn, 0.28);
                     }
                 }
             }
@@ -1745,6 +1811,9 @@ impl Widget for TextBox {
                 self.ml_user_scrolled = false; // 타이핑 = 캐럿 이동 → 캐럿 추종 재개
                 if c == '\u{8}' {
                     self.edit.backspace();
+                } else if c == '\t' && self.multiline && self.edit.selection_spans_lines() {
+                    // 여러 줄 선택 + Tab = 블록 들여쓰기(Sublime · 09-16). Shift+Tab(내어쓰기)은 호스트 키맵이 명령으로 보낸다.
+                    self.edit_command(EditCommand::Indent);
                 } else if c == '\t' && self.multiline && self.room() > 0 {
                     // 멀티라인(편집기)은 Tab = 탭 문자 또는 다음 탭 정지까지 공백(`set_indent` · 09-15) — 단일 행은 호스트가 포커스 이동에 쓴다.
                     if self.indent_spaces {
@@ -2635,5 +2704,48 @@ mod tests {
         assert!(!t.column_dragging());
         t.on_event(&ch('.'), &mut inv);
         assert_eq!(t.text(), "a.d\ne.h\ni.l", "블록이 한 번에 대체된다");
+    }
+}
+
+#[cfg(test)]
+mod scroll_sim_tests {
+    use super::*;
+    use crate::controls::ProbeCtx;
+
+    /// 트랙패드 느린 스크롤(사건당 ±3 = 1px) 양방향 시뮬레이션 — 매 사건 뒤 paint(실제와 같은 순서)에서
+    /// 표시 오프셋(줄×높이 + 잔여)이 정확히 1px씩 단조롭게 움직여야 한다(nexa-sql 사용자 09-16 "위로는 흔들리거나 안 움직임").
+    #[test]
+    fn slow_wheel_is_monotonic_both_directions_with_paint_between() {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 300), &mut inv);
+        let text: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+        t.set_text(&text);
+        t.base.focused = true;
+        t.edit.set_caret(0, false);
+        let theme = crate::theme::Theme::dark();
+        let mut probe = ProbeCtx;
+        t.paint(&mut probe, &theme);
+        let lh = t.line_h();
+        let pos = |t: &TextBox| t.vscroll.get() as i32 * lh + t.ml_wheel_rem.get();
+        assert_eq!(pos(&t), 0);
+        // 아래로(본문이 위로 = delta 음수) 1px씩 100번.
+        for i in 1..=100 {
+            t.on_event(&InputEvent::Wheel { delta: -3 }, &mut inv);
+            t.paint(&mut probe, &theme);
+            assert_eq!(pos(&t), i, "아래로 {i}번째");
+        }
+        // 위로 1px씩 60번 — 되돌아온다.
+        for i in 1..=60 {
+            t.on_event(&InputEvent::Wheel { delta: 3 }, &mut inv);
+            t.paint(&mut probe, &theme);
+            assert_eq!(pos(&t), 100 - i, "위로 {i}번째");
+        }
+        // 다시 아래로 — 방향 전환 뒤에도 1px.
+        for i in 1..=5 {
+            t.on_event(&InputEvent::Wheel { delta: -3 }, &mut inv);
+            t.paint(&mut probe, &theme);
+            assert_eq!(pos(&t), 40 + i, "재전환 {i}번째");
+        }
     }
 }

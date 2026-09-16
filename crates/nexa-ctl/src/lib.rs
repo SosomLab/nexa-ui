@@ -51,7 +51,7 @@ pub use controls::{
     TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
-pub use edit::{EditKey, EditState};
+pub use edit::{EditCommand, EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};

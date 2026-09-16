@@ -6,6 +6,9 @@
 //!
 //! 원본에서 뺀 것: paint 캐시 기반 클릭 히트테스트(위젯이 폰트 실측으로 대체) · 드래그 선택.
 
+mod ops;
+pub use ops::EditCommand;
+
 /// 이동/편집 키(플랫폼 중립 — [`crate::event::Key`]에서 번역).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditKey {
