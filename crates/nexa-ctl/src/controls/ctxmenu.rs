@@ -100,6 +100,8 @@ pub enum CtxItem {
         children: Vec<CtxItem>,
         /// 토글 상태(`Some` = 켜짐/꺼짐 아이콘을 아이콘 칸에 · 라벨은 다른 행과 같은 열에 정렬 · 09-15).
         checked: Option<bool>,
+        /// 현재 선택된 항목(라디오 의미) — 아이콘·라벨을 강조색으로(hover 행은 반전 그대로 · nexa-sql 보기 모드 09-16).
+        active: bool,
     },
     /// 구분선.
     Separator,
@@ -117,6 +119,7 @@ impl CtxItem {
             shortcut: None,
             children: Vec::new(),
             checked: None,
+            active: false,
         }
     }
     /// 활성 여부를 지정한 항목.
@@ -130,6 +133,7 @@ impl CtxItem {
             shortcut: None,
             children: Vec::new(),
             checked: None,
+            active: false,
         }
     }
     /// 하위 메뉴 항목(라벨 + 자식 목록 · 활성 자식이 없으면 비활성).
@@ -150,6 +154,7 @@ impl CtxItem {
             shortcut: None,
             children,
             checked: None,
+            active: false,
         }
     }
     /// 아이콘 붙이기(빌더).
@@ -171,6 +176,14 @@ impl CtxItem {
     }
     /// 토글 항목(켜짐/꺼짐 아이콘 · 빌더).
     #[must_use]
+    /// 현재 선택(라디오) 표시 — 아이콘·라벨 강조색.
+    pub fn with_active(mut self, on: bool) -> Self {
+        if let Self::Item { active, .. } = &mut self {
+            *active = on;
+        }
+        self
+    }
+
     pub fn with_checked(mut self, on: bool) -> Self {
         if let Self::Item { checked, .. } = &mut self {
             *checked = Some(on);
@@ -712,6 +725,7 @@ impl ContextMenu {
                     shortcut,
                     children,
                     checked,
+                    active,
                     ..
                 } => {
                     let h = self.row_h();
@@ -727,6 +741,8 @@ impl ContextMenu {
                         theme.text_dim
                     } else if hot {
                         theme.window_bg
+                    } else if *active {
+                        theme.accent
                     } else {
                         theme.text
                     };

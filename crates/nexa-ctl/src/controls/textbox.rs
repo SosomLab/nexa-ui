@@ -114,6 +114,10 @@ pub struct TextBox {
     ml_user_scrolled: bool,
     /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
     line_numbers: bool,
+    /// 줄번호 오른쪽 **표시 띠**(Golden식 · 3px 색 막대 자리 4px + 첫 글자 앞 2px 여백 · nexa-sql 09-16).
+    gutter_marks: bool,
+    /// 논리 줄(0부터)별 표시 색 — 북마크·오류·변경 등 호스트가 정한다.
+    line_marks: Vec<(usize, Color)>,
     /// 들여쓰기(nexa-sql 09-15 · docs/31): 탭 폭(칸) · Tab 키 = 공백(다음 탭 정지까지) 여부.
     tab_size: u8,
     indent_spaces: bool,
@@ -192,6 +196,8 @@ impl TextBox {
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
             line_numbers: false,
+            gutter_marks: false,
+            line_marks: Vec::new(),
             tab_size: 4,
             indent_spaces: false,
             tab_stops: true,
@@ -383,6 +389,16 @@ impl TextBox {
     /// 포커스 링 표시 여부 — 끄면 포커스여도 헤일로를 그리지 않는다(캐럿·선택은 그대로).
     pub fn set_focus_ring(&mut self, on: bool) {
         self.focus_ring = on;
+    }
+
+    /// 줄번호 오른쪽 표시 띠(4px) + 첫 글자 앞 여백(2px) 켬/끔 — 줄번호 거터가 있을 때만 그려진다.
+    pub fn set_gutter_marks(&mut self, on: bool) {
+        self.gutter_marks = on;
+    }
+
+    /// 표시 띠의 색 막대(논리 줄 0부터 · 색) — 전체 교체.
+    pub fn set_line_marks(&mut self, marks: Vec<(usize, Color)>) {
+        self.line_marks = marks;
     }
 
     /// 줄번호 거터 폭(마지막 페인트 실측 · 0 = 없음).
@@ -928,9 +944,15 @@ impl TextBox {
         let text = self.edit.text();
         // 줄번호 거터 폭 — 논리 줄 수의 자릿수 × 숫자 폭 + 여백(줄 수가 변해도 자릿수가 같으면 폭 불변).
         let logical_count = text.split('\n').count().max(1);
+        // 표시 띠(4px) + 첫 글자 앞 여백(2px) = 거터에 6px 더(줄번호는 그만큼 왼쪽에 머문다).
+        let mark_extra = if self.gutter_marks && self.line_numbers && self.multiline {
+            self.s(6)
+        } else {
+            0
+        };
         let gw = if self.line_numbers && self.multiline {
             let digits = logical_count.to_string().len().max(2) as i32;
-            digits * ctx.text_width("0") + self.s(14)
+            digits * ctx.text_width("0") + self.s(14) + mark_extra
         } else {
             0
         };
@@ -1150,7 +1172,14 @@ impl TextBox {
                 if let Ok(n) = logical_starts.binary_search(start_idx) {
                     let num = (n + 1).to_string();
                     let nw = ctx.text_width(&num);
-                    let gx = b.x + self.s(10) + gw - self.s(8) - nw;
+                    let gx = b.x + self.s(10) + gw - self.s(8) - mark_extra - nw;
+                    // 표시 띠의 색 막대(줄번호와 경계선 사이 · 3px).
+                    if mark_extra > 0 {
+                        if let Some((_, c)) = self.line_marks.iter().find(|(l, _)| *l == n) {
+                            let mx = b.x + self.s(10) + gw - self.s(4) - mark_extra + self.s(1);
+                            ctx.fill_rect(Rect::new(mx, y + 1, self.s(3), lh - 2), *c);
+                        }
+                    }
                     let is_caret_line = li == caret_line || row_selected;
                     ctx.text(
                         gx,
