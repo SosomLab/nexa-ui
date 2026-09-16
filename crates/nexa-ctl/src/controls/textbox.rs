@@ -112,6 +112,8 @@ pub struct TextBox {
     /// 사용자가 휠/바로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
     /// vscroll/mhscroll을 그대로 존중(자유 스크롤). 편집(캐럿 이동) 시 거짓으로 리셋.
     ml_user_scrolled: bool,
+    /// 휠의 줄 단위 반올림에서 남은 px(다음 휠 사건에 이월 · 트랙패드 느린 스크롤 · 09-16).
+    ml_wheel_rem: std::cell::Cell<i32>,
     /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
     line_numbers: bool,
     /// 줄번호 오른쪽 **표시 띠**(Golden식 · 3px 색 막대 자리 4px + 첫 글자 앞 2px 여백 · nexa-sql 09-16).
@@ -204,6 +206,7 @@ impl TextBox {
             vscroll: std::cell::Cell::new(0),
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
+            ml_wheel_rem: std::cell::Cell::new(0),
             line_numbers: false,
             gutter_marks: false,
             text_inset: 0,
@@ -1494,13 +1497,18 @@ impl Widget for TextBox {
             //   s(20)을 뺀 값이다(08-18 실기: 끝 ~2글자가 여백만큼 안 보였다).
             //   content_w에 그 여백을 더해 스크롤 범위를 paint의 max_hs와 맞춘다.
             let cw_bars = cw + self.s(20);
+            // ★ 세로 오프셋은 줄 단위(`vscroll`)지만 휠은 px로 온다 — 줄로 반올림하고 남은 px를 버리면 트랙패드의
+            //   느린 이동(사건당 1~3px)이 영원히 한 줄을 못 넘는다(nexa-sql 사용자 09-16). 잔여 px를 `ml_wheel_rem`에
+            //   보관해 다음 휠 사건에 더한다 · 휠이 아닌 사건(썸 드래그·클릭)은 잔여를 버리고 가장 가까운 줄로.
+            let is_wheel = matches!(ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. });
+            let rem = if is_wheel { self.ml_wheel_rem.get() } else { 0 };
             let (nx, ny, consumed) = self.ml_bars.on_event(
                 ev,
                 vp,
                 cw_bars.max(vp.w),
                 ch.max(vp.h),
                 self.mhscroll.get(),
-                (self.vscroll.get() as i32) * line_h,
+                (self.vscroll.get() as i32) * line_h + rem,
                 self.base.scale,
             );
             let mut moved = false;
@@ -1508,7 +1516,15 @@ impl Widget for TextBox {
                 self.mhscroll.set(nx.max(0));
                 moved = true;
             }
-            let nl = ((ny + line_h / 2) / line_h.max(1)).max(0) as usize;
+            let lh = line_h.max(1);
+            let nl = if is_wheel {
+                let nl = ny.div_euclid(lh).max(0);
+                self.ml_wheel_rem.set(ny - nl * lh);
+                nl as usize
+            } else {
+                self.ml_wheel_rem.set(0);
+                ((ny + lh / 2) / lh).max(0) as usize
+            };
             if nl != self.vscroll.get() {
                 self.vscroll.set(nl);
                 moved = true;
