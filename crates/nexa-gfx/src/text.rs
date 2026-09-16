@@ -39,6 +39,89 @@ pub fn text_contrast() -> f32 {
     f32::from_bits(TEXT_GAMMA.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// ★ 오토힌트 근사(기본 끔 · nexa-sql `ui.text_hint` · T-99 09-16) — GDI/FreeType light처럼 **가로 획은 x-높이를 정수 px에
+///   맞추는 크기 보정**으로, **세로 줄기는 이웃 행과 이어진 좁은 열을 한 픽셀 열로 모으는 후처리**로 격자에 앉힌다.
+///   대각선·곡선은 손대지 않는다(AA 유지). 정수 스냅·대비 감마와 조합.
+static TEXT_HINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 오토힌트 근사 켬/끔.
+pub fn set_text_hint(on: bool) {
+    TEXT_HINT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 오토힌트 상태.
+#[must_use]
+pub fn text_hint() -> bool {
+    TEXT_HINT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 세로 줄기 정렬(힌트 후처리): 행마다 커버리지 런을 보고, **위아래 행과 같은 자리에 이어지는**(= 세로 줄기) 런이
+/// 정수 폭보다 한 열 넓게 번져 있으면(예 `[0.5, 0.5]`) 무게중심 쪽 한 열로 모은다(`[1.0, 0]`). 대각선은 행마다
+/// 중심이 옮겨가므로(0.3px 초과) 건드리지 않는다.
+pub(crate) fn snap_stems(cov: &mut [u8], w: usize, h: usize) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    // 행별 런 (시작, 끝, 합, 무게중심)
+    let mut runs: Vec<Vec<(usize, usize, f32, f32)>> = Vec::with_capacity(h);
+    for r in 0..h {
+        let row = &cov[r * w..(r + 1) * w];
+        let mut v = Vec::new();
+        let mut c = 0;
+        while c < w {
+            if row[c] == 0 {
+                c += 1;
+                continue;
+            }
+            let s0 = c;
+            let mut total = 0.0f32;
+            let mut moment = 0.0f32;
+            while c < w && row[c] != 0 {
+                let a = f32::from(row[c]) / 255.0;
+                total += a;
+                moment += (c as f32 + 0.5) * a;
+                c += 1;
+            }
+            v.push((s0, c, total, moment / total.max(1e-6)));
+        }
+        runs.push(v);
+    }
+    let mut out = cov.to_vec();
+    for r in 0..h {
+        for &(s0, e0, total, center) in &runs[r] {
+            let len = e0 - s0;
+            let wpx = (total.round().max(1.0)) as usize;
+            // 정수 폭보다 딱 한 열 넓게 번진 런만(그 이상은 곡선/대각선 · 그 이하는 이미 또렷).
+            if len != wpx + 1 {
+                continue;
+            }
+            // 위·아래 행에 중심이 0.6px 안에서 이어지는 런이 있어야 세로 줄기.
+            let near = |rr: usize| {
+                runs[rr]
+                    .iter()
+                    // 같은 줄기의 이웃 행은 중심이 거의 같다(0.3px 안) — 대각선의 끝 행(1px 런)은 0.5px 어긋나 제외.
+                    .any(|&(a, b, _, c)| a < e0 && b > s0 && (c - center).abs() <= 0.3)
+            };
+            let up = r > 0 && near(r - 1);
+            let down = r + 1 < h && near(r + 1);
+            // 줄기의 맨 위/아래 행은 한쪽만 이어진다.
+            if !(up || down) {
+                continue;
+            }
+            let start = ((center - wpx as f32 / 2.0).round().max(s0 as f32)) as usize;
+            let start = start.min(e0 - wpx);
+            for c in s0..e0 {
+                out[r * w + c] = 0;
+            }
+            let level = ((total / wpx as f32) * 255.0).round().min(255.0) as u8;
+            for k in 0..wpx {
+                out[r * w + start + k] = level;
+            }
+        }
+    }
+    cov.copy_from_slice(&out);
+}
+
 /// 글리프 정수 스냅 켬/끔.
 pub fn set_text_snap(on: bool) {
     TEXT_SNAP.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -85,6 +168,8 @@ struct GlyphKey {
     sub: u8,
     /// 대비 감마 비트(바뀌면 다른 비트맵 · 캐시를 비울 필요 없음).
     gamma: u32,
+    /// 오토힌트 켬 여부(비트맵이 다르다).
+    hint: bool,
 }
 
 /// 래스터된 글리프 — 원점(펜 정수 x · 베이스라인 정수 y) 기준 오프셋 + 8비트 커버리지.
@@ -117,6 +202,8 @@ pub struct Font {
     faces: Vec<FontRef<'static>>,
     /// ★ 글리프 비트맵 캐시 — 외곽선 추출+래스터(글리프당 ≈1.4µs)를 **처음 한 번만**. 복제본끼리 공유(Arc).
     cache: Arc<Mutex<HashMap<GlyphKey, Arc<GlyphBitmap>>>>,
+    /// 힌트용 크기 보정 캐시 — (face, size 비트) → 래스터 크기(x-높이가 정수 px가 되게).
+    hint_size: Arc<Mutex<HashMap<(u8, u32), f32>>>,
 }
 
 impl Clone for Font {
@@ -124,6 +211,7 @@ impl Clone for Font {
         Self {
             faces: self.faces.clone(),
             cache: Arc::clone(&self.cache),
+            hint_size: Arc::clone(&self.hint_size),
         }
     }
 }
@@ -165,6 +253,7 @@ impl Font {
             .map(|f| Self {
                 faces: vec![f],
                 cache: Arc::new(Mutex::new(HashMap::new())),
+                hint_size: Arc::new(Mutex::new(HashMap::new())),
             })
             .map_err(|_| FontError)
     }
@@ -216,6 +305,41 @@ impl Font {
             .unwrap_or(0)
     }
 
+    /// 힌트 크기 보정: 이 face·크기에서 `x`의 높이(x-높이)가 정수 px가 되도록 래스터 크기를 살짝(±수%) 조정한다
+    /// (FreeType light의 세로 격자 맞춤 근사). `x`가 없거나 너무 작으면 그대로.
+    fn hint_size_for(&self, face_i: usize, size: f32) -> f32 {
+        let key = (face_i as u8, size.to_bits());
+        if let Ok(c) = self.hint_size.lock() {
+            if let Some(v) = c.get(&key) {
+                return *v;
+            }
+        }
+        let face = &self.faces[face_i];
+        let gid = face.glyph_id('x');
+        let adjusted = if gid.0 == 0 {
+            size
+        } else {
+            let scaled = face.as_scaled(size);
+            match scaled.outline_glyph(gid.with_scale(size)) {
+                Some(o) => {
+                    let b = o.px_bounds();
+                    let xh = b.max.y - b.min.y;
+                    if xh < 4.0 {
+                        size
+                    } else {
+                        let target = xh.round().max(1.0);
+                        (size * target / xh).clamp(size * 0.9, size * 1.1)
+                    }
+                }
+                None => size,
+            }
+        };
+        if let Ok(mut c) = self.hint_size.lock() {
+            c.insert(key, adjusted);
+        }
+        adjusted
+    }
+
     /// 글리프 비트맵 — 캐시 적중이면 그대로, 아니면 래스터해 넣는다. 외곽선이 없는 글자(공백)는 `None`.
     fn glyph_bitmap(
         &self,
@@ -227,20 +351,29 @@ impl Font {
         let face = &self.faces[face_i];
         let gid = face.glyph_id(ch);
         let gamma_bits = TEXT_GAMMA.load(std::sync::atomic::Ordering::Relaxed);
+        let hint = text_hint();
         let key = GlyphKey {
             face: face_i as u8,
             gid: gid.0,
             size: size.to_bits(),
             sub,
             gamma: gamma_bits,
+            hint,
         };
         if let Ok(c) = self.cache.lock() {
             if let Some(bm) = c.get(&key) {
                 return Some(Arc::clone(bm));
             }
         }
-        let scaled = face.as_scaled(size);
-        let glyph = gid.with_scale_and_position(size, ab_glyph::point(f32::from(sub) / SUBPX, 0.0));
+        // 힌트: x-높이가 정수 px가 되는 크기로 래스터(자간·전진 폭은 원래 크기 그대로 — 배치 불변).
+        let rsize = if hint {
+            self.hint_size_for(face_i, size)
+        } else {
+            size
+        };
+        let scaled = face.as_scaled(rsize);
+        let glyph =
+            gid.with_scale_and_position(rsize, ab_glyph::point(f32::from(sub) / SUBPX, 0.0));
         let outlined = scaled.outline_glyph(glyph)?;
         let b = outlined.px_bounds();
         let (w, h) = (
@@ -265,6 +398,9 @@ impl Font {
                 cov[gy * w + gx] = (c * 255.0 + 0.5) as u8;
             }
         });
+        if hint {
+            snap_stems(&mut cov, w, h);
+        }
         let bm = Arc::new(GlyphBitmap {
             w: w as u16,
             h: h as u16,
@@ -472,5 +608,39 @@ impl Font {
     ) -> f32 {
         let clip = (0, 0, surface.width() as i32, surface.height() as i32);
         self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN, x)
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    #[test]
+    fn snap_stems_merges_vertical_stem_but_keeps_diagonal() {
+        // 3행 × 4열: 세로 줄기가 [0.5, 0.5]로 두 열에 번짐 → 한 열로.
+        let w = 4;
+        let mut cov = vec![0u8; 12];
+        for r in 0..3 {
+            cov[r * w + 1] = 128;
+            cov[r * w + 2] = 127;
+        }
+        snap_stems(&mut cov, w, 3);
+        for r in 0..3 {
+            let row = &cov[r * w..(r + 1) * w];
+            let on: Vec<usize> = (0..w).filter(|&c| row[c] > 0).collect();
+            assert_eq!(on.len(), 1, "row {r}: {row:?}");
+            assert!(row[on[0]] >= 250);
+        }
+        // 대각선(행마다 중심이 1px씩 이동)은 그대로.
+        let mut diag = vec![0u8; 16];
+        for r in 0..4 {
+            diag[r * 4 + r] = 128;
+            if r + 1 < 4 {
+                diag[r * 4 + r + 1] = 127;
+            }
+        }
+        let before = diag.clone();
+        snap_stems(&mut diag, 4, 4);
+        assert_eq!(diag, before);
     }
 }

@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (19차 · win)** — nexa-gfx 오토힌트 근사(`set_text_hint` · x-높이 정수 · 세로 줄기 정렬). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (18차 · win)** — Toolbar `set_padding`(낮은 바 22px). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (17차 · win)** — Toolbar 드롭다운 항목(`with_dropdown` ▾) · TextBox `set_text_inset`. → [journal](journal/2026-09-16.md)
 - **2026-09-16 (16차 · win)** — TextBox 동일 출현 외곽선 · 안내선 표시/색/투명도. → [journal](journal/2026-09-16.md)
