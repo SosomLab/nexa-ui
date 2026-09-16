@@ -3,10 +3,10 @@
 //! 래스터라이저를 쓰므로 획 정렬·굵기·자간이 같아진다(색 프린지 없는 ClearType급 선명도). 다른 OS·GDI가 이름을 못
 //! 찾는 face·비BMP 문자는 `ab_glyph` 경로로 돌아간다.
 //!
-//! HDC·HFONT는 스레드 소속이라 **스레드 로컬** 캐시((패밀리, em px) → face)로 둔다.
+//! HDC·HFONT는 스레드 소속이라 **스레드 로컬** 캐시((패밀리, em px) → face)로 둔다. 패밀리는 `name` 테이블의
+//! 이름 후보 전부(영문·현지어 · `names.rs`)로 시도한다 — 로케일마다 GDI가 찾는 이름이 다르다.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ffi::c_void;
 
 type H = *mut c_void;
@@ -113,7 +113,8 @@ pub(crate) struct Glyph {
 }
 
 thread_local! {
-    static FACES: RefCell<HashMap<(String, i32), Option<Face>>> = RefCell::new(HashMap::new());
+    /// (패밀리 키 = 후보 첫 이름, em px, face) — 항목 수는 face×크기(수십)라 선형 탐색.
+    static FACES: RefCell<Vec<(String, i32, Option<Face>)>> = const { RefCell::new(Vec::new()) };
 }
 
 fn norm(s: &str) -> String {
@@ -123,11 +124,12 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
-/// face를 만든다 — GDI가 이름을 못 찾아 다른 글꼴로 대체하면(`GetTextFaceW` 불일치) `None`(ab_glyph 경로로).
-fn make_face(family: &str, em_px: i32) -> Option<Face> {
-    let mut name = [0u16; 32];
-    for (i, u) in family.encode_utf16().take(31).enumerate() {
-        name[i] = u;
+/// 이름 하나로 face를 만들고 GDI가 실제로 연 이름(`GetTextFaceW`)이 후보 목록 안이면 성공 —
+/// 대체 글꼴(이름 못 찾음 · 영문 로케일에서 현지어 이름 요청)이면 `None`.
+fn try_name(name: &str, names: &[String], em_px: i32) -> Option<Face> {
+    let mut buf = [0u16; 32];
+    for (i, u) in name.encode_utf16().take(31).enumerate() {
+        buf[i] = u;
     }
     let lf = LogFontW {
         height: -em_px.max(1),
@@ -143,7 +145,7 @@ fn make_face(family: &str, em_px: i32) -> Option<Face> {
         clip_precision: 0,
         quality: ANTIALIASED_QUALITY,
         pitch_and_family: 0,
-        face_name: name,
+        face_name: buf,
     };
     // SAFETY: 유효한 LOGFONTW · 반환 핸들은 즉시 검사한다.
     unsafe {
@@ -164,7 +166,8 @@ fn make_face(family: &str, em_px: i32) -> Option<Face> {
         } else {
             String::new()
         };
-        if norm(&got) != norm(family) {
+        let g = norm(&got);
+        if !names.iter().any(|c| norm(c) == g) {
             DeleteDC(hdc);
             DeleteObject(hfont);
             return None;
@@ -173,30 +176,39 @@ fn make_face(family: &str, em_px: i32) -> Option<Face> {
     }
 }
 
-fn with_face<R>(family: &str, em_px: i32, f: impl FnOnce(&Face) -> R) -> Option<R> {
+/// 후보 이름을 차례로 시도(영문·현지어 · 09-16 CI: 영문 Windows는 "맑은 고딕"을 못 찾고 "Malgun Gothic"은 찾는다).
+fn make_face(names: &[String], em_px: i32) -> Option<Face> {
+    names.iter().find_map(|n| try_name(n, names, em_px))
+}
+
+fn with_face<R>(names: &[String], em_px: i32, f: impl FnOnce(&Face) -> R) -> Option<R> {
+    let key = names.first()?;
     FACES.with(|c| {
         let mut c = c.borrow_mut();
-        let key = (family.to_string(), em_px);
-        if !c.contains_key(&key) {
-            let face = make_face(family, em_px);
-            c.insert(key.clone(), face);
-        }
-        c.get(&key).and_then(|f| f.as_ref()).map(f)
+        let pos = match c.iter().position(|(k, e, _)| k == key && *e == em_px) {
+            Some(p) => p,
+            None => {
+                let face = make_face(names, em_px);
+                c.push((key.clone(), em_px, face));
+                c.len() - 1
+            }
+        };
+        c[pos].2.as_ref().map(f)
     })
 }
 
-/// `family`를 GDI가 그 이름 그대로 찾는가(못 찾으면 이 face는 ab_glyph 경로).
-pub(crate) fn face_ok(family: &str, em_px: i32) -> bool {
-    with_face(family, em_px, |_| ()).is_some()
+/// 후보 이름 중 하나로 GDI가 같은 글꼴을 여는가(못 열면 이 face는 ab_glyph 경로).
+pub(crate) fn face_ok(names: &[String], em_px: i32) -> bool {
+    with_face(names, em_px, |_| ()).is_some()
 }
 
 /// 힌팅된 회색 AA 글리프 + 정수 전진 폭. 비BMP 문자·실패는 `None`.
-pub(crate) fn glyph(family: &str, em_px: i32, ch: char) -> Option<Glyph> {
+pub(crate) fn glyph(names: &[String], em_px: i32, ch: char) -> Option<Glyph> {
     let code = u32::from(ch);
     if code > 0xFFFF {
         return None;
     }
-    with_face(family, em_px, |face| {
+    with_face(names, em_px, |face| {
         let one = Fixed { fract: 0, value: 1 };
         let zero = Fixed { fract: 0, value: 0 };
         let mat = Mat2 {

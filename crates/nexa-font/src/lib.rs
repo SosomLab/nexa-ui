@@ -498,6 +498,18 @@ mod tests {
         );
     }
 
+    /// 시스템 UI 본의 `name` 테이블 패밀리 이름이 읽힌다(OS 래스터라이저 이름 후보 · 영문 이름 포함).
+    #[test]
+    fn face_family_names_include_table_names() {
+        let u = ui_font(None).expect("UI 본");
+        let names = u.font.face_family_names(0);
+        assert!(names.len() >= 2, "체인 이름 + name 테이블 이름: {names:?}");
+        assert!(
+            names.iter().any(|n| n.is_ascii()),
+            "영문 이름이 있어야: {names:?}"
+        );
+    }
+
     /// ★ GDI 경로(Windows): 체인 이름이 face 패밀리로 등록돼 GDI가 같은 글꼴을 열고 정수 전진 폭을 준다.
     #[cfg(windows)]
     #[test]

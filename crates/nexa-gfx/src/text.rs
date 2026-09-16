@@ -247,8 +247,8 @@ const SUBPX: f32 = 3.0;
 
 /// GDI 전진 폭 캐시 — (face, em px, 문자) → px.
 type GdiAdvCache = HashMap<(u8, i32, char), i32>;
-/// (face, size 비트) → GDI face(패밀리, em px) 또는 없음.
-type GdiFaceCache = HashMap<(u8, u32), Option<(Arc<str>, i32)>>;
+/// (face, size 비트) → GDI face(패밀리 이름 후보들, em px) 또는 없음.
+type GdiFaceCache = HashMap<(u8, u32), Option<(Arc<[String]>, i32)>>;
 
 /// 로드된 폰트 — **프로세스 수명 자원**(로드 1회 · 앱 종료까지 사용).
 ///
@@ -258,6 +258,8 @@ pub struct Font {
     /// ★ 폴백 체인(09-01 사용자 요청 "두부 예방") — [0] = 주 폰트, 이후 = 대체.
     /// 글자마다 글리프가 있는 첫 보을 쓴다(JetBrains Mono + 한글 = 시스템 본이 받는다).
     faces: Vec<FontRef<'static>>,
+    /// face별 원본 바이트·컬렉션 인덱스(`name` 테이블 읽기용 · OS 래스터라이저 이름 후보).
+    raw: Vec<(&'static [u8], u32)>,
     /// ★ 글리프 비트맵 캐시 — 외곽선 추출+래스터(글리프당 ≈1.4µs)를 **처음 한 번만**. 복제본끼리 공유(Arc).
     cache: Arc<Mutex<HashMap<GlyphKey, Arc<GlyphBitmap>>>>,
     /// 힌트용 크기 보정 캐시 — (face, size 비트) → 래스터 크기(x-높이가 정수 px가 되게).
@@ -274,6 +276,7 @@ impl Clone for Font {
     fn clone(&self) -> Self {
         Self {
             faces: self.faces.clone(),
+            raw: self.raw.clone(),
             cache: Arc::clone(&self.cache),
             hint_size: Arc::clone(&self.hint_size),
             families: Arc::clone(&self.families),
@@ -319,6 +322,7 @@ impl Font {
         FontRef::try_from_slice_and_index(data, index)
             .map(|f| Self {
                 faces: vec![f],
+                raw: vec![(data, index)],
                 cache: Arc::new(Mutex::new(HashMap::new())),
                 hint_size: Arc::new(Mutex::new(HashMap::new())),
                 families: Arc::new(Mutex::new(vec![None])),
@@ -336,6 +340,7 @@ impl Font {
     pub fn push_fallback(&mut self, data: &'static [u8], index: u32) -> Result<(), FontError> {
         let f = FontRef::try_from_slice_and_index(data, index).map_err(|_| FontError)?;
         self.faces.push(f);
+        self.raw.push((data, index));
         if let Ok(mut fam) = self.families.lock() {
             fam.push(None);
         }
@@ -357,7 +362,7 @@ impl Font {
     }
 
     /// GDI 경로가 이 face에 적용되는가 → (패밀리, em px). (face, size) 단위로 캐시 — 글자마다 문자열을 만들지 않는다.
-    fn gdi_face(&self, face_i: usize, size: f32) -> Option<(Arc<str>, i32)> {
+    fn gdi_face(&self, face_i: usize, size: f32) -> Option<(Arc<[String]>, i32)> {
         if !text_gdi() {
             return None;
         }
@@ -376,25 +381,48 @@ impl Font {
 
     /// `size`(ab_glyph 높이 스케일 = ascent−descent px)를 em 픽셀로 바꿔 GDI face를 연다.
     #[cfg(windows)]
-    fn gdi_face_uncached(&self, face_i: usize, size: f32) -> Option<(Arc<str>, i32)> {
-        let family = self.families.lock().ok()?.get(face_i)?.clone()?;
+    fn gdi_face_uncached(&self, face_i: usize, size: f32) -> Option<(Arc<[String]>, i32)> {
+        let names = self.face_family_names(face_i);
+        if names.is_empty() {
+            return None;
+        }
         let face = &self.faces[face_i];
         let upm = face.units_per_em()?;
         let h = face.height_unscaled();
         let em = if h > 0.0 { size * upm / h } else { size };
         let em_px = em.round().max(1.0) as i32;
-        crate::gdi::face_ok(&family, em_px).then(|| (Arc::from(family.as_str()), em_px))
+        crate::gdi::face_ok(&names, em_px).then(|| (Arc::from(names), em_px))
     }
 
     #[cfg(not(windows))]
     #[allow(clippy::unused_self)]
-    fn gdi_face_uncached(&self, _face_i: usize, _size: f32) -> Option<(Arc<str>, i32)> {
+    fn gdi_face_uncached(&self, _face_i: usize, _size: f32) -> Option<(Arc<[String]>, i32)> {
         None
+    }
+
+    /// face `i`의 패밀리 이름 후보 — [`Font::set_face_family`]로 준 이름을 앞에, 글꼴 `name` 테이블의 패밀리
+    /// 이름(영문·현지어 전부)을 뒤에(중복 제거). 비어 있으면 OS 래스터라이저 경로를 쓰지 않는다.
+    #[must_use]
+    pub fn face_family_names(&self, i: usize) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if let Ok(fam) = self.families.lock() {
+            if let Some(Some(n)) = fam.get(i) {
+                out.push(n.clone());
+            }
+        }
+        if let Some((data, index)) = self.raw.get(i) {
+            for n in crate::names::family_names(data, *index) {
+                if !out.iter().any(|o| o == &n) {
+                    out.push(n);
+                }
+            }
+        }
+        out
     }
 
     /// 문자 하나의 전진 폭(px) — GDI face면 정수 전진(캐시) · 아니면 ab_glyph.
     fn advance_of(&self, face_i: usize, ch: char, size: f32) -> f32 {
-        if let Some((family, em_px)) = self.gdi_face(face_i, size) {
+        if let Some((names, em_px)) = self.gdi_face(face_i, size) {
             let key = (face_i as u8, em_px, ch);
             if let Ok(c) = self.gdi_adv.lock() {
                 if let Some(a) = c.get(&key) {
@@ -402,13 +430,13 @@ impl Font {
                 }
             }
             #[cfg(windows)]
-            if let Some(g) = crate::gdi::glyph(&family, em_px, ch) {
+            if let Some(g) = crate::gdi::glyph(&names, em_px, ch) {
                 if let Ok(mut c) = self.gdi_adv.lock() {
                     c.insert(key, g.adv);
                 }
                 return g.adv as f32;
             }
-            let _ = family;
+            let _ = names;
         }
         let face = &self.faces[face_i];
         face.as_scaled(size).h_advance(face.glyph_id(ch))
@@ -418,6 +446,7 @@ impl Font {
     /// ★ 다른 글꼴의 얼굴 전부를 폴백으로 잇는다(09-04 — 고정폭 글꼴에 주 글꼴 체인을 통째로).
     pub fn push_fallback_font(&mut self, other: &Font) {
         self.faces.extend(other.faces.iter().cloned());
+        self.raw.extend(other.raw.iter().copied());
         let extra: Vec<Option<String>> =
             other.families.lock().map(|f| f.clone()).unwrap_or_default();
         if let Ok(mut fam) = self.families.lock() {
@@ -518,8 +547,8 @@ impl Font {
         }
         // ★ GDI 경로: OS 힌팅 비트맵을 그대로(감마만 적용 · 오토힌트/굵기 보강 없음).
         #[cfg(windows)]
-        if let Some((family, em_px)) = self.gdi_face(face_i, size) {
-            let g = crate::gdi::glyph(&family, em_px, ch)?;
+        if let Some((names, em_px)) = self.gdi_face(face_i, size) {
+            let g = crate::gdi::glyph(&names, em_px, ch)?;
             if g.w == 0 || g.h == 0 {
                 return None;
             }

@@ -6,6 +6,7 @@
 
 #[cfg(windows)]
 pub(crate) mod gdi;
+pub(crate) mod names;
 pub mod surface;
 pub mod text;
 
