@@ -44,6 +44,55 @@ pub fn text_contrast() -> f32 {
 ///   대각선·곡선은 손대지 않는다(AA 유지). 정수 스냅·대비 감마와 조합.
 static TEXT_HINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// ★ OS 래스터라이저(Windows GDI) 글리프 사용 여부(기본 끔 · 다른 OS에서는 늘 끔).
+static TEXT_GDI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// OS(GDI) 힌팅 글리프를 쓴다 — Windows에서만 효과. 켜면 그 face의 글리프 비트맵·전진 폭을 GDI에서 얻는다
+/// (Golden과 같은 래스터 · 오토힌트/굵기 보강은 그 face에 적용하지 않는다). face 패밀리 이름은
+/// [`Font::set_face_family`]로 알려 줘야 한다(없으면 ab_glyph 경로).
+pub fn set_text_gdi(on: bool) {
+    TEXT_GDI.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 GDI 글리프 사용 여부(Windows 밖에서는 늘 `false`).
+#[must_use]
+pub fn text_gdi() -> bool {
+    cfg!(windows) && TEXT_GDI.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// ★ 획 두께 보강(0.0~0.6 · 기본 0.0 · nexa-sql `ui.text_weight` 25%) — FreeType stem darkening 근사: 커버리지를 오른쪽으로
+///   `w`px만큼 번지게 해(`cov[x] += cov[x-1]·w`) 세로 줄기를 1px에서 1+w px로. GDI ClearType의 진한 획(≈1.2px)에 가깝게.
+static TEXT_WEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 획 두께 보강(0.0~0.6).
+pub fn set_text_weight(w: f32) {
+    let w = if (0.0..=0.6).contains(&w) { w } else { 0.0 };
+    TEXT_WEIGHT.store(w.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 획 두께 보강.
+#[must_use]
+pub fn text_weight() -> f32 {
+    f32::from_bits(TEXT_WEIGHT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// 커버리지를 오른쪽으로 `w`(0~1)만큼 번지게 한다 — 행마다 `cov[x] = min(1, cov[x] + cov[x-1]·w)`.
+pub(crate) fn embolden(cov: &mut [u8], w: usize, h: usize, weight: f32) {
+    if weight <= 0.0 || w < 2 {
+        return;
+    }
+    for r in 0..h {
+        let row = &mut cov[r * w..(r + 1) * w];
+        let mut prev = 0.0f32;
+        for c in row.iter_mut() {
+            let cur = f32::from(*c) / 255.0;
+            let v = (cur + prev * weight).min(1.0);
+            *c = (v * 255.0 + 0.5) as u8;
+            prev = cur;
+        }
+    }
+}
+
 /// 오토힌트 근사 켬/끔.
 pub fn set_text_hint(on: bool) {
     TEXT_HINT.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -170,6 +219,10 @@ struct GlyphKey {
     gamma: u32,
     /// 오토힌트 켬 여부(비트맵이 다르다).
     hint: bool,
+    /// 획 두께 보강 비트.
+    weight: u32,
+    /// GDI 글리프 여부.
+    gdi: bool,
 }
 
 /// 래스터된 글리프 — 원점(펜 정수 x · 베이스라인 정수 y) 기준 오프셋 + 8비트 커버리지.
@@ -192,6 +245,11 @@ const GLYPH_CACHE_MAX: usize = 8192;
 /// 가로 서브픽셀 단계(1/3 px — 비례 글꼴의 자간 떨림을 막으면서 캐시 적중을 높인다).
 const SUBPX: f32 = 3.0;
 
+/// GDI 전진 폭 캐시 — (face, em px, 문자) → px.
+type GdiAdvCache = HashMap<(u8, i32, char), i32>;
+/// (face, size 비트) → GDI face(패밀리, em px) 또는 없음.
+type GdiFaceCache = HashMap<(u8, u32), Option<(Arc<str>, i32)>>;
+
 /// 로드된 폰트 — **프로세스 수명 자원**(로드 1회 · 앱 종료까지 사용).
 ///
 /// 바이트는 `&'static`이다 — `<app>-plat`의 mmap(파일 백드 페이지 · 힙 0)이 정상 경로이고,
@@ -204,6 +262,12 @@ pub struct Font {
     cache: Arc<Mutex<HashMap<GlyphKey, Arc<GlyphBitmap>>>>,
     /// 힌트용 크기 보정 캐시 — (face, size 비트) → 래스터 크기(x-높이가 정수 px가 되게).
     hint_size: Arc<Mutex<HashMap<(u8, u32), f32>>>,
+    /// face별 패밀리 이름(OS 래스터라이저용 · [`Font::set_face_family`]) — 없으면 그 face는 ab_glyph 경로.
+    families: Arc<Mutex<Vec<Option<String>>>>,
+    /// GDI 전진 폭 캐시 — (face, em px, 문자) → px.
+    gdi_adv: Arc<Mutex<GdiAdvCache>>,
+    /// (face, size 비트) → GDI face(패밀리, em px) 또는 없음.
+    gdi_ok: Arc<Mutex<GdiFaceCache>>,
 }
 
 impl Clone for Font {
@@ -212,6 +276,9 @@ impl Clone for Font {
             faces: self.faces.clone(),
             cache: Arc::clone(&self.cache),
             hint_size: Arc::clone(&self.hint_size),
+            families: Arc::clone(&self.families),
+            gdi_adv: Arc::clone(&self.gdi_adv),
+            gdi_ok: Arc::clone(&self.gdi_ok),
         }
     }
 }
@@ -254,6 +321,9 @@ impl Font {
                 faces: vec![f],
                 cache: Arc::new(Mutex::new(HashMap::new())),
                 hint_size: Arc::new(Mutex::new(HashMap::new())),
+                families: Arc::new(Mutex::new(vec![None])),
+                gdi_adv: Arc::new(Mutex::new(HashMap::new())),
+                gdi_ok: Arc::new(Mutex::new(HashMap::new())),
             })
             .map_err(|_| FontError)
     }
@@ -266,14 +336,97 @@ impl Font {
     pub fn push_fallback(&mut self, data: &'static [u8], index: u32) -> Result<(), FontError> {
         let f = FontRef::try_from_slice_and_index(data, index).map_err(|_| FontError)?;
         self.faces.push(f);
+        if let Ok(mut fam) = self.families.lock() {
+            fam.push(None);
+        }
         self.clear_glyph_cache();
         Ok(())
+    }
+
+    /// face `i`의 패밀리 이름(OS 래스터라이저가 같은 글꼴을 열 수 있게 · `set_text_gdi`). 범위 밖이면 무시.
+    pub fn set_face_family(&mut self, i: usize, family: &str) {
+        if let Ok(mut fam) = self.families.lock() {
+            if i < fam.len() {
+                fam[i] = Some(family.to_string());
+            }
+        }
+        if let Ok(mut c) = self.gdi_ok.lock() {
+            c.clear();
+        }
+        self.clear_glyph_cache();
+    }
+
+    /// GDI 경로가 이 face에 적용되는가 → (패밀리, em px). (face, size) 단위로 캐시 — 글자마다 문자열을 만들지 않는다.
+    fn gdi_face(&self, face_i: usize, size: f32) -> Option<(Arc<str>, i32)> {
+        if !text_gdi() {
+            return None;
+        }
+        let key = (face_i as u8, size.to_bits());
+        if let Ok(c) = self.gdi_ok.lock() {
+            if let Some(v) = c.get(&key) {
+                return v.clone();
+            }
+        }
+        let v = self.gdi_face_uncached(face_i, size);
+        if let Ok(mut c) = self.gdi_ok.lock() {
+            c.insert(key, v.clone());
+        }
+        v
+    }
+
+    /// `size`(ab_glyph 높이 스케일 = ascent−descent px)를 em 픽셀로 바꿔 GDI face를 연다.
+    #[cfg(windows)]
+    fn gdi_face_uncached(&self, face_i: usize, size: f32) -> Option<(Arc<str>, i32)> {
+        let family = self.families.lock().ok()?.get(face_i)?.clone()?;
+        let face = &self.faces[face_i];
+        let upm = face.units_per_em()?;
+        let h = face.height_unscaled();
+        let em = if h > 0.0 { size * upm / h } else { size };
+        let em_px = em.round().max(1.0) as i32;
+        crate::gdi::face_ok(&family, em_px).then(|| (Arc::from(family.as_str()), em_px))
+    }
+
+    #[cfg(not(windows))]
+    #[allow(clippy::unused_self)]
+    fn gdi_face_uncached(&self, _face_i: usize, _size: f32) -> Option<(Arc<str>, i32)> {
+        None
+    }
+
+    /// 문자 하나의 전진 폭(px) — GDI face면 정수 전진(캐시) · 아니면 ab_glyph.
+    fn advance_of(&self, face_i: usize, ch: char, size: f32) -> f32 {
+        if let Some((family, em_px)) = self.gdi_face(face_i, size) {
+            let key = (face_i as u8, em_px, ch);
+            if let Ok(c) = self.gdi_adv.lock() {
+                if let Some(a) = c.get(&key) {
+                    return *a as f32;
+                }
+            }
+            #[cfg(windows)]
+            if let Some(g) = crate::gdi::glyph(&family, em_px, ch) {
+                if let Ok(mut c) = self.gdi_adv.lock() {
+                    c.insert(key, g.adv);
+                }
+                return g.adv as f32;
+            }
+            let _ = family;
+        }
+        let face = &self.faces[face_i];
+        face.as_scaled(size).h_advance(face.glyph_id(ch))
     }
 
     /// 글자가 있는 첫 보 — 없으면 주 폰트(.notdef 표시가 정직하다).
     /// ★ 다른 글꼴의 얼굴 전부를 폴백으로 잇는다(09-04 — 고정폭 글꼴에 주 글꼴 체인을 통째로).
     pub fn push_fallback_font(&mut self, other: &Font) {
         self.faces.extend(other.faces.iter().cloned());
+        let extra: Vec<Option<String>> =
+            other.families.lock().map(|f| f.clone()).unwrap_or_default();
+        if let Ok(mut fam) = self.families.lock() {
+            fam.extend(extra);
+            fam.resize(self.faces.len(), None);
+        }
+        if let Ok(mut c) = self.gdi_ok.lock() {
+            c.clear();
+        }
         self.clear_glyph_cache();
     }
 
@@ -288,13 +441,6 @@ impl Font {
     #[must_use]
     pub fn glyph_cache_len(&self) -> usize {
         self.cache.lock().map(|c| c.len()).unwrap_or(0)
-    }
-
-    fn face_for(&self, ch: char) -> &FontRef<'static> {
-        self.faces
-            .iter()
-            .find(|f| f.glyph_id(ch).0 != 0)
-            .unwrap_or(&self.faces[0])
     }
 
     /// 글자가 있는 face의 **인덱스**(캐시 키용).
@@ -354,6 +500,7 @@ impl Font {
         let gid = face.glyph_id(ch);
         let gamma_bits = TEXT_GAMMA.load(std::sync::atomic::Ordering::Relaxed);
         let hint = text_hint();
+        let weight_bits = TEXT_WEIGHT.load(std::sync::atomic::Ordering::Relaxed);
         let key = GlyphKey {
             face: face_i as u8,
             gid: gid.0,
@@ -361,11 +508,44 @@ impl Font {
             sub,
             gamma: gamma_bits,
             hint,
+            weight: weight_bits,
+            gdi: self.gdi_face(face_i, size).is_some(),
         };
         if let Ok(c) = self.cache.lock() {
             if let Some(bm) = c.get(&key) {
                 return Some(Arc::clone(bm));
             }
+        }
+        // ★ GDI 경로: OS 힌팅 비트맵을 그대로(감마만 적용 · 오토힌트/굵기 보강 없음).
+        #[cfg(windows)]
+        if let Some((family, em_px)) = self.gdi_face(face_i, size) {
+            let g = crate::gdi::glyph(&family, em_px, ch)?;
+            if g.w == 0 || g.h == 0 {
+                return None;
+            }
+            let gamma = f32::from_bits(gamma_bits);
+            let mut cov = g.cov;
+            if (gamma - 1.0).abs() >= 1e-3 {
+                let inv = 1.0 / gamma;
+                for v in &mut cov {
+                    let c = f32::from(*v) / 255.0;
+                    *v = (c.powf(inv) * 255.0 + 0.5) as u8;
+                }
+            }
+            let bm = Arc::new(GlyphBitmap {
+                w: g.w,
+                h: g.h,
+                ox: g.ox,
+                oy: g.oy,
+                cov,
+            });
+            if let Ok(mut c) = self.cache.lock() {
+                if c.len() >= GLYPH_CACHE_MAX {
+                    c.clear();
+                }
+                c.insert(key, Arc::clone(&bm));
+            }
+            return Some(bm);
         }
         // 힌트: x-높이가 정수 px가 되는 크기로 래스터(자간·전진 폭은 원래 크기 그대로 — 배치 불변).
         let rsize = if hint {
@@ -403,6 +583,7 @@ impl Font {
         if hint {
             snap_stems(&mut cov, w, h);
         }
+        embolden(&mut cov, w, h, f32::from_bits(weight_bits));
         let bm = Arc::new(GlyphBitmap {
             w: w as u16,
             h: h as u16,
@@ -457,10 +638,8 @@ impl Font {
                 let rel = (start_rel + local).ceil();
                 rel + self.tab_advance(size, rel) - (start_rel + local)
             } else {
-                Self::control_advance(c).unwrap_or_else(|| {
-                    let face = self.face_for(c);
-                    face.as_scaled(size).h_advance(face.glyph_id(c))
-                })
+                Self::control_advance(c)
+                    .unwrap_or_else(|| self.advance_of(self.face_index_for(c), c, size))
             };
         }
         local
@@ -470,8 +649,7 @@ impl Font {
     /// (탭 폭 = 공백 폭 × `tab_cols` · 정지점 위면 한 칸 전체) · 절대 방식이면 늘 탭 폭.
     #[must_use]
     pub fn tab_advance(&self, size: f32, rel: f32) -> f32 {
-        let face = self.face_for(' ');
-        let tabw = face.as_scaled(size).h_advance(face.glyph_id(' ')) * tab_cols() as f32;
+        let tabw = self.advance_of(self.face_index_for(' '), ' ', size) * tab_cols() as f32;
         if !tab_stops() || tabw <= 0.0 {
             return tabw;
         }
@@ -568,11 +746,8 @@ impl Font {
                 continue;
             }
             let face_i = self.face_index_for(ch);
-            let face = &self.faces[face_i];
-            let scaled = face.as_scaled(size);
-            let gid = face.glyph_id(ch);
-            // 정수 스냅이면 펜을 반올림하고 서브픽셀 0(세로획이 한 픽셀에) · 아니면 1/3px 배치.
-            let (pen_i, sub) = if text_snap() {
+            // 정수 스냅이면(또는 GDI 글리프 — 정수 전진) 펜을 반올림하고 서브픽셀 0 · 아니면 1/3px 배치.
+            let (pen_i, sub) = if text_snap() || self.gdi_face(face_i, size).is_some() {
                 (pen.round(), 0u8)
             } else {
                 let pi = pen.floor();
@@ -591,7 +766,7 @@ impl Font {
                     surface.blend_mask(gx0 + dx, gy0, &bm, color, clip, slant, base_y);
                 }
             }
-            pen += scaled.h_advance(gid);
+            pen += self.advance_of(face_i, ch, size);
         }
         pen - x
     }

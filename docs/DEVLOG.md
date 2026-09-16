@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (21차 · win)** — 획 굵기 보강(`set_text_weight`) · ★ **Windows GDI 글리프 원천**(`set_text_gdi` · `gdi.rs` GetGlyphOutlineW 힌팅 비트맵 + 정수 전진 · `Font::set_face_family`). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (20차 · win)** — 힌트 시 소수 px 크기 정수화. → [journal](journal/2026-09-16.md)
 - **2026-09-16 (19차 · win)** — nexa-gfx 오토힌트 근사(`set_text_hint` · x-높이 정수 · 세로 줄기 정렬). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (18차 · win)** — Toolbar `set_padding`(낮은 바 22px). → [journal](journal/2026-09-16.md)

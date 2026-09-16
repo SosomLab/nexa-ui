@@ -362,6 +362,14 @@ pub struct Loaded {
     pub chain: Vec<String>,
 }
 
+/// 체인 이름을 face 패밀리로 등록(OS 래스터라이저 경로 · `nexa_gfx::text::set_text_gdi`) — 체인과 face 순서는 같다.
+fn loaded(mut font: Font, chain: Vec<String>) -> Loaded {
+    for (i, n) in chain.iter().enumerate() {
+        font.set_face_family(i, n);
+    }
+    Loaded { font, chain }
+}
+
 /// UI 글꼴: 한글 UI 본 → 기호 폴백 → 고정폭 폴백. `family`를 주면 그 본을 앞에 두고 시스템 본을 첫 폴백으로.
 #[must_use]
 pub fn ui_font(family: Option<&str>) -> Option<Loaded> {
@@ -401,7 +409,7 @@ pub fn ui_font(family: Option<&str>) -> Option<Loaded> {
             chain.push(m.name.to_string());
         }
     }
-    Some(Loaded { font, chain })
+    Some(loaded(font, chain))
 }
 
 /// ★ 편집기·그리드용 고정폭 글꼴: (한글 고정폭 | OS 고정폭) → **한글 UI 본 폴백** → 기호 폴백.
@@ -444,7 +452,7 @@ pub fn mono_font(family: Option<&str>) -> Option<Loaded> {
             chain.push(f.name.to_string());
         }
     }
-    Some(Loaded { font, chain })
+    Some(loaded(font, chain))
 }
 
 #[cfg(test)]
@@ -488,6 +496,20 @@ mod tests {
             "고정폭 체인 {:?}에 없는 기호: [{miss_m}]",
             m.chain
         );
+    }
+
+    /// ★ GDI 경로(Windows): 체인 이름이 face 패밀리로 등록돼 GDI가 같은 글꼴을 열고 정수 전진 폭을 준다.
+    #[cfg(windows)]
+    #[test]
+    fn gdi_path_gives_integer_advances() {
+        let u = ui_font(None).expect("UI 본");
+        nexa_gfx::text::set_text_gdi(true);
+        let w = u.font.measure("Hello 한글", 15.0);
+        nexa_gfx::text::set_text_gdi(false);
+        assert!(w > 0.0);
+        assert!((w - w.round()).abs() < 1e-3, "정수 전진 폭이어야: {w}");
+        let w2 = u.font.measure("Hello 한글", 15.0);
+        assert!(w2 > 0.0);
     }
 
     #[test]
