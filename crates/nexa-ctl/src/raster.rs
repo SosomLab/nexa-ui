@@ -172,6 +172,120 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
     }
 }
 
+/// 커버리지 채움(픽셀 중심 SDF · 0.5px 안티에일리어싱 · `alpha` 곱) — `rect` 안만 순회.
+fn cov_fill(
+    s: &mut Surface<'_>,
+    rect: Rect,
+    color: Color,
+    alpha: f32,
+    dist: &dyn Fn(f32, f32) -> f32,
+) {
+    for py in rect.y..rect.bottom() {
+        for px in rect.x..rect.right() {
+            let d = dist(px as f32 + 0.5, py as f32 + 0.5);
+            let cov = (0.5 - d).clamp(0.0, 1.0) * alpha;
+            if cov > 0.0 {
+                s.blend_px(px, py, color, cov);
+            }
+        }
+    }
+}
+
+/// 단색 띠 — 불투명이면 메모리 채움 · 반투명이면 픽셀 블렌드(`cov_fill`의 커버리지 1과 같은 식).
+fn solid_band(s: &mut Surface<'_>, rect: Rect, color: Color, alpha: f32) {
+    if rect.w <= 0 || rect.h <= 0 {
+        return;
+    }
+    if alpha >= 1.0 {
+        s.fill_rect(rect.x, rect.y, rect.w as u32, rect.h as u32, color);
+        return;
+    }
+    for py in rect.y..rect.bottom() {
+        for px in rect.x..rect.right() {
+            s.blend_px(px, py, color, alpha);
+        }
+    }
+}
+
+/// 유효 모서리 반경(정수 · 사각형 절반을 넘지 않게).
+fn round_r(rect: Rect, radius: i32) -> i32 {
+    radius.min(rect.w / 2).min(rect.h / 2).max(0)
+}
+
+/// 사각형의 SDF 클로저(중심 좌표계).
+fn round_sdf(rect: Rect, r: i32) -> impl Fn(f32, f32) -> f32 + Copy {
+    let (cx, cy) = (
+        rect.x as f32 + rect.w as f32 / 2.0,
+        rect.y as f32 + rect.h as f32 / 2.0,
+    );
+    let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
+    let r = (r as f32).min(hw).min(hh).max(0.0);
+    move |x: f32, y: f32| round_rect_sdf(x, y, cx, cy, hw, hh, r)
+}
+
+/// ★ 라운드 채움 — 안쪽은 단색 띠 · SDF는 네 모서리 r×r만(09-16 계측: 편집기 배경 전면 SDF가 프레임의 80% = 5ms).
+///   직선 변은 픽셀 경계에 정확히 놓여 커버리지가 안 1 · 밖 0이므로 전면 SDF 결과와 픽셀 단위로 같다(테스트).
+fn rr_fill(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, alpha: f32) {
+    if rect.is_empty() {
+        return;
+    }
+    let a = alpha.clamp(0.0, 1.0);
+    if a <= 0.0 {
+        return;
+    }
+    let r = round_r(rect, radius);
+    let (x, y, w, h) = (rect.x, rect.y, rect.w, rect.h);
+    if r <= 0 {
+        solid_band(s, rect, color, a);
+        return;
+    }
+    // 가운데 가로 띠(전폭) + 위/아래 띠의 가운데(모서리 제외) — 겹침 없음(반투명도 한 번만).
+    solid_band(s, Rect::new(x, y + r, w, h - 2 * r), color, a);
+    solid_band(s, Rect::new(x + r, y, w - 2 * r, r), color, a);
+    solid_band(s, Rect::new(x + r, y + h - r, w - 2 * r, r), color, a);
+    let sdf = round_sdf(rect, r);
+    for c in [
+        Rect::new(x, y, r, r),
+        Rect::new(x + w - r, y, r, r),
+        Rect::new(x, y + h - r, r, r),
+        Rect::new(x + w - r, y + h - r, r, r),
+    ] {
+        cov_fill(s, c, color, a, &sdf);
+    }
+}
+
+/// ★ 라운드 외곽선 — 커버리지는 경계에서 `half_w + 0.5`px 안에만 있으므로 가장자리 띠 4개만 순회한다(안쪽 가운데는 건너뜀).
+fn rr_stroke(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, width: f32, alpha: f32) {
+    if rect.is_empty() {
+        return;
+    }
+    let r = round_r(rect, radius);
+    let half_w = width / 2.0;
+    let pad = half_w.ceil() as i32 + 1;
+    let area = Rect::new(
+        rect.x - pad,
+        rect.y - pad,
+        rect.w + pad * 2,
+        rect.h + pad * 2,
+    );
+    let band = pad * 2 + r.max(1);
+    let sdf = round_sdf(rect, r);
+    let stroke = move |x: f32, y: f32| sdf(x, y).abs() - half_w;
+    let (x, y, w, h) = (area.x, area.y, area.w, area.h);
+    if band * 2 >= w || band * 2 >= h {
+        cov_fill(s, area, color, alpha, &stroke);
+        return;
+    }
+    for b in [
+        Rect::new(x, y, w, band),
+        Rect::new(x, y + h - band, w, band),
+        Rect::new(x, y + band, band, h - 2 * band),
+        Rect::new(x + w - band, y + band, band, h - 2 * band),
+    ] {
+        cov_fill(s, b, color, alpha, &stroke);
+    }
+}
+
 /// 라운드 사각형 SDF — 중심 좌표계, 반코너 반경 `r`.
 fn round_rect_sdf(x: f32, y: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
     let qx = (x - cx).abs() - (hw - r);
@@ -517,18 +631,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
-        if rect.is_empty() {
-            return;
-        }
-        let (cx, cy) = (
-            rect.x as f32 + rect.w as f32 / 2.0,
-            rect.y as f32 + rect.h as f32 / 2.0,
-        );
-        let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
-        let r = (radius as f32).min(hw).min(hh).max(0.0);
-        self.coverage_fill(rect, color, move |x, y| {
-            round_rect_sdf(x, y, cx, cy, hw, hh, r)
-        });
+        rr_fill(self.surface, rect, radius, color, 1.0);
     }
 
     fn fill_rect_alpha(&mut self, rect: Rect, color: Color, alpha: f32) {
@@ -540,42 +643,11 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: f32) {
-        if rect.is_empty() {
-            return;
-        }
-        let (cx, cy) = (
-            rect.x as f32 + rect.w as f32 / 2.0,
-            rect.y as f32 + rect.h as f32 / 2.0,
-        );
-        let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
-        let r = (radius as f32).min(hw).min(hh).max(0.0);
-        self.coverage_fill_alpha(rect, color, alpha, move |x, y| {
-            round_rect_sdf(x, y, cx, cy, hw, hh, r)
-        });
+        rr_fill(self.surface, rect, radius, color, alpha);
     }
 
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
-        if rect.is_empty() {
-            return;
-        }
-        let (cx, cy) = (
-            rect.x as f32 + rect.w as f32 / 2.0,
-            rect.y as f32 + rect.h as f32 / 2.0,
-        );
-        let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
-        let r = (radius as f32).min(hw).min(hh).max(0.0);
-        let half_w = width / 2.0;
-        // 외곽선은 경계 밖 half_w까지 나간다 — 순회 영역을 넓힌다.
-        let pad = half_w.ceil() as i32 + 1;
-        let area = Rect::new(
-            rect.x - pad,
-            rect.y - pad,
-            rect.w + pad * 2,
-            rect.h + pad * 2,
-        );
-        self.coverage_fill(area, color, move |x, y| {
-            round_rect_sdf(x, y, cx, cy, hw, hh, r).abs() - half_w
-        });
+        rr_stroke(self.surface, rect, radius, color, width, 1.0);
     }
 
     fn stroke_round_rect_alpha(
@@ -586,26 +658,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         width: f32,
         alpha: f32,
     ) {
-        if rect.is_empty() {
-            return;
-        }
-        let (cx, cy) = (
-            rect.x as f32 + rect.w as f32 / 2.0,
-            rect.y as f32 + rect.h as f32 / 2.0,
-        );
-        let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
-        let r = (radius as f32).min(hw).min(hh).max(0.0);
-        let half_w = width / 2.0;
-        let pad = half_w.ceil() as i32 + 1;
-        let area = Rect::new(
-            rect.x - pad,
-            rect.y - pad,
-            rect.w + pad * 2,
-            rect.h + pad * 2,
-        );
-        self.coverage_fill_alpha(area, color, alpha, move |x, y| {
-            round_rect_sdf(x, y, cx, cy, hw, hh, r).abs() - half_w
-        });
+        rr_stroke(self.surface, rect, radius, color, width, alpha);
     }
 
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
@@ -623,6 +676,90 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             self.coverage_fill(area, color, move |x, y| {
                 seg_dist(x, y, ax, ay, bx, by) - half_w
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod round_rect_tests {
+    use super::*;
+
+    /// 전면 SDF(종전 구현) — 비교 기준.
+    fn full_fill(
+        buf: &mut [u32],
+        w: usize,
+        h: usize,
+        rect: Rect,
+        radius: i32,
+        color: Color,
+        alpha: f32,
+    ) {
+        let mut s = Surface::new(buf, w, h);
+        let sdf = round_sdf(rect, round_r(rect, radius));
+        cov_fill(&mut s, rect, color, alpha, &sdf);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn full_stroke(
+        buf: &mut [u32],
+        w: usize,
+        h: usize,
+        rect: Rect,
+        radius: i32,
+        color: Color,
+        width: f32,
+        alpha: f32,
+    ) {
+        let mut s = Surface::new(buf, w, h);
+        let sdf = round_sdf(rect, round_r(rect, radius));
+        let half = width / 2.0;
+        let pad = half.ceil() as i32 + 1;
+        let area = Rect::new(
+            rect.x - pad,
+            rect.y - pad,
+            rect.w + pad * 2,
+            rect.h + pad * 2,
+        );
+        cov_fill(&mut s, area, color, alpha, &move |x, y| {
+            sdf(x, y).abs() - half
+        });
+    }
+
+    /// 영역 분해 결과 = 전면 SDF 결과(픽셀 단위 동일) — 채움·외곽선 · 불투명/반투명 · 반경 0·작은 사각형·전체 화면.
+    #[test]
+    fn region_split_matches_full_sdf() {
+        let (w, h) = (120usize, 80usize);
+        let bg = 0xFF20_3040u32;
+        let color = Color::from_rgb(200, 120, 40);
+        for (rect, radius) in [
+            (Rect::new(10, 10, 90, 50), 6),
+            (Rect::new(3, 5, 40, 12), 3),
+            (Rect::new(20, 20, 30, 30), 0),
+            (Rect::new(0, 0, 120, 80), 8),
+            (Rect::new(30, 30, 9, 9), 20),
+            (Rect::new(50, 40, 2, 2), 1),
+        ] {
+            for alpha in [1.0f32, 0.5] {
+                let mut a = vec![bg; w * h];
+                let mut b = vec![bg; w * h];
+                rr_fill(&mut Surface::new(&mut a, w, h), rect, radius, color, alpha);
+                full_fill(&mut b, w, h, rect, radius, color, alpha);
+                assert_eq!(a, b, "fill {rect:?} r={radius} a={alpha}");
+                for width in [1.0f32, 2.0, 3.0] {
+                    let mut a = vec![bg; w * h];
+                    let mut b = vec![bg; w * h];
+                    rr_stroke(
+                        &mut Surface::new(&mut a, w, h),
+                        rect,
+                        radius,
+                        color,
+                        width,
+                        alpha,
+                    );
+                    full_stroke(&mut b, w, h, rect, radius, color, width, alpha);
+                    assert_eq!(a, b, "stroke {rect:?} r={radius} w={width} a={alpha}");
+                }
+            }
         }
     }
 }
