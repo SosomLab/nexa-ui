@@ -114,6 +114,8 @@ pub struct TextBox {
     ml_user_scrolled: bool,
     /// 휠의 줄 단위 반올림에서 남은 px(다음 휠 사건에 이월 · 트랙패드 느린 스크롤 · 09-16).
     ml_wheel_rem: std::cell::Cell<i32>,
+    /// 줄 경계 스냅(행 단위 스크롤 모드).
+    scroll_snap: bool,
     /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
     line_numbers: bool,
     /// 줄번호 오른쪽 **표시 띠**(Golden식 · 3px 색 막대 자리 4px + 첫 글자 앞 2px 여백 · nexa-sql 09-16).
@@ -207,6 +209,7 @@ impl TextBox {
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
             ml_wheel_rem: std::cell::Cell::new(0),
+            scroll_snap: false,
             line_numbers: false,
             gutter_marks: false,
             text_inset: 0,
@@ -301,6 +304,12 @@ impl TextBox {
     /// 탭/공백 적용 방식 — `true` = 정지점(앞 글자 수를 고려해 1~탭 폭 칸 · Golden/Sublime 관례) · `false` = 절대(늘 탭 폭).
     pub fn set_tab_stops(&mut self, on: bool) {
         self.tab_stops = on;
+    }
+
+    /// 휠 스크롤을 **줄 경계에 맞춰** 그리는가(`true` = 행 단위 · `false` = 픽셀 단위 기본). 잔여 px는 두 모드 모두
+    /// 누적되므로 느린 트랙패드 이동도 잃지 않는다(nexa-sql `editor.scroll` · 09-16).
+    pub fn set_scroll_snap(&mut self, on: bool) {
+        self.scroll_snap = on;
     }
 
     /// 탭 정지점 방식인가.
@@ -1199,9 +1208,27 @@ impl TextBox {
             .iter()
             .map(|&c| (lines.iter().rposition(|(st, _)| *st <= c).unwrap_or(0), c))
             .collect();
-        for (vi, li) in (top..lines.len().min(top + rows)).enumerate() {
+        // ★ 픽셀 스크롤(nexa-sql 사용자 09-16): 휠 잔여 px(`ml_wheel_rem`)만큼 행을 위로 밀어 그린다 — 줄 단위 반올림은
+        //   위/아래 반응이 비대칭이었다(내림이면 위로는 1px에 한 줄, 아래로는 한 줄 높이를 채워야). 캐럿 추종 중이거나
+        //   맨 아래면 잔여를 버린다. 밀린 만큼 아래에 한 행을 더 그리고, 채움·캐럿·텍스트는 본문 영역으로 세로 클립.
+        let rem = if self.ml_user_scrolled && top < max_top {
+            self.ml_wheel_rem.get().clamp(0, lh - 1)
+        } else {
+            self.ml_wheel_rem.set(0);
+            0
+        };
+        // 행 단위 모드: 잔여는 누적만 하고 그리기는 줄 경계에.
+        let rem = if self.scroll_snap { 0 } else { rem };
+        let (vy0, vy1) = (top0, b.y + b.h - self.s(4));
+        let clipv = |r: Rect| -> Option<Rect> {
+            let y0 = r.y.max(vy0);
+            let y1 = (r.y + r.h).min(vy1);
+            (y1 > y0).then(|| Rect::new(r.x, y0, r.w, y1 - y0))
+        };
+        let extra_row = usize::from(rem > 0);
+        for (vi, li) in (top..lines.len().min(top + rows + extra_row)).enumerate() {
             let (start_idx, line_str) = &lines[li];
-            let y = top0 + (vi as i32) * lh;
+            let y = top0 + (vi as i32) * lh - rem;
             let line_len = line_str.chars().count();
             // 이 행이 선택에 걸리는가 — 줄번호를 선택 색으로 표시한다(여러 행 선택이 한눈에 · 사용자 09-15).
             let row_selected = sels.iter().any(|&(a, e)| {
@@ -1211,15 +1238,16 @@ impl TextBox {
             if gw > 0 {
                 if row_selected {
                     // 선택 행 표시 — 거터 배경을 선택색으로(텍스트 선택 블록과 같은 색 계열).
-                    let gr = Rect::new(b.x + 1, y, self.s(10) + gw - self.s(4), lh);
-                    ctx.fill_rect(
-                        gr,
-                        if self.base.focused {
-                            theme.sel_bg
-                        } else {
-                            theme.sel_bg_inactive
-                        },
-                    );
+                    if let Some(gr) = clipv(Rect::new(b.x + 1, y, self.s(10) + gw - self.s(4), lh)) {
+                        ctx.fill_rect(
+                            gr,
+                            if self.base.focused {
+                                theme.sel_bg
+                            } else {
+                                theme.sel_bg_inactive
+                            },
+                        );
+                    }
                 }
                 if let Ok(n) = logical_starts.binary_search(start_idx) {
                     let num = (n + 1).to_string();
@@ -1229,14 +1257,16 @@ impl TextBox {
                     if mark_extra > 0 {
                         if let Some((_, c)) = self.line_marks.iter().find(|(l, _)| *l == n) {
                             let mx = b.x + self.s(10) + gw - self.s(4) - mark_extra + self.s(1);
-                            ctx.fill_rect(Rect::new(mx, y + 1, self.s(3), lh - 2), *c);
+                            if let Some(r) = clipv(Rect::new(mx, y + 1, self.s(3), lh - 2)) {
+                                ctx.fill_rect(r, *c);
+                            }
                         }
                     }
                     let is_caret_line = li == caret_line || row_selected;
                     ctx.text(
                         gx,
                         y,
-                        Rect::new(b.x, b.y, self.s(10) + gw, b.h),
+                        Rect::new(b.x, vy0, self.s(10) + gw, vy1 - vy0),
                         &num,
                         if is_caret_line {
                             theme.text
@@ -1246,7 +1276,7 @@ impl TextBox {
                     );
                 }
             }
-            let view = Rect::new(tx, y, avail, lh);
+            let view = clipv(Rect::new(tx, y, avail, lh)).unwrap_or(Rect::new(tx, y, avail, 0));
             let mut w = Vec::new();
             ctx.text_prefix_widths(line_str, &mut w);
             // 선택 반전(줄 범위와 겹치는 부분만 · 뷰포트로 클립 · 텍스트 아래 먼저 · 구간마다).
@@ -1266,9 +1296,9 @@ impl TextBox {
                     } else {
                         (dx + w.get(s1 - ls).copied().unwrap_or(0)).min(vx1)
                     };
-                    if x1 > x0 {
+                    if let (true, Some(r)) = (x1 > x0, clipv(Rect::new(x0, y, x1 - x0, lh))) {
                         ctx.fill_rect(
-                            Rect::new(x0, y, x1 - x0, lh),
+                            r,
                             if self.base.focused {
                                 theme.sel_bg
                             } else {
@@ -1291,7 +1321,7 @@ impl TextBox {
                         if !in_sel {
                             let x0 = dx + w.get(i).copied().unwrap_or(0);
                             let x1 = dx + w.get(i + n).copied().unwrap_or(0);
-                            if x1 > x0 && x1 > vx0 && x0 < vx1 {
+                            if x1 > x0 && x1 > vx0 && x0 < vx1 && y >= vy0 && y + lh <= vy1 {
                                 ctx.stroke_round_rect_alpha(
                                     Rect::new(
                                         x0.max(vx0),
@@ -1388,7 +1418,9 @@ impl TextBox {
                     let col = c.saturating_sub(*start_idx);
                     let cx = dx + w.get(col).copied().unwrap_or(0);
                     if cx >= vx0 && cx <= vx1 {
-                        ctx.fill_rect(Rect::new(cx, y, self.s(2).max(2), th), theme.text);
+                        if let Some(r) = clipv(Rect::new(cx, y, self.s(2).max(2), th)) {
+                            ctx.fill_rect(r, theme.text);
+                        }
                     }
                 }
             }
@@ -1409,7 +1441,7 @@ impl TextBox {
             (content_w + self.s(20) + gw).max(b.w),
             content_h.max(b.h),
             hs,
-            (top as i32) * lh,
+            (top as i32) * lh + rem,
             self.base.scale,
         );
         self.paint_popup(ctx, theme);
@@ -1519,7 +1551,12 @@ impl Widget for TextBox {
             let lh = line_h.max(1);
             let nl = if is_wheel {
                 let nl = ny.div_euclid(lh).max(0);
-                self.ml_wheel_rem.set(ny - nl * lh);
+                let new_rem = ny - nl * lh;
+                // 잔여 px만 바뀌어도 "스크롤했다"(픽셀 스크롤 · 캐럿 추종 해제 + 다시 그리기).
+                if new_rem != rem {
+                    moved = true;
+                }
+                self.ml_wheel_rem.set(new_rem);
                 nl as usize
             } else {
                 self.ml_wheel_rem.set(0);
