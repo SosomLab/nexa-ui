@@ -36,6 +36,8 @@ pub struct Switch {
     side: LabelSide,
     /// 값 변경 1회성 보고(즉시 적용 폴링) — Checkbox와 같은 계약.
     toggled: bool,
+    /// 트랙 배율(1.0 = 20×12 논리 px · 작은 글자 옆에선 0.8처럼 — nexa-sql 로그 창 푸터 09-16).
+    track_mult: f32,
 }
 
 impl Switch {
@@ -48,7 +50,23 @@ impl Switch {
             label: label.into(),
             side: LabelSide::Right,
             toggled: false,
+            track_mult: 1.0,
         }
+    }
+
+    /// 트랙 배율(글자 크기에 비례해 줄일 때 · 0.5~1.5로 잘라 씀).
+    pub fn set_track_scale(&mut self, mult: f32) {
+        self.track_mult = mult.clamp(0.5, 1.5);
+    }
+
+    fn track_w(&self) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        self.s((super::ctl_size(TRACK_W) as f32 * self.track_mult).round() as i32)
+    }
+
+    fn track_h(&self) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        self.s((super::ctl_size(TRACK_H) as f32 * self.track_mult).round() as i32)
     }
 
     /// 라벨 위치 지정(토글만 = [`LabelSide::None`]).
@@ -82,8 +100,8 @@ impl Switch {
 
     /// 트랙 rect(라벨 위치에 따라 좌/우 끝 정렬). 크기 배율(`ui.control_size`) 적용.
     fn track_rect(&self) -> Rect {
-        let w = self.s(super::ctl_size(TRACK_W));
-        let h = self.s(super::ctl_size(TRACK_H));
+        let w = self.track_w();
+        let h = self.track_h();
         let b = self.base.bounds;
         let y = b.y + (b.h - h) / 2;
         match self.side {
@@ -94,7 +112,7 @@ impl Switch {
     }
 
     fn label_rect(&self) -> Rect {
-        let w = self.s(super::ctl_size(TRACK_W));
+        let w = self.track_w();
         let gap = self.s(GAP);
         let b = self.base.bounds;
         match self.side {

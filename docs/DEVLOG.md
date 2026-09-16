@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (11차 · win)** — Switch 트랙 배율(`set_track_scale`) · RasterCtx `set_fonts`(그리는 중 글꼴 설정 교체). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (10차 · win)** — ScrollBars 트랙 클릭 소비(점프+드래그) · FilePicker 덮어쓰기 확인 카드(모달 · Enter/Esc). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (9차 · win)** — ContextMenu 손자(3단) 항목 클릭 유실 수정(자식 포함 판정 = `bounds()` · 테스트). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (8차 · win)** — 라운드 사각형 채움/외곽선을 모서리·가장자리만 SDF(전면 → 띠 · 픽셀 동일 테스트) — 편집기 배경 4.6ms → 0.35ms(드래그 지연 원인). → [journal](journal/2026-09-16.md)

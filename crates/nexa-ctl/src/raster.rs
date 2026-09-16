@@ -123,6 +123,14 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
         self
     }
 
+    /// 그리는 중간에 글꼴 설정 교체(한 창 안에서 본문과 푸터의 크기가 다를 때 · nexa-sql 로그 창 09-16).
+    /// 현재 선택은 새 설정의 Base로 돌아간다.
+    pub fn set_fonts(&mut self, prefs: FontPrefs) {
+        self.prefs = prefs;
+        self.cur = prefs.base;
+        self.font = self.fonts.face(FontSlot::Base);
+    }
+
     /// 지금 배율(호스트가 위젯과 같은 값을 쓰는지 확인할 때).
     #[must_use]
     pub fn scale(&self) -> f32 {
