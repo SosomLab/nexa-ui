@@ -99,6 +99,8 @@ pub struct TabBar {
     close_last: bool,
     row_h: i32,
     pad_x: i32,
+    /// 활성 탭 상단 줄·핀 점의 색 덮어쓰기(None = `theme.accent`) — 편집기 탭과 결과 탭을 색으로 구별(nexa-sql 09-17).
+    accent: Option<Color>,
     hover: Option<Zone>,
     /// 프레스 중인 버튼 존(×·[+]·◀▶ — 해제 시 같은 존이면 동작).
     pressed: Option<Zone>,
@@ -135,6 +137,7 @@ impl TabBar {
             close_last: false,
             row_h: DEFAULT_ROW_H,
             pad_x: space::S,
+            accent: None,
             hover: None,
             pressed: None,
             drag: None,
@@ -229,6 +232,20 @@ impl TabBar {
     }
 
     /// 한 줄 높이·좌우 여백(논리 px) 지정.
+    /// 활성 탭 강조색 덮어쓰기(None = 테마 accent). 창이 비활성이면 여전히 흐린 색.
+    pub fn set_accent(&mut self, c: Option<Color>) {
+        self.accent = c;
+    }
+
+    /// 활성 탭 줄 색 — 덮어쓰기 > 테마 accent · 창 비활성 = text_dim.
+    fn tab_accent(&self, theme: &Theme) -> Color {
+        if self.is_active() {
+            self.accent.unwrap_or(theme.accent)
+        } else {
+            theme.text_dim
+        }
+    }
+
     pub fn set_metrics(&mut self, row_h: i32, pad_x: i32, inv: &mut Invalidations) {
         self.row_h = row_h.max(1);
         self.pad_x = pad_x.max(0);
@@ -730,7 +747,7 @@ impl Widget for TabBar {
                 }
                 let line = Rect::new(cell.x, cell.y, cell.w, self.s(2).max(1)).intersection(&clip);
                 if !line.is_empty() {
-                    ctx.fill_rect(line, self.accent_now(theme));
+                    ctx.fill_rect(line, self.tab_accent(theme));
                 }
             } else {
                 ctx.state_layer(
@@ -750,7 +767,7 @@ impl Widget for TabBar {
             if self.is_pinned(i) {
                 let dot = Rect::new(tx, cell.y + (cell.h - mark) / 2, mark, mark);
                 if fully_inside(dot, clip) {
-                    ctx.fill_ellipse(dot, self.accent_now(theme));
+                    ctx.fill_ellipse(dot, self.tab_accent(theme));
                 }
                 tx += mark + gap;
             }
