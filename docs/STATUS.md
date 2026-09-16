@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-16 (24차 · mac) — TextBox 픽셀 스크롤 ✅ · `set_scroll_snap` ✅ · `EditState::command` 14종 ✅ · 찾기 일치 표시 ✅
+
+nexa-sql 트랙패드 QA: 휠 잔여 이월 → 픽셀 스크롤(세로 클립) → 행 단위 모드는 표시만 스냅. `edit/ops.rs` 조각 편집 재매핑(되돌리기 1 · 테스트 10) · `edit_command`/`goto_line`/`set_find_marks`/여러 줄 Tab. 헤드리스 휠 시뮬로 편집기 대칭 증명. 227 green · clippy 0. **다음**: F-8 · 캡처 창 2단 코드. → [journal](journal/2026-09-16.md)
+
 ## 2026-09-16 (1~4차 · mac) — 두부 방지 폰트 폴백 ✅ · TreeGrid 가로 클립 ✅ · `Splitter` ✅ · Material 글리프/`Button::glyph` ✅ · `ToolTone` ✅ · 잉크 기준 세로 정렬 ✅
 
 맥 실기 첫날(nexa-sql 세션). 기호 폴백은 OS별 고정 경로 + 이름 검색(재귀) 2중에 `UI_SYMBOLS` 회귀 테스트(CI 3-OS). `DrawCtx::text_center_y`(잉크 가운데)를 컨트롤 전반에 적용 — Windows 쪽 재검증 필요(F-9). 3-OS clippy 전부 green. **다음**: F-8 macOS `NSWorkspace` 아이콘. → [journal](journal/2026-09-16.md)
