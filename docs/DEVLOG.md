@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-16 (12차 · win)** — Toolbar 툴팁 위쪽(`set_tooltip_above`). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (11차 · win)** — Switch 트랙 배율(`set_track_scale`) · RasterCtx `set_fonts`(그리는 중 글꼴 설정 교체). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (10차 · win)** — ScrollBars 트랙 클릭 소비(점프+드래그) · FilePicker 덮어쓰기 확인 카드(모달 · Enter/Esc). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (9차 · win)** — ContextMenu 손자(3단) 항목 클릭 유실 수정(자식 포함 판정 = `bounds()` · 테스트). → [journal](journal/2026-09-16.md)
