@@ -316,22 +316,24 @@ impl Font {
         }
         let face = &self.faces[face_i];
         let gid = face.glyph_id('x');
+        // 소수 px 크기(10pt = 13.33px)는 먼저 정수로(가로 획이 반 픽셀에 걸치는 흐림의 주원인 · 09-16) — 전진 폭은 원래 크기.
+        let base = size.round().max(1.0);
         let adjusted = if gid.0 == 0 {
-            size
+            base
         } else {
-            let scaled = face.as_scaled(size);
-            match scaled.outline_glyph(gid.with_scale(size)) {
+            let scaled = face.as_scaled(base);
+            match scaled.outline_glyph(gid.with_scale(base)) {
                 Some(o) => {
                     let b = o.px_bounds();
                     let xh = b.max.y - b.min.y;
                     if xh < 4.0 {
-                        size
+                        base
                     } else {
                         let target = xh.round().max(1.0);
-                        (size * target / xh).clamp(size * 0.9, size * 1.1)
+                        (base * target / xh).clamp(base * 0.9, base * 1.1)
                     }
                 }
-                None => size,
+                None => base,
             }
         };
         if let Ok(mut c) = self.hint_size.lock() {
