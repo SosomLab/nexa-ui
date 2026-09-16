@@ -2,7 +2,8 @@
 
 > 시간 역순. 상세는 journal.
 
-- **2026-09-16 (5차 · mac)** — ContextMenu 하위 메뉴 유실 방지(자식 쪽 대각선 이동 400ms 유예 · `last_pos`). → [journal](journal/2026-09-16.md)
+- **2026-09-16 (6차 · win)** — `TextBox::set_focus_ring`(편집기처럼 상시 포커스인 상자는 링 생략 · nexa-sql 사용자 09-16). → [journal](journal/2026-09-16.md)
+- **2026-09-16 (ContextMenu 하위 메뉴 유실 방지(자식 쪽 대각선 이동 400ms 유예 · `last_pos`). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (4차 · mac)** — 글자 세로 정렬 = 잉크 기준 `DrawCtx::text_center_y`(맥 본은 상자 가운데가 위로 치우침 · 컨트롤 전반 적용). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (3차 · mac)** — Toolbar `ToolTone`(항목 색조 · Ok = 밝은 녹색 · `set_item_tone`). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (2차 · mac)** — Material 아이콘 5종(새로 고침·뒤로·앞으로·상위로·홈 = 사용자 SVG) · `Button::glyph` 마스크 아이콘(글자색 틴트). → [journal](journal/2026-09-16.md)

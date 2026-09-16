@@ -51,6 +51,8 @@ pub const DOUBLE_CLICK_MS: u64 = 500;
 #[derive(Debug)]
 pub struct TextBox {
     base: ControlBase,
+    /// 포커스 링 표시 여부(기본 켬). 편집기처럼 거의 항상 포커스인 상자는 끈다(nexa-sql 사용자 09-16 "매번 눈에 띄어 불편").
+    focus_ring: bool,
     edit: EditState,
     placeholder: String,
     /// 선행 이미지 아이콘(옵션 · 투명 배경 RGBA). 있으면 placeholder·캐럿이 그 뒤로 밀린다.
@@ -160,6 +162,7 @@ impl TextBox {
     #[must_use]
     pub fn new(placeholder: impl Into<String>) -> Self {
         Self {
+            focus_ring: true,
             base: ControlBase::default(),
             edit: EditState::new(),
             placeholder: placeholder.into(),
@@ -348,6 +351,11 @@ impl TextBox {
 
     pub fn set_line_numbers(&mut self, on: bool) {
         self.line_numbers = on;
+    }
+
+    /// 포커스 링 표시 여부 — 끄면 포커스여도 헤일로를 그리지 않는다(캐럿·선택은 그대로).
+    pub fn set_focus_ring(&mut self, on: bool) {
+        self.focus_ring = on;
     }
 
     /// 줄번호 거터 폭(마지막 페인트 실측 · 0 = 없음).
@@ -880,7 +888,9 @@ impl TextBox {
         let b = self.base.bounds;
         ctx.fill_round_rect(b, self.s(6), theme.field_bg);
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
-        self.draw_focus_ring(ctx, theme, b);
+        if self.focus_ring {
+            self.draw_focus_ring(ctx, theme, b);
+        }
         ctx.select_font(FontSlot::Base, false);
         let th = ctx.text_height();
         let lh = self.line_h();
@@ -1670,7 +1680,9 @@ impl Widget for TextBox {
             ctx.fill_round_rect_alpha(b, self.s(6), theme.text, hov);
         }
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
-        self.draw_focus_ring(ctx, theme, b);
+        if self.focus_ring {
+            self.draw_focus_ring(ctx, theme, b);
+        }
 
         let cy = b.y + b.h / 2;
         let s16 = self.s(16);
