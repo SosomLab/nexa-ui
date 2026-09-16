@@ -173,6 +173,8 @@ pub struct Toolbar {
     clicked: Option<String>,
     /// 마스크 틴트 캐시(항목별 · 같은 색이면 재사용) — 페인트가 `&self`라 내부 가변.
     tint: RefCell<Vec<TintSlot>>,
+    /// 툴팁을 슬롯 **위**에 그린다(창 아래 붙은 도구줄 — 아래로 그리면 상태줄/창 밖 · nexa-sql 결과 도구줄 09-16).
+    tip_above: bool,
 }
 
 impl Toolbar {
@@ -188,7 +190,13 @@ impl Toolbar {
             pressed: None,
             clicked: None,
             tint: RefCell::new(vec![None; n]),
+            tip_above: false,
         }
+    }
+
+    /// 툴팁 위치 — `true` = 슬롯 위쪽(기본 아래).
+    pub fn set_tooltip_above(&mut self, on: bool) {
+        self.tip_above = on;
     }
 
     /// 아이콘 크기(논리 px) 지정 — 설정 `ui.toolbar_size` 즉시 적용.
@@ -330,11 +338,20 @@ impl Toolbar {
     pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         if let Some(i) = self.hover {
             if self.items[i].visible && !self.items[i].tip.is_empty() {
+                let mut anchor = self.slot_rect(i);
+                if self.tip_above {
+                    // draw_tooltip은 anchor 아래 6px에 그린다 → 아래가 슬롯 위에 닿는 가짜 anchor.
+                    ctx.select_font(crate::draw::FontSlot::Status, false);
+                    let lines = self.items[i].tip.split('\n').count() as i32;
+                    let tip_h = ctx.text_height() * lines + self.s(8);
+                    let gap = self.s(6);
+                    anchor = Rect::new(anchor.x, anchor.y - gap - tip_h - gap - 1, anchor.w, 1);
+                }
                 crate::draw::draw_tooltip(
                     ctx,
                     theme,
-                    self.slot_rect(i),
-                    self.base.bounds.right(),
+                    anchor,
+                    self.base.bounds.right().max(anchor.right() + self.s(240)),
                     &self.items[i].tip,
                     self.base.scale,
                 );
