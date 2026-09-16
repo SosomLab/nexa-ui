@@ -93,6 +93,8 @@ pub struct ToolItem {
     pub enabled: bool,
     /// 마스크 아이콘 색조(09-16) — 상태를 색으로(연결됨 = `Ok`).
     pub tone: ToolTone,
+    /// 드롭다운 표시(아이콘 오른쪽 ▾ · 슬롯이 10px 넓어진다 · 클릭은 같은 액션 · nexa-sql 보기 모드 09-16).
+    pub dropdown: bool,
 }
 
 impl ToolItem {
@@ -106,7 +108,15 @@ impl ToolItem {
             tip: String::new(),
             enabled: true,
             tone: ToolTone::Default,
+            dropdown: false,
         }
+    }
+
+    /// 드롭다운 화살표(체이닝).
+    #[must_use]
+    pub fn with_dropdown(mut self) -> Self {
+        self.dropdown = true;
+        self
     }
 
     /// 색조(체이닝).
@@ -147,6 +157,8 @@ impl ToolItem {
 
 /// 슬롯 안쪽 여백(논리 px).
 const SLOT_PAD: i32 = 4;
+/// 드롭다운 화살표 칸 폭(논리 px).
+const DROP_W: i32 = 10;
 /// 툴바 상하 여백(논리 px).
 const BAR_PAD: i32 = 4;
 /// 기본 아이콘 크기(논리 px) — 사용자 확정(08-14 · 24→**32**).
@@ -228,9 +240,14 @@ impl Toolbar {
     /// 항목 슬롯 폭 — 상태 표시([`ToolIcon::StatusMask`])는 **아이콘 폭 그대로**
     /// (08-22 사용자 확정 "여백 0" — 이웃 버튼에 밀착), 나머지는 공통 슬롯.
     fn item_w(&self, i: usize) -> i32 {
+        let extra = if self.items[i].dropdown {
+            self.s(DROP_W)
+        } else {
+            0
+        };
         match &self.items[i].icon {
             ToolIcon::StatusMask { size, .. } => self.s(*size),
-            _ => self.slot(),
+            _ => self.slot() + extra,
         }
     }
 
@@ -459,12 +476,31 @@ impl Widget for Toolbar {
             let pad = self.s(SLOT_PAD);
             // 눌림 식별 — 아이콘을 1px 내려 그린다.
             let dy = i32::from(is_pressed);
+            // 드롭다운 항목은 오른쪽 DROP_W를 ▾에 내주고 아이콘은 왼쪽 정사각 슬롯에.
+            let drop = if it.dropdown { self.s(DROP_W) } else { 0 };
             let icon_area = Rect::new(
                 slot.x + pad,
                 slot.y + pad + dy,
-                slot.w - pad * 2,
+                slot.w - drop - pad * 2,
                 slot.h - pad * 2,
             );
+            if it.dropdown {
+                let c = if !it.enabled {
+                    theme.text_dim
+                } else if is_hover || is_pressed {
+                    theme.accent
+                } else {
+                    theme.text
+                };
+                let a = self.s(8);
+                let area = Rect::new(
+                    slot.right() - drop + (drop - a) / 2,
+                    slot.y + (slot.h - a) / 2 + dy,
+                    a,
+                    a,
+                );
+                super::draw_chevron_down(ctx, area, c);
+            }
             match &it.icon {
                 ToolIcon::Glyph(g) => {
                     let color = if is_hover || is_pressed {
