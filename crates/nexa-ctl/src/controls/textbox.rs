@@ -1599,14 +1599,15 @@ impl Widget for TextBox {
             //   느린 이동(사건당 1~3px)이 영원히 한 줄을 못 넘는다(nexa-sql 사용자 09-16). 잔여 px를 `ml_wheel_rem`에
             //   보관해 다음 휠 사건에 더한다 · 휠이 아닌 사건(썸 드래그·클릭)은 잔여를 버리고 가장 가까운 줄로.
             let is_wheel = matches!(ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. });
-            let rem = if is_wheel { self.ml_wheel_rem.get() } else { 0 };
+            let rem = self.ml_wheel_rem.get();
+            let off_y = (self.vscroll.get() as i32) * line_h + rem;
             let (nx, ny, consumed) = self.ml_bars.on_event(
                 ev,
                 vp,
                 cw_bars.max(vp.w),
                 ch.max(vp.h),
                 self.mhscroll.get(),
-                (self.vscroll.get() as i32) * line_h + rem,
+                off_y,
                 self.base.scale,
             );
             let mut moved = false;
@@ -1615,20 +1616,19 @@ impl Widget for TextBox {
                 moved = true;
             }
             let lh = line_h.max(1);
-            let nl = if is_wheel {
-                let nl = ny.div_euclid(lh).max(0);
-                let new_rem = ny - nl * lh;
-                // 잔여 px만 바뀌어도 "스크롤했다"(픽셀 스크롤 · 캐럿 추종 해제 + 다시 그리기).
-                if new_rem != rem {
-                    moved = true;
-                }
-                self.ml_wheel_rem.set(new_rem);
-                nl as usize
-            } else {
-                self.ml_wheel_rem.set(0);
-                ((ny + lh / 2) / lh).max(0) as usize
-            };
-            if nl != self.vscroll.get() {
+            // ★ 오프셋이 실제로 바뀐 사건만 세로 상태를 건드린다(nexa-sql 사용자 09-16): macOS winit은 휠 사건마다
+            //   `CursorMoved`를 먼저 보내는데, 휠이 아닌 사건이 잔여 px를 0으로 되돌리면 느린 스크롤이 1~3px 갔다가
+            //   원위치로 튀고(흔들림) 반대 방향은 사건마다 한 줄씩 점프했다. 휠 = 내림 + 잔여 보관(픽셀 스크롤) ·
+            //   썸/트랙 드래그 = 가장 가까운 줄 + 잔여 0.
+            if ny != off_y {
+                let nl = if is_wheel {
+                    let nl = ny.div_euclid(lh).max(0);
+                    self.ml_wheel_rem.set(ny - nl * lh);
+                    nl as usize
+                } else {
+                    self.ml_wheel_rem.set(0);
+                    ((ny + lh / 2) / lh).max(0) as usize
+                };
                 self.vscroll.set(nl);
                 moved = true;
             }
@@ -2729,23 +2729,32 @@ mod scroll_sim_tests {
         let lh = t.line_h();
         let pos = |t: &TextBox| t.vscroll.get() as i32 * lh + t.ml_wheel_rem.get();
         assert_eq!(pos(&t), 0);
+        // macOS winit은 휠마다 CursorMoved를 먼저 보낸다 — 이것이 잔여를 되돌리면 안 된다(09-16 실기 흔들림).
+        let mv = InputEvent::MouseMove { x: 50, y: 50 };
         // 아래로(본문이 위로 = delta 음수) 1px씩 100번.
         for i in 1..=100 {
+            t.on_event(&mv, &mut inv);
             t.on_event(&InputEvent::Wheel { delta: -3 }, &mut inv);
             t.paint(&mut probe, &theme);
             assert_eq!(pos(&t), i, "아래로 {i}번째");
         }
         // 위로 1px씩 60번 — 되돌아온다.
         for i in 1..=60 {
+            t.on_event(&mv, &mut inv);
             t.on_event(&InputEvent::Wheel { delta: 3 }, &mut inv);
             t.paint(&mut probe, &theme);
             assert_eq!(pos(&t), 100 - i, "위로 {i}번째");
         }
         // 다시 아래로 — 방향 전환 뒤에도 1px.
         for i in 1..=5 {
+            t.on_event(&mv, &mut inv);
             t.on_event(&InputEvent::Wheel { delta: -3 }, &mut inv);
             t.paint(&mut probe, &theme);
             assert_eq!(pos(&t), 40 + i, "재전환 {i}번째");
         }
+        // 휠 delta 0(제스처 끝 사건)도 위치를 흔들지 않는다.
+        t.on_event(&InputEvent::Wheel { delta: 0 }, &mut inv);
+        t.paint(&mut probe, &theme);
+        assert_eq!(pos(&t), 45);
     }
 }
