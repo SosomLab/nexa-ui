@@ -60,6 +60,13 @@ pub trait DrawCtx {
     /// 텍스트 렌더 폭(px) — 우측 정렬·라벨 실측 정렬용.
     fn text_width(&mut self, text: &str) -> i32;
 
+    /// ★ 탭 원점(줄 시작 x · 화면 좌표) — 정해 두면 이후 `text*` 호출의 탭 정지점은 이 x를 기준으로 센다(편집기가 한 줄을
+    /// 여러 색 구간으로 나눠 그릴 때 구간마다 정지점이 어긋나지 않게). `None`(기본) = 각 호출의 시작 x가 원점.
+    /// `text_width`/`text_prefix_widths`는 늘 문자열 시작을 원점으로 잰다(접두사 폭 계약). 기본 = no-op.
+    fn set_tab_origin(&mut self, x: Option<i32>) {
+        let _ = x;
+    }
+
     /// 문자 경계 **누적 폭**(08-14 성능) — `out[i]` = 앞 `i`글자 접두사의
     /// [`text_width`](Self::text_width)와 **동일 값**(0 포함 · 길이 = 문자수+1).
     /// 캐럿·선택 좌표의 원천이라 **값 동일이 계약**이다. 기본 구현 = 접두사

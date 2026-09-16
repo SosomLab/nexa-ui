@@ -71,6 +71,8 @@ pub struct RasterCtx<'s, 'b, 'f> {
     /// 광학 크기 보정(고정폭 전용 · 08-10) — 같은 px에서 숫자가 차지하는 높이를
     /// 기본 얼굴과 일치시키는 배수(Consolas는 숫자가 커서 <1.0). 다른 슬롯은 1.0.
     mono_mult: f32,
+    /// 탭 원점(화면 x) — [`DrawCtx::set_tab_origin`].
+    tab_origin: Option<i32>,
     /// 이번 프레임의 캐럿 표시 위상(08-13 — 깜빡임). 호스트가 시각·포커스로 주입.
     caret_on: bool,
 }
@@ -101,6 +103,7 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
             cur: prefs.base,
             scale: scale.max(0.5),
             mono_mult: 1.0,
+            tab_origin: None,
             caret_on: true,
         }
     }
@@ -294,8 +297,13 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         });
     }
 
+    fn set_tab_origin(&mut self, x: Option<i32>) {
+        self.tab_origin = x;
+    }
+
     fn text(&mut self, x: i32, y: i32, clip: Rect, text: &str, fg: Color) {
         let size = self.px_size();
+        let origin = self.tab_origin.map_or(x as f32, |o| o as f32);
         // 광학 보정 — 슬롯 얼굴(고정폭)은 보정 크기로, 폴백(기본 얼굴)은 명목 크기로.
         let own = size * self.mono_mult;
         // 슬롯 얼굴에 없는 글자는 **기본 얼굴로 폴백**(08-10 — 고정폭 Consolas에 한글이
@@ -312,6 +320,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
                 text,
                 Self::clip_of(clip),
                 self.cur_style(),
+                origin,
             );
             return;
         }
@@ -332,8 +341,9 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
                 &run,
                 Self::clip_of(clip),
                 self.cur_style(),
+                origin,
             );
-            fx += f.measure(&run, s);
+            fx += f.measure_from(&run, s, fx - origin);
         }
     }
 
@@ -344,17 +354,16 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         {
             return self.font.measure(text, own).ceil() as i32;
         }
-        split_runs(text, |c| self.font.has_glyph(c))
-            .into_iter()
-            .map(|(fallback, run)| {
-                if fallback {
-                    self.fonts.base.measure(&run, size)
-                } else {
-                    self.font.measure(&run, own)
-                }
-            })
-            .sum::<f32>()
-            .ceil() as i32
+        // 런을 이어 재되 탭 정지점은 문자열 시작(원점 0)부터 — 런 시작 위치를 넘긴다(접기 순서는 종전과 동일).
+        let mut acc = 0f32;
+        for (fallback, run) in split_runs(text, |c| self.font.has_glyph(c)) {
+            acc += if fallback {
+                self.fonts.base.measure_from(&run, size, acc)
+            } else {
+                self.font.measure_from(&run, own, acc)
+            };
+        }
+        acc.ceil() as i32
     }
 
     /// 단일 패스 누적 폭(08-14 성능) — [`Self::text_width`]의 두 경로(기본·폴백 런)를
@@ -372,7 +381,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             // 빠른 경로 — measure()와 같은 문자 순서의 f32 누적 · 접두사마다 ceil.
             let mut sum = 0f32;
             for c in text.chars() {
-                sum += self.font.measure(c.encode_utf8(&mut buf), own);
+                sum += self.font.measure_from(c.encode_utf8(&mut buf), own, sum);
                 out.push(sum.ceil() as i32);
             }
             return;
@@ -394,10 +403,13 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
                 run_sum = 0.0;
                 cur_fb = Some(fb);
             }
+            let at = completed + run_sum;
             run_sum += if fb {
-                self.fonts.base.measure(c.encode_utf8(&mut buf), size)
+                self.fonts
+                    .base
+                    .measure_from(c.encode_utf8(&mut buf), size, at)
             } else {
-                self.font.measure(c.encode_utf8(&mut buf), own)
+                self.font.measure_from(c.encode_utf8(&mut buf), own, at)
             };
             out.push((completed + run_sum).ceil() as i32);
         }

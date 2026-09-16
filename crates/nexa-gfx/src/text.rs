@@ -22,6 +22,21 @@ pub fn tab_cols() -> u32 {
     TAB_COLS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// ★ 탭 = **정지점**(줄 시작부터 탭 폭의 배수 열까지 · Golden/Sublime/VS Code 관례 · 기본) 또는 **절대 폭**(항상 탭 폭만큼 ·
+/// 종전 동작). nexa-sql `editor.tab_stops`(사용자 09-16 "앞 글자 수를 고려해 1~4칸").
+static TAB_STOPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// 탭 정지점 방식 설정(`false` = 절대 폭).
+pub fn set_tab_stops(on: bool) {
+    TAB_STOPS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 탭이 정지점 방식인가.
+#[must_use]
+pub fn tab_stops() -> bool {
+    TAB_STOPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 use crate::surface::{Color, Surface};
 use ab_glyph::{Font as _, FontRef, ScaleFont as _};
 use std::collections::HashMap;
@@ -238,27 +253,48 @@ impl Font {
         s.ascent() - s.descent() + s.line_gap()
     }
 
-    /// 텍스트 폭(px) — 그리지 않고 잰다(라벨 실측 정렬 — [docs/12 §B]).
+    /// 텍스트 폭(px) — 그리지 않고 잰다(라벨 실측 정렬 — [docs/12 §B]). 탭은 이 문자열의 시작을 줄 시작(원점)으로 본다.
     #[must_use]
     pub fn measure(&self, text: &str, size: f32) -> f32 {
-        text.chars()
-            .map(|c| {
-                self.control_advance(c, size).unwrap_or_else(|| {
+        self.measure_from(text, size, 0.0)
+    }
+
+    /// 텍스트 폭(px) — 텍스트가 **줄 시작(탭 원점)에서 `start_rel`px 떨어진 곳**에서 시작할 때. 탭 정지점은 원점 기준이라
+    /// 같은 문자열도 시작 위치에 따라 폭이 다르다. 반환값은 `text`만의 폭(시작 위치 제외) · 누적 순서는 [`Self::measure`]와
+    /// 같다(호출자가 런을 이어 붙여도 접두사 폭과 비트 동일 — nexa-ctl `text_prefix_widths` 계약).
+    #[must_use]
+    pub fn measure_from(&self, text: &str, size: f32, start_rel: f32) -> f32 {
+        let mut local = 0f32;
+        for c in text.chars() {
+            local += if c == '\t' {
+                let rel = (start_rel + local).ceil();
+                rel + self.tab_advance(size, rel) - (start_rel + local)
+            } else {
+                Self::control_advance(c).unwrap_or_else(|| {
                     let face = self.face_for(c);
                     face.as_scaled(size).h_advance(face.glyph_id(c))
                 })
-            })
-            .sum()
+            };
+        }
+        local
     }
 
-    /// ★ 제어 문자 표시 규칙(09-03 실기 — 탭이 두부(□)로 그려졌다):
-    /// 탭 = **공백 4칸 폭**(글리프는 그리지 않음) · 그 외 제어(CR 등) = 폭 0.
-    /// 측정과 그리기가 같은 규칙을 쓰므로 캐럿 좌표도 일관된다.
-    fn control_advance(&self, c: char, size: f32) -> Option<f32> {
-        if c == '\t' {
-            let face = self.face_for(' ');
-            return Some(face.as_scaled(size).h_advance(face.glyph_id(' ')) * tab_cols() as f32);
+    /// 탭 한 개의 전진 폭 — `rel` = 줄 시작(탭 원점)부터 펜까지의 거리(px · 정수로 올림한 값). 정지점 방식이면 다음 정지점까지
+    /// (탭 폭 = 공백 폭 × `tab_cols` · 정지점 위면 한 칸 전체) · 절대 방식이면 늘 탭 폭.
+    #[must_use]
+    pub fn tab_advance(&self, size: f32, rel: f32) -> f32 {
+        let face = self.face_for(' ');
+        let tabw = face.as_scaled(size).h_advance(face.glyph_id(' ')) * tab_cols() as f32;
+        if !tab_stops() || tabw <= 0.0 {
+            return tabw;
         }
+        let n = (rel / tabw + 1e-4).floor();
+        ((n + 1.0) * tabw - rel).max(0.0)
+    }
+
+    /// ★ 제어 문자 표시 규칙(09-03 실기 — 탭이 두부(□)로 그려졌다): 탭은 [`Self::tab_advance`](글리프는 그리지 않음) ·
+    /// 그 외 제어(CR 등) = 폭 0. 측정과 그리기가 같은 규칙을 쓰므로 캐럿 좌표도 일관된다.
+    fn control_advance(c: char) -> Option<f32> {
         c.is_control().then_some(0.0)
     }
 
@@ -308,7 +344,7 @@ impl Font {
         text: &str,
         clip: (i32, i32, i32, i32),
     ) -> f32 {
-        self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN)
+        self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN, x)
     }
 
     /// [`Font::draw_text_clipped`]의 **스타일 변형** — 실제 볼드/이탤릭 폰트 파일 없이
@@ -325,6 +361,7 @@ impl Font {
         text: &str,
         clip: (i32, i32, i32, i32),
         style: TextStyle,
+        tab_origin: f32,
     ) -> f32 {
         let slant = if style.italic { 0.22 } else { 0.0 };
         let bold_pass = if style.bold { 2 } else { 1 };
@@ -332,8 +369,14 @@ impl Font {
         // 베이스라인은 정수로 스냅(캐시 비트맵은 y 서브픽셀을 갖지 않는다 — 한 줄 안에서 일관).
         let base_y = y.round() as i32;
         for ch in text.chars() {
+            // ★ 탭 = 원점(`tab_origin` · 줄 시작 x) 기준 다음 정지점까지 폭만 옮긴다(글리프 없음 · 측정과 같은 올림 규칙).
+            if ch == '\t' {
+                let rel = (pen - tab_origin).ceil();
+                pen = tab_origin + rel + self.tab_advance(size, rel);
+                continue;
+            }
             // ★ 제어 문자 = 폭만 옮기고 글리프 없음(탭 두부 차단 · 09-03).
-            if let Some(adv) = self.control_advance(ch, size) {
+            if let Some(adv) = Self::control_advance(ch) {
                 pen += adv;
                 continue;
             }
@@ -371,6 +414,6 @@ impl Font {
         text: &str,
     ) -> f32 {
         let clip = (0, 0, surface.width() as i32, surface.height() as i32);
-        self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN)
+        self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN, x)
     }
 }

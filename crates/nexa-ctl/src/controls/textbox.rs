@@ -117,6 +117,8 @@ pub struct TextBox {
     /// 들여쓰기(nexa-sql 09-15 · docs/31): 탭 폭(칸) · Tab 키 = 공백(다음 탭 정지까지) 여부.
     tab_size: u8,
     indent_spaces: bool,
+    /// 탭/공백 들여쓰기 = 정지점(다음 탭 폭 배수 열까지 · 기본) 또는 절대(늘 탭 폭) — nexa-sql `editor.tab_stops`(사용자 09-16).
+    tab_stops: bool,
     gutter_px: std::cell::Cell<i32>,
     /// 멀티라인 스크롤바(08-18 · 대화 입력창과 동일 컨트롤 · 상하+좌우 · 자동 숨김).
     ml_bars: super::ScrollBars,
@@ -192,6 +194,7 @@ impl TextBox {
             line_numbers: false,
             tab_size: 4,
             indent_spaces: false,
+            tab_stops: true,
             gutter_px: std::cell::Cell::new(0),
             ml_bars: super::ScrollBars::new(),
             ml_content: std::cell::Cell::new((0, 0)),
@@ -256,6 +259,26 @@ impl TextBox {
         self.indent_spaces
     }
 
+    /// 탭/공백 적용 방식 — `true` = 정지점(앞 글자 수를 고려해 1~탭 폭 칸 · Golden/Sublime 관례) · `false` = 절대(늘 탭 폭).
+    pub fn set_tab_stops(&mut self, on: bool) {
+        self.tab_stops = on;
+    }
+
+    /// 탭 정지점 방식인가.
+    #[must_use]
+    pub fn tab_stops(&self) -> bool {
+        self.tab_stops
+    }
+
+    /// 열 `col`에서 탭 하나가 옮기는 칸 수(정지점 또는 절대).
+    fn tab_cells(ts: usize, col: usize, stops: bool) -> usize {
+        if stops {
+            ts - col % ts
+        } else {
+            ts
+        }
+    }
+
     /// 연속 클릭 판정 — 직전 MouseDown이 [`DOUBLE_CLICK_MS`] 안이면 체인을 잇고, 지금 시각을 기록한다.
     fn click_chain_alive(&mut self) -> bool {
         let now = std::time::Instant::now();
@@ -266,15 +289,15 @@ impl TextBox {
         alive
     }
 
-    /// 탭 문자를 **다음 탭 정지까지의 공백**으로 편다(줄마다 열을 다시 센다 · 첫 줄은 `start_col`부터).
-    fn expand_tabs(text: &str, tab_size: usize, start_col: usize) -> String {
+    /// 탭 문자를 **공백**으로 편다 — 정지점이면 다음 정지까지 · 절대면 탭 폭만큼(줄마다 열을 다시 센다 · 첫 줄은 `start_col`부터).
+    fn expand_tabs(text: &str, tab_size: usize, start_col: usize, stops: bool) -> String {
         let ts = tab_size.max(1);
         let mut out = String::with_capacity(text.len());
         let mut col = start_col;
         for c in text.chars() {
             match c {
                 '\t' => {
-                    let n = ts - col % ts;
+                    let n = Self::tab_cells(ts, col, stops);
                     out.push_str(&" ".repeat(n));
                     col += n;
                 }
@@ -300,17 +323,21 @@ impl TextBox {
             .iter()
             .rposition(|&c| c == '\n')
             .map_or(0, |p| p + 1);
-        Self::col_of(&chars[line_start..caret], usize::from(self.tab_size.max(1)))
+        Self::col_of(
+            &chars[line_start..caret],
+            usize::from(self.tab_size.max(1)),
+            self.tab_stops,
+        )
     }
 
-    /// 줄 앞부분 문자열의 열(탭은 다음 정지까지).
-    fn col_of(chars: &[char], ts: usize) -> usize {
+    /// 줄 앞부분 문자열의 열(탭은 정지점 또는 절대 폭).
+    fn col_of(chars: &[char], ts: usize, stops: bool) -> usize {
         let mut col = 0usize;
         for &c in chars {
-            col = if c == '\t' {
-                (col / ts + 1) * ts
+            col += if c == '\t' {
+                Self::tab_cells(ts, col, stops)
             } else {
-                col + 1
+                1
             };
         }
         col
@@ -331,10 +358,10 @@ impl TextBox {
             let (lead, body) = line.split_at(body_at);
             let mut col = 0usize;
             for c in lead.chars() {
-                col = if c == '\t' {
-                    (col / ts + 1) * ts
+                col += if c == '\t' {
+                    Self::tab_cells(ts, col, self.tab_stops)
                 } else {
-                    col + 1
+                    1
                 };
             }
             if to_spaces {
@@ -810,11 +837,15 @@ impl TextBox {
                         .iter()
                         .rposition(|&c| c == '\n')
                         .map_or(0, |p| p + 1);
-                    Self::col_of(&chars[ls..a], usize::from(self.tab_size.max(1)))
+                    Self::col_of(
+                        &chars[ls..a],
+                        usize::from(self.tab_size.max(1)),
+                        self.tab_stops,
+                    )
                 } else {
                     self.caret_column()
                 };
-                Self::expand_tabs(&out, usize::from(self.tab_size.max(1)), col)
+                Self::expand_tabs(&out, usize::from(self.tab_size.max(1)), col, self.tab_stops)
             } else {
                 out
             }
@@ -1060,6 +1091,8 @@ impl TextBox {
         let mut lay = self.line_lay.borrow_mut();
         lay.clear();
         let dx = tx - hs; // 가로 스크롤 반영 시작 x
+                          // ★ 탭 원점 = 줄 시작 x — 한 줄을 색 구간마다 따로 그려도 탭 정지점이 줄 기준으로 맞는다(사용자 09-16 Golden 방식).
+        ctx.set_tab_origin(Some(dx));
         let (vx0, vx1) = (tx, tx + avail); // 뷰포트(선택 반전 클립 범위)
                                            // 줄끝 표시용 전체 글자(eol 표시가 켜진 때만 수집 — 꺼진 기본은 비용 0).
         let eol_chars: Vec<char> =
@@ -1265,6 +1298,7 @@ impl TextBox {
             self.base.scale,
         );
         self.paint_popup(ctx, theme);
+        ctx.set_tab_origin(None);
     }
 }
 
@@ -1550,7 +1584,7 @@ impl Widget for TextBox {
                     // 멀티라인(편집기)은 Tab = 탭 문자 또는 다음 탭 정지까지 공백(`set_indent` · 09-15) — 단일 행은 호스트가 포커스 이동에 쓴다.
                     if self.indent_spaces {
                         let ts = usize::from(self.tab_size.max(1));
-                        let n = ts - self.caret_column() % ts;
+                        let n = Self::tab_cells(ts, self.caret_column(), self.tab_stops);
                         self.edit.insert_str(&" ".repeat(n));
                     } else {
                         self.edit.insert('\t');
@@ -1668,6 +1702,7 @@ impl Widget for TextBox {
         // ★ 탭 폭은 **이 상자의 설정**으로 그린다(탭마다 다를 수 있다 · nexa-sql 09-15) —
         //   측정·그리기·캐럿이 같은 값을 보도록 페인트 진입에서 주입한다.
         nexa_gfx::text::set_tab_cols(u32::from(self.tab_size.max(1)));
+        nexa_gfx::text::set_tab_stops(self.tab_stops);
         if self.multiline {
             self.paint_multiline(ctx, theme);
             return;
@@ -1773,8 +1808,10 @@ impl Widget for TextBox {
                 .iter()
                 .collect();
             let wp = w.get(a.min(chars.len())).copied().unwrap_or(0); // 접두사 폭(누적 재사용)
+            let we = w.get(b_end.min(chars.len())).copied().unwrap_or(wp);
+            let _ = &mid;
             let x0 = (tx + wp).max(view_x0);
-            let x1 = (tx + wp + ctx.text_width(&mid)).min(view_x1);
+            let x1 = (tx + we).min(view_x1);
             let th = ctx.text_height();
             if x1 > x0 {
                 ctx.fill_rect(
@@ -2288,6 +2325,27 @@ mod tests {
         t.set_text("short");
         measure(&t);
         assert_eq!(t.hscroll.get(), 0, "다 들어가면 스크롤 없음");
+    }
+
+    #[test]
+    fn tab_key_and_paste_follow_stops_or_fixed() {
+        // 사용자 09-16 — 정지점(Golden): "AND" 뒤 Tab = 1칸 · 절대: 늘 4칸.
+        let mut inv = Invalidations::default();
+        for (stops, want_key, want_paste) in
+            [(true, "AND ", "AND x"), (false, "AND    ", "AND    x")]
+        {
+            let mut t = TextBox::new("p").with_multiline();
+            t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+            t.set_focused(true);
+            t.set_indent(4, true);
+            t.set_tab_stops(stops);
+            t.set_text("AND");
+            t.on_event(&InputEvent::Char { c: '\t', now_ms: 0 }, &mut inv);
+            assert_eq!(t.text(), want_key, "stops={stops}");
+            t.set_text("AND");
+            t.paste("\tx", &mut inv);
+            assert_eq!(t.text(), want_paste, "stops={stops} 붙여넣기");
+        }
     }
 
     #[test]
