@@ -42,8 +42,8 @@ pub mod widget;
 
 pub use controls::{
     rgba_from_hex, rgba_to_hex, DockAction, DockLayout, FiredBy, HAlign, MenuBar, MenuDef,
-    MenuEntry, TabAction, TabBar, TimeoutButton, ToolDock, ToolGroup, ToolIcon, ToolItem, ToolTone,
-    Toolbar, VAlign,
+    MenuEntry, TabAction, TabBadge, TabBar, TimeoutButton, ToolDock, ToolGroup, ToolIcon, ToolItem,
+    ToolTone, Toolbar, VAlign,
 };
 pub use controls::{
     AutoIndent, BorderSpec, BracketOpts, Button, ButtonMode, Checkbox, Choose, ChoosePicker,

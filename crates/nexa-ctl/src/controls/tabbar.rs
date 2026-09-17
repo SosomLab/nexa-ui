@@ -42,6 +42,25 @@ pub enum TabAction {
     },
     /// 탭 우클릭(컨텍스트 메뉴는 호스트가 표시 — 잠금/핀/복제/닫기).
     Context(usize),
+    /// 탭 앞 표식([`TabBadge`]) 좌클릭 — 호스트가 그 탭의 상태 메뉴를 연다(nexa-sql Private 세션).
+    Badge(usize),
+    /// 탭 앞 표식 우클릭(탭 본체 우클릭 [`TabAction::Context`]와 구별).
+    BadgeContext(usize),
+}
+
+/// 탭 제목 **앞**의 표식 — 이미지 버튼 모양(둥근 상자 + 플러그 글리프 · hover/눌림 상태 레이어).
+/// 탭마다 다른 상태(예: 탭 전용 DB 세션)를 한눈에 구별하게 한다(nexa-sql 09-18).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TabBadge {
+    /// 표식 없음(폭도 차지하지 않는다).
+    #[default]
+    None,
+    /// 연결됨 — 강조색 플러그.
+    Link,
+    /// 끊김 — 흐린 플러그 + 사선.
+    LinkOff,
+    /// 공유 연결(여럿 중 하나를 쓰는 탭) — 중립색 플러그. 전용([`TabBadge::Link`] 강조색)과 색으로 구별한다.
+    Shared,
 }
 
 /// 히트 존.
@@ -49,6 +68,8 @@ pub enum TabAction {
 enum Zone {
     /// 탭 `i` — `true`면 닫기(×) 상자 위.
     Tab(usize, bool),
+    /// 탭 `i`의 앞 표식([`TabBadge`]) 위.
+    Badge(usize),
     /// [+] 새 탭.
     Plus,
     /// ◀ 스크롤(단일행 넘침).
@@ -80,6 +101,8 @@ const MAX_TAB_W: i32 = 240;
 const CLOSE_BOX: i32 = 16;
 /// 핀 표식 지름(논리 px).
 const PIN_MARK: i32 = 6;
+/// 앞 표식([`TabBadge`]) 상자 한 변(논리 px).
+const BADGE_BOX: i32 = 18;
 /// 휠 1노치당 스크롤(논리 px).
 const WHEEL_STEP: i32 = 48;
 
@@ -92,6 +115,8 @@ pub struct TabBar {
     locked: Vec<bool>,
     /// 탭별 고정(핀 그룹 앞 정렬은 호스트 몫).
     pinned: Vec<bool>,
+    /// 탭별 앞 표식(부족분 = None).
+    badges: Vec<TabBadge>,
     active: usize,
     multiline: bool,
     show_new: bool,
@@ -131,6 +156,7 @@ impl TabBar {
             titles: Vec::new(),
             locked: Vec::new(),
             pinned: Vec::new(),
+            badges: Vec::new(),
             active: 0,
             multiline: false,
             show_new: true,
@@ -202,6 +228,31 @@ impl TabBar {
             self.pinned = pinned;
             inv.push(self.base.bounds);
         }
+    }
+
+    /// 탭별 앞 표식 교체(인덱스 정렬 · 부족분 = None). 바뀔 때만 무효화.
+    pub fn set_badges(&mut self, badges: Vec<TabBadge>, inv: &mut Invalidations) {
+        if self.badges != badges {
+            self.badges = badges;
+            self.ensure_active.set(true);
+            inv.push(self.base.bounds);
+        }
+    }
+
+    /// 탭 `i`의 앞 표식.
+    #[must_use]
+    pub fn badge(&self, i: usize) -> TabBadge {
+        self.badges.get(i).copied().unwrap_or_default()
+    }
+
+    /// 탭 `i`의 표식 상자(창 좌표 · 표식이 없거나 아직 그린 적 없으면 None) — 호스트가 메뉴를 붙일 자리.
+    #[must_use]
+    pub fn badge_rect_of(&self, i: usize) -> Option<Rect> {
+        if self.badge(i) == TabBadge::None {
+            return None;
+        }
+        let cell = self.layout.borrow().tabs.get(i).copied()?;
+        Some(self.badge_rect(cell))
     }
 
     /// 다중행 모드(true = 폭 초과 시 줄바꿈 · false = 단일행 + ◀▶ 스크롤).
@@ -286,7 +337,7 @@ impl TabBar {
     #[must_use]
     pub fn tab_index_at(&self, x: i32, y: i32) -> Option<usize> {
         match self.zone_at(x, y) {
-            Some(Zone::Tab(i, _)) => Some(i),
+            Some(Zone::Tab(i, _) | Zone::Badge(i)) => Some(i),
             _ => None,
         }
     }
@@ -372,6 +423,12 @@ impl TabBar {
         i < self.titles.len() && !self.is_locked(i) && (self.titles.len() > 1 || self.close_last)
     }
 
+    /// 앞 표식 상자 — 탭 왼쪽 여백 안쪽(핀 점보다 앞).
+    fn badge_rect(&self, cell: Rect) -> Rect {
+        let d = self.s(BADGE_BOX).min(cell.h.max(1));
+        Rect::new(cell.x + self.s(self.pad_x), cell.y + (cell.h - d) / 2, d, d)
+    }
+
     /// 닫기(×)/자물쇠 상자 — 탭 오른쪽 여백 안쪽.
     fn close_rect(&self, cell: Rect) -> Rect {
         let d = self.s(CLOSE_BOX);
@@ -400,6 +457,9 @@ impl TabBar {
         }
         for (i, r) in lay.tabs.iter().enumerate() {
             if r.w > 0 && r.contains(p) {
+                if self.badge(i) != TabBadge::None && self.badge_rect(*r).contains(p) {
+                    return Some(Zone::Badge(i));
+                }
                 let close = !self.is_locked(i) && self.close_rect(*r).contains(p);
                 return Some(Zone::Tab(i, close));
             }
@@ -501,6 +561,57 @@ impl TabBar {
         );
     }
 
+    /// 앞 표식 — 둥근 상자(버튼 바탕) + 플러그 글리프(두 갈래 · 몸통 · 선). 끊김 = 흐림 + 사선.
+    fn draw_badge(&self, ctx: &mut dyn DrawCtx, r: Rect, kind: TabBadge, theme: &Theme, st: State) {
+        let on = kind != TabBadge::LinkOff;
+        let color = match kind {
+            TabBadge::Link => self.tab_accent(theme),
+            TabBadge::Shared => theme.text,
+            _ => theme.text_dim,
+        };
+        let radius = (r.w / 4).max(2);
+        // 버튼 바탕: 옅은 색조 + 테두리 느낌의 상태 레이어(hover/눌림).
+        let tint = match kind {
+            TabBadge::Link => 0.18,
+            _ => 0.10,
+        };
+        ctx.fill_round_rect_alpha(r, radius, color, tint);
+        if st.overlay_alpha() > 0.0 {
+            ctx.fill_round_rect_alpha(r, radius, theme.text, st.overlay_alpha());
+        }
+        let w = (r.w as f32 / 11.0).max(1.2);
+        let cx = r.x + r.w / 2;
+        let bw = (r.w * 4 / 9).max(5);
+        let bh = (r.h / 4).max(3);
+        let body = Rect::new(cx - bw / 2, r.y + r.h * 3 / 8, bw, bh);
+        // 두 갈래(위) · 몸통 · 선(아래).
+        let prong = (r.h / 5).max(2);
+        let off = (bw / 4).max(1);
+        ctx.polyline(&[(cx - off, body.y), (cx - off, body.y - prong)], color, w);
+        ctx.polyline(&[(cx + off, body.y), (cx + off, body.y - prong)], color, w);
+        ctx.fill_round_rect(body, (bh / 3).max(1), color);
+        let neck = Rect::new(
+            cx - (bw / 4).max(1),
+            body.bottom(),
+            (bw / 2).max(2),
+            (r.h / 10).max(1),
+        );
+        ctx.fill_rect(neck, color);
+        ctx.polyline(
+            &[(cx, neck.bottom()), (cx, r.bottom() - (r.h / 8).max(1))],
+            color,
+            w,
+        );
+        if !on {
+            let m = (r.w / 5).max(2);
+            ctx.polyline(
+                &[(r.x + m, r.bottom() - m), (r.right() - m, r.y + m)],
+                theme.text_dim,
+                w,
+            );
+        }
+    }
+
     fn draw_plus_glyph(&self, ctx: &mut dyn DrawCtx, r: Rect, color: Color) {
         let cx = r.x + r.w / 2;
         let cy = r.y + r.h / 2;
@@ -533,6 +644,7 @@ impl TabBar {
         let gap = self.s(space::XS);
         let close = self.s(CLOSE_BOX);
         let mark = self.s(PIN_MARK);
+        let badge = self.s(BADGE_BOX);
         let lh = if self.multiline {
             self.s(self.row_h).clamp(1, b.h.max(1))
         } else {
@@ -545,7 +657,12 @@ impl TabBar {
             .enumerate()
             .map(|(i, t)| {
                 let m = if self.is_pinned(i) { mark + gap } else { 0 };
-                (pad + m + ctx.text_width(t) + gap + close + pad).min(max_w)
+                let bd = if self.badge(i) == TabBadge::None {
+                    0
+                } else {
+                    badge + gap
+                };
+                (pad + bd + m + ctx.text_width(t) + gap + close + pad).min(max_w)
             })
             .collect();
         let plus_w = if self.show_new { lh } else { 0 };
@@ -658,6 +775,11 @@ impl Widget for TabBar {
                     }
                     inv.push(self.base.bounds);
                 }
+                Some(z @ Zone::Badge(_)) => {
+                    // 표식 프레스 — 해제 시 같은 표식이면 동작(탭 전환·드래그 아님).
+                    self.pressed = Some(z);
+                    inv.push(self.base.bounds);
+                }
                 Some(z @ (Zone::Plus | Zone::Left | Zone::Right)) => {
                     self.pressed = Some(z);
                     if matches!(z, Zone::Left | Zone::Right) {
@@ -677,17 +799,20 @@ impl Widget for TabBar {
                                 self.pending = Some(TabAction::Close(i));
                             }
                         }
+                        (Zone::Badge(i), Some(Zone::Badge(j))) if i == j => {
+                            self.pending = Some(TabAction::Badge(i));
+                        }
                         (Zone::Plus, Some(Zone::Plus)) => self.pending = Some(TabAction::New),
                         _ => {}
                     }
                     inv.push(self.base.bounds);
                 }
             }
-            InputEvent::RightDown { x, y } => {
-                if let Some(Zone::Tab(i, _)) = self.zone_at(x, y) {
-                    self.pending = Some(TabAction::Context(i));
-                }
-            }
+            InputEvent::RightDown { x, y } => match self.zone_at(x, y) {
+                Some(Zone::Tab(i, _)) => self.pending = Some(TabAction::Context(i)),
+                Some(Zone::Badge(i)) => self.pending = Some(TabAction::BadgeContext(i)),
+                _ => {}
+            },
             InputEvent::MouseMove { x, y } => {
                 if self.drag.is_some() {
                     self.drag_move(x, y, inv);
@@ -728,6 +853,7 @@ impl Widget for TabBar {
         let drag_idx = self.dragging();
         let hover_tab = match self.hover {
             Some(Zone::Tab(i, c)) => Some((i, c)),
+            Some(Zone::Badge(i)) => Some((i, false)),
             _ => None,
         };
 
@@ -762,8 +888,18 @@ impl Widget for TabBar {
                     ctx.fill_rect(sep, theme.border);
                 }
             }
-            // 핀 점 표식 + 제목.
+            // 앞 표식(이미지 버튼) + 핀 점 표식 + 제목.
             let mut tx = cell.x + pad;
+            let bkind = self.badge(i);
+            if bkind != TabBadge::None {
+                let br = self.badge_rect(*cell);
+                if fully_inside(br, clip) {
+                    let z = Zone::Badge(i);
+                    let st = State::of(false, self.hover == Some(z), self.pressed == Some(z), true);
+                    self.draw_badge(ctx, br, bkind, theme, st);
+                }
+                tx += br.w + gap;
+            }
             if self.is_pinned(i) {
                 let dot = Rect::new(tx, cell.y + (cell.h - mark) / 2, mark, mark);
                 if fully_inside(dot, clip) {
@@ -984,6 +1120,40 @@ mod tests {
         assert_eq!(t.hover, Some(Zone::Tab(1, true)));
         mv(&mut t, &mut inv, 80, 50);
         assert_eq!(t.hover, None);
+    }
+
+    /// 앞 표식(nexa-sql Private 세션): 폭을 차지하고 · 좌클릭 = Badge · 우클릭 = BadgeContext · 본체는 종전대로.
+    #[test]
+    fn badge_reserves_width_and_reports_clicks() {
+        let (mut t, mut inv) = bar(&["a", "b"], 0);
+        let w0 = t.tab_rect(1).unwrap().w;
+        t.set_badges(vec![TabBadge::None, TabBadge::Link], &mut inv);
+        t.paint(&mut ProbeCtx, &Theme::dark());
+        assert!(t.tab_rect(1).unwrap().w > w0, "표식 폭만큼 넓어진다");
+        assert_eq!(t.badge_rect_of(0), None);
+        let br = t.badge_rect_of(1).unwrap();
+        let (bx, by) = (br.x + br.w / 2, br.y + br.h / 2);
+        t.on_event(&InputEvent::RightDown { x: bx, y: by }, &mut inv);
+        assert_eq!(t.take_action(), Some(TabAction::BadgeContext(1)));
+        down(&mut t, &mut inv, bx, by);
+        assert_eq!(
+            t.take_action(),
+            None,
+            "프레스만으로는 동작 없음(탭 전환도 아님)"
+        );
+        up(&mut t, &mut inv, bx, by);
+        assert_eq!(t.take_action(), Some(TabAction::Badge(1)));
+        assert_eq!(t.tab_index_at(bx, by), Some(1));
+        // 표식 밖 본체 우클릭은 종전 Context.
+        let cell = t.tab_rect(1).unwrap();
+        t.on_event(
+            &InputEvent::RightDown {
+                x: cell.right() - 30,
+                y: by,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.take_action(), Some(TabAction::Context(1)));
     }
 
     #[test]

@@ -54,7 +54,7 @@ pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use splitter::{SplitAxis, SplitEvent, Splitter};
 pub use switch::Switch;
-pub use tabbar::{TabAction, TabBar};
+pub use tabbar::{TabAction, TabBadge, TabBar};
 pub mod pairs;
 pub use pairs::{Pair, PairKind, PairOpts, PairTable};
 pub use textbox::{
