@@ -4,6 +4,8 @@
 //! 플랫폼 중립 — 창·입력을 모른다(그건 `<app>-plat`).
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+#[cfg(target_os = "macos")]
+pub(crate) mod coretext;
 #[cfg(windows)]
 pub(crate) mod gdi;
 pub(crate) mod names;

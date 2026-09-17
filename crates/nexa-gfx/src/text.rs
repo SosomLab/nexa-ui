@@ -57,7 +57,8 @@ pub fn set_text_gdi(on: bool) {
 /// 현재 GDI 글리프 사용 여부(Windows 밖에서는 늘 `false`).
 #[must_use]
 pub fn text_gdi() -> bool {
-    cfg!(windows) && TEXT_GDI.load(std::sync::atomic::Ordering::Relaxed)
+    (cfg!(windows) || cfg!(target_os = "macos"))
+        && TEXT_GDI.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// ★ 획 두께 보강(0.0~0.6 · 기본 0.0 · nexa-sql `ui.text_weight` 25%) — FreeType stem darkening 근사: 커버리지를 오른쪽으로
@@ -264,7 +265,7 @@ pub fn glyph_cache_max() -> usize {
 const SUBPX: f32 = 3.0;
 
 /// GDI 전진 폭 캐시 — (face, em px, 문자) → px.
-type GdiAdvCache = HashMap<(u8, i32, char, bool), i32>;
+type GdiAdvCache = HashMap<(u8, i32, char, bool), f32>;
 /// (face, size 비트) → GDI face(패밀리 이름 후보들, em px) 또는 없음.
 type GdiFaceCache = HashMap<(u8, u32), Option<(Arc<[String]>, i32)>>;
 
@@ -397,8 +398,8 @@ impl Font {
         v
     }
 
-    /// `size`(ab_glyph 높이 스케일 = ascent−descent px)를 em 픽셀로 바꿔 GDI face를 연다.
-    #[cfg(windows)]
+    /// `size`(ab_glyph 높이 스케일 = ascent−descent px)를 em 픽셀로 바꿔 OS face(Windows GDI · macOS CoreText)를 연다.
+    #[cfg(any(windows, target_os = "macos"))]
     fn gdi_face_uncached(&self, face_i: usize, size: f32) -> Option<(Arc<[String]>, i32)> {
         let names = self.face_family_names(face_i);
         if names.is_empty() {
@@ -409,10 +410,14 @@ impl Font {
         let h = face.height_unscaled();
         let em = if h > 0.0 { size * upm / h } else { size };
         let em_px = em.round().max(1.0) as i32;
-        crate::gdi::face_ok(&names, em_px).then(|| (Arc::from(names), em_px))
+        #[cfg(windows)]
+        let ok = crate::gdi::face_ok(&names, em_px);
+        #[cfg(target_os = "macos")]
+        let ok = crate::coretext::face_ok(&names, em_px);
+        ok.then(|| (Arc::from(names), em_px))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     #[allow(clippy::unused_self)]
     fn gdi_face_uncached(&self, _face_i: usize, _size: f32) -> Option<(Arc<[String]>, i32)> {
         None
@@ -444,15 +449,23 @@ impl Font {
             let key = (face_i as u8, em_px, ch, bold);
             if let Ok(c) = self.gdi_adv.lock() {
                 if let Some(a) = c.get(&key) {
-                    return *a as f32;
+                    return *a;
                 }
             }
             #[cfg(windows)]
             if let Some(g) = crate::gdi::glyph(&names, em_px, bold, ch) {
                 if let Ok(mut c) = self.gdi_adv.lock() {
-                    c.insert(key, g.adv);
+                    c.insert(key, g.adv as f32);
                 }
                 return g.adv as f32;
+            }
+            // macOS CoreText: 소수 전진 폭(서브픽셀 위치 · 파인더와 같은 자간).
+            #[cfg(target_os = "macos")]
+            if let Some(a) = crate::coretext::advance(&names, em_px, bold, ch) {
+                if let Ok(mut c) = self.gdi_adv.lock() {
+                    c.insert(key, a);
+                }
+                return a;
             }
             let _ = (names, bold);
         }
@@ -580,6 +593,29 @@ impl Font {
                 oy: g.oy,
                 cov: g.cov,
                 rgb: true,
+            });
+            if let Ok(mut c) = self.cache.lock() {
+                if c.len() >= glyph_cache_max() {
+                    c.clear();
+                }
+                c.insert(key, Arc::clone(&bm));
+            }
+            return Some(bm);
+        }
+        // ★ CoreText 경로(macOS · T-100): 회색 커버리지 + 서브픽셀 위치 그대로(스무딩·감마는 CoreText가 했다).
+        #[cfg(target_os = "macos")]
+        if let Some((names, em_px)) = gdi {
+            let g = crate::coretext::glyph(&names, em_px, bold, ch, sub)?;
+            if g.w == 0 || g.h == 0 {
+                return None;
+            }
+            let bm = Arc::new(GlyphBitmap {
+                w: g.w,
+                h: g.h,
+                ox: g.ox,
+                oy: g.oy,
+                cov: g.cov,
+                rgb: false,
             });
             if let Ok(mut c) = self.cache.lock() {
                 if c.len() >= glyph_cache_max() {
@@ -886,7 +922,7 @@ impl Font {
             // 굵게: GDI face는 진짜 볼드 face · ab_glyph는 faux(x축 2회).
             let bold_pass = if style.bold && !gdi { 2 } else { 1 };
             // 정수 스냅이면(또는 GDI 글리프 — 정수 전진) 펜을 반올림하고 서브픽셀 0 · 아니면 1/3px 배치.
-            let (pen_i, sub) = if text_snap() || gdi {
+            let (pen_i, sub) = if text_snap() || (gdi && cfg!(windows)) {
                 (pen.round(), 0u8)
             } else {
                 let pi = pen.floor();

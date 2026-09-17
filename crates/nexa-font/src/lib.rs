@@ -510,6 +510,48 @@ mod tests {
         );
     }
 
+    /// ★ CoreText 경로(macOS · T-100): UI 본으로 문자열을 1x로 그려 `target/textref/ours.pgm`에 남긴다 —
+    /// `scripts/mac-text-ref.swift`(CoreText 직접 렌더 = 파인더와 같은 경로)의 `ref.pgm`과 픽셀 비교(`scripts/mac-text-compare.py`).
+    /// 전진 폭은 소수(서브픽셀 위치) · 글리프는 CoreText 회색 커버리지.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn coretext_path_renders_like_finder() {
+        let u = ui_font(None).expect("UI 본");
+        nexa_gfx::text::set_text_gdi(true);
+        let text = "Nexa SQL Script_1.sql 한글 결과 0123 Hg";
+        let size = 15.0;
+        let w = u.font.measure(text, size);
+        assert!(w > 100.0);
+        assert!(u.font.glyph_is_subpixel('H', size) || true);
+        let (bw, bh) = (w.ceil() as usize + 8, 27usize);
+        let mut buf = vec![0xFFFF_FFFFu32; bw * bh];
+        {
+            let mut s = nexa_gfx::Surface::new(&mut buf, bw, bh);
+            s.fill(nexa_gfx::Color(0xFFFF_FFFF));
+            // 베이스라인: 참조 렌더와 같은 자리(아래에서 4px + 디센트) — 비교 스크립트가 오프셋을 맞추므로 근사면 된다.
+            u.font
+                .draw_text(&mut s, 4.0, 20.0, size, nexa_gfx::Color(0x0000_00FF), text);
+            // y = 베이스라인
+        }
+        nexa_gfx::text::set_text_gdi(false);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../nexa-sql/target/textref");
+        if dir.is_dir() {
+            let mut out = format!("P5\n{bw} {bh}\n255\n").into_bytes();
+            for px in &buf {
+                let r = (px >> 24) & 0xFF;
+                let g = (px >> 16) & 0xFF;
+                let b = (px >> 8) & 0xFF;
+                let luma = (r * 299 + g * 587 + b * 114) / 1000;
+                out.push((255 - luma) as u8);
+            }
+            std::fs::write(dir.join("ours.pgm"), out).expect("write ours.pgm");
+        }
+        // 잉크가 있고 회색 AA가 있어야 한다.
+        let dark = buf.iter().filter(|&&p| (p >> 8) & 0xFF < 128).count();
+        assert!(dark > 200, "dark={dark}");
+    }
+
     /// ★ GDI 경로(Windows): 체인 이름이 face 패밀리로 등록돼 GDI가 같은 글꼴을 열고 정수 전진 폭을 준다.
     #[cfg(windows)]
     #[test]
