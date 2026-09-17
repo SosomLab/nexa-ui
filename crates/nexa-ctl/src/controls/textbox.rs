@@ -144,6 +144,105 @@ impl IndentRules {
     }
 }
 
+/// 줄 변경 유형(기준선 대비 · 거터 띠).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffKind {
+    /// 기준선에 없던 줄(엔터·붙여넣기로 추가).
+    Added,
+    /// 기준선의 줄이 같은 자리에서 내용이 바뀜.
+    Modified,
+    /// 이 줄 **위**에서 기준선의 줄이 사라짐(쐐기 표시).
+    DeletedAbove,
+}
+
+/// 줄 단위 디프(nexa-sql 사용자 09-17 "수정/추가 식별"): 공통 앞·뒤 제거 → 가운데는 LCS(상한 `LCS_CAP`) → 정렬 정합에서
+/// (옛 줄 소비 + 새 줄 소비) 쌍 = `Modified` · 새 줄만 = `Added` · 옛 줄만 = 다음 새 줄에 `DeletedAbove`. 상한을 넘으면 가운데 전부 `Modified`.
+pub fn diff_lines(base: &[String], cur: &[&str]) -> Vec<(usize, DiffKind)> {
+    const LCS_CAP: usize = 1500;
+    let mut out: Vec<(usize, DiffKind)> = Vec::new();
+    let n = base.len();
+    let m = cur.len();
+    let mut pre = 0;
+    while pre < n && pre < m && base[pre] == cur[pre] {
+        pre += 1;
+    }
+    let mut suf = 0;
+    while suf < n - pre && suf < m - pre && base[n - 1 - suf] == cur[m - 1 - suf] {
+        suf += 1;
+    }
+    let (a0, a1, b0, b1) = (pre, n - suf, pre, m - suf);
+    if a0 == a1 && b0 == b1 {
+        return out;
+    }
+    if a0 == a1 {
+        out.extend((b0..b1).map(|i| (i, DiffKind::Added)));
+        return out;
+    }
+    if b0 == b1 {
+        if b0 < m {
+            out.push((b0, DiffKind::DeletedAbove));
+        } else if m > 0 {
+            out.push((m - 1, DiffKind::DeletedAbove));
+        }
+        return out;
+    }
+    let (la, lb) = (a1 - a0, b1 - b0);
+    if la > LCS_CAP || lb > LCS_CAP {
+        out.extend((b0..b1).map(|i| (i, DiffKind::Modified)));
+        return out;
+    }
+    // LCS 표(u16 · (la+1)×(lb+1)).
+    let w = lb + 1;
+    let mut dp = vec![0u16; (la + 1) * w];
+    for i in (0..la).rev() {
+        for j in (0..lb).rev() {
+            dp[i * w + j] = if base[a0 + i] == cur[b0 + j] {
+                dp[(i + 1) * w + j + 1] + 1
+            } else {
+                dp[(i + 1) * w + j].max(dp[i * w + j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0usize, 0usize);
+    let mut pending_del = 0usize;
+    while i < la || j < lb {
+        if i < la && j < lb && base[a0 + i] == cur[b0 + j] {
+            if pending_del > 0 {
+                out.push((b0 + j, DiffKind::DeletedAbove));
+                pending_del = 0;
+            }
+            i += 1;
+            j += 1;
+        } else if i < la && j < lb && dp[(i + 1) * w + j] == dp[i * w + j + 1] {
+            // 둘 다 소비 = 수정.
+            out.push((b0 + j, DiffKind::Modified));
+            i += 1;
+            j += 1;
+        } else if j < lb && (i >= la || dp[i * w + j + 1] >= dp[(i + 1) * w + j]) {
+            out.push((
+                b0 + j,
+                if pending_del > 0 {
+                    pending_del -= 1;
+                    DiffKind::Modified
+                } else {
+                    DiffKind::Added
+                },
+            ));
+            j += 1;
+        } else {
+            pending_del += 1;
+            i += 1;
+        }
+    }
+    if pending_del > 0 {
+        let at = if b1 < m { b1 } else { m.saturating_sub(1) };
+        out.push((at, DiffKind::DeletedAbove));
+    }
+    out.sort_by_key(|(l, _)| *l);
+    out.dedup_by_key(|(l, _)| *l);
+    out
+}
+
 impl Default for WhitespaceStyle {
     fn default() -> Self {
         WhitespaceStyle {
@@ -242,6 +341,11 @@ pub struct TextBox {
     text_inset: i32,
     /// 논리 줄(0부터)별 표시 색 — 북마크·오류·변경 등 호스트가 정한다.
     line_marks: Vec<(usize, Color)>,
+    /// ★ 저장 기준선(마지막 저장/열기 시점의 줄들) — 있으면 거터 띠에 줄 변경 유형을 그린다(nexa-sql 사용자 09-17 · Sublime mini_diff/VS Code).
+    baseline: Option<Vec<String>>,
+    /// 기준선 대비 줄 변경(논리 줄 0 기준 · 정렬) — `DiffKind`. 편집 때마다 `diff_dirty`로 다시 계산(페인트에서).
+    diff_marks: std::cell::RefCell<Vec<(usize, DiffKind)>>,
+    diff_dirty: std::cell::Cell<bool>,
     /// 들여쓰기(nexa-sql 09-15 · docs/31): 탭 폭(칸) · Tab 키 = 공백(다음 탭 정지까지) 여부.
     tab_size: u8,
     indent_spaces: bool,
@@ -295,6 +399,11 @@ pub struct TextBox {
     minimap_drag: bool,
     /// 뷰포트 상자 — 색(None = Sublime식 회색 `0x808080`) · 알파(None = 0.18 · hover +0.10) · 테두리(기본 없음 · 사용자 09-17).
     minimap_box: (Option<Color>, Option<f32>, bool),
+    /// 미니맵 마크(nexa-sql docs/46 1순위): 오류 논리 줄(0 기준) · 찾기 결과 띠 표시 여부 · 뷰포트 hover 때만 · 클릭 = 클릭한 글로.
+    minimap_errors: Vec<usize>,
+    minimap_find: bool,
+    minimap_viewport_hover: bool,
+    minimap_click_text: bool,
     /// 본문 텍스트 가용 폭(마지막 페인트 실측 · 테스트).
     ml_avail: std::cell::Cell<i32>,
 }
@@ -400,6 +509,9 @@ impl TextBox {
             gutter_marks: false,
             text_inset: 0,
             line_marks: Vec::new(),
+            baseline: None,
+            diff_marks: std::cell::RefCell::new(Vec::new()),
+            diff_dirty: std::cell::Cell::new(false),
             tab_size: 4,
             indent_spaces: false,
             tab_stops: true,
@@ -429,6 +541,10 @@ impl TextBox {
             minimap_hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Fast),
             minimap_drag: false,
             minimap_box: (None, None, false),
+            minimap_errors: Vec::new(),
+            minimap_find: true,
+            minimap_viewport_hover: false,
+            minimap_click_text: false,
             ml_avail: std::cell::Cell::new(0),
         }
     }
@@ -471,6 +587,22 @@ impl TextBox {
         self.minimap_box = (color, alpha, border);
     }
 
+    /// 오류 줄(논리 줄 · 0 기준) — 미니맵에 `danger` 띠 + 오른쪽 가장자리 점. 글자를 치면 지워진다.
+    pub fn set_minimap_errors(&mut self, lines: Vec<usize>) {
+        self.minimap_errors = lines;
+    }
+
+    /// 찾기 결과(`set_find_marks`)를 미니맵에도 띠로.
+    pub fn set_minimap_find(&mut self, on: bool) {
+        self.minimap_find = on;
+    }
+
+    /// 뷰포트 상자를 hover 때만(Sublime 기본) / 클릭 = 클릭한 글을 위쪽 1/3에(ST4 `minimap_scroll_to_clicked_text`).
+    pub fn set_minimap_behavior(&mut self, viewport_hover_only: bool, click_to_text: bool) {
+        self.minimap_viewport_hover = viewport_hover_only;
+        self.minimap_click_text = click_to_text;
+    }
+
     pub fn set_minimap_width(&mut self, px: i32) {
         self.minimap_w = px.clamp(20, 400);
     }
@@ -499,7 +631,12 @@ impl TextBox {
         let (off, row_h, lines, rows) = self.minimap_lay.get();
         let rel = (y - band.y + off).max(0) as usize / row_h.max(1) as usize;
         let max_top = lines.saturating_sub(rows);
-        rel.saturating_sub(rows / 2).min(max_top)
+        let lead = if self.minimap_click_text {
+            rows / 3
+        } else {
+            rows / 2
+        };
+        rel.saturating_sub(lead).min(max_top)
     }
 
     /// 미니맵 클릭/드래그 = 스크롤(캐럿 불변 · 잔여 px 0 · 자유 스크롤 상태로).
@@ -702,7 +839,12 @@ impl TextBox {
                     stack.pop();
                 }
             }
-            let trimmed = before.trim_end();
+            // 줄 주석(`--` · `#`은 아님) 뒤는 규칙 판정에서 뺀다(docs/49 §5 `unIndentedLinePattern` 1차 · "-- BEGIN"에 들여쓰지 않게).
+            let code_part: &str = match before.find("--") {
+                Some(i) => &before[..i],
+                None => before.as_str(),
+            };
+            let trimmed = code_part.trim_end();
             let last_char = trimmed.chars().last();
             let last_word: String = trimmed
                 .chars()
@@ -1097,6 +1239,34 @@ impl TextBox {
     }
 
     /// 표시 띠의 색 막대(논리 줄 0부터 · 색) — 전체 교체.
+    /// 저장 기준선(줄 변경 표시의 원천) — `None` = 표시 안 함(제목 없는 탭 · 설정 off).
+    pub fn set_baseline(&mut self, text: Option<&str>) {
+        self.baseline = text.map(|t| t.lines().map(str::to_string).collect());
+        self.diff_marks.borrow_mut().clear();
+        self.diff_dirty.set(self.baseline.is_some());
+    }
+
+    /// 기준선 대비 줄 변경 목록(테스트·호스트 조회용 · 페인트 전에는 비어 있을 수 있어 강제 계산).
+    #[must_use]
+    pub fn diff_marks(&self) -> Vec<(usize, DiffKind)> {
+        if self.diff_dirty.get() {
+            self.recompute_diff();
+        }
+        self.diff_marks.borrow().clone()
+    }
+
+    /// 기준선 vs 현재 줄 — 공통 앞/뒤를 잘라내고 가운데만 LCS(상한 안) · 넘치면 가운데 전부 `Modified`.
+    fn recompute_diff(&self) {
+        self.diff_dirty.set(false);
+        let Some(base) = self.baseline.as_ref() else {
+            self.diff_marks.borrow_mut().clear();
+            return;
+        };
+        let text = self.edit.text();
+        let cur: Vec<&str> = text.lines().collect();
+        *self.diff_marks.borrow_mut() = diff_lines(base, &cur);
+    }
+
     pub fn set_line_marks(&mut self, marks: Vec<(usize, Color)>) {
         self.line_marks = marks;
     }
@@ -1368,6 +1538,134 @@ impl TextBox {
     /// ★ Sublime `find_under_expand`(Ctrl+D) — 선택이 없으면 캐럿 밑 **단어**를 선택하고,
     /// 이미 선택이 있으면 같은 문자열의 **다음 출현**을 추가 선택한다(끝까지 가면 처음으로 되돌아온다).
     /// 더 찾을 것이 없으면 `false`.
+    /// 캐럿 옆 괄호의 짝 위치(문자 인덱스 · `()[]{}` · 문자열/주석 무시 안 함 — 1차). 캐럿 바로 앞/뒤 순서로 본다.
+    fn bracket_pair_at(chars: &[char], caret: usize) -> Option<(usize, usize)> {
+        let pair = |c: char| -> Option<(char, bool)> {
+            Some(match c {
+                '(' => (')', true),
+                '[' => (']', true),
+                '{' => ('}', true),
+                ')' => ('(', false),
+                ']' => ('[', false),
+                '}' => ('{', false),
+                _ => return None,
+            })
+        };
+        let cands = [caret.checked_sub(1), (caret < chars.len()).then_some(caret)];
+        for i in cands.into_iter().flatten() {
+            let c = chars[i];
+            let Some((other, forward)) = pair(c) else {
+                continue;
+            };
+            let mut depth = 0i32;
+            if forward {
+                for (j, &ch) in chars.iter().enumerate().skip(i) {
+                    if ch == c {
+                        depth += 1;
+                    } else if ch == other {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some((i, j));
+                        }
+                    }
+                }
+            } else {
+                for j in (0..=i).rev() {
+                    let ch = chars[j];
+                    if ch == c {
+                        depth += 1;
+                    } else if ch == other {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some((j, i));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// 캐럿을 감싸는 가장 안쪽 괄호 쌍 `(open, close)` — 없으면 None.
+    fn enclosing_brackets(chars: &[char], a: usize, b: usize) -> Option<(usize, usize)> {
+        let closer = |c: char| match c {
+            '(' => Some(')'),
+            '[' => Some(']'),
+            '{' => Some('}'),
+            _ => None,
+        };
+        // 왼쪽으로 열림을 찾되 닫힘을 만나면 건너뛴다(중첩).
+        let mut i = a;
+        let mut stack: Vec<char> = Vec::new();
+        while i > 0 {
+            i -= 1;
+            let c = chars[i];
+            if matches!(c, ')' | ']' | '}') {
+                stack.push(c);
+            } else if let Some(cl) = closer(c) {
+                if stack.last() == Some(&cl) {
+                    stack.pop();
+                } else if stack.is_empty() {
+                    // 짝 닫힘을 오른쪽에서 찾는다.
+                    let mut depth = 0i32;
+                    for (j, &ch) in chars.iter().enumerate().skip(i) {
+                        if ch == c {
+                            depth += 1;
+                        } else if ch == cl {
+                            depth -= 1;
+                            if depth == 0 {
+                                return (j >= b).then_some((i, j));
+                            }
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    /// Ctrl+M(Sublime `move_to: brackets`): 캐럿 옆 괄호의 짝으로 이동 · 괄호 옆이 아니면 감싸는 쌍의 닫힘으로. 움직였으면 true.
+    pub fn goto_bracket(&mut self, shift: bool) -> bool {
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let target = if let Some((o, c)) = Self::bracket_pair_at(&chars, caret) {
+            if caret == o || caret == o + 1 {
+                c + 1
+            } else {
+                o
+            }
+        } else if let Some((_, c)) = Self::enclosing_brackets(&chars, caret, caret) {
+            c
+        } else {
+            return false;
+        };
+        self.edit.set_caret(target, shift);
+        self.ml_user_scrolled = false;
+        true
+    }
+
+    /// Ctrl+Shift+M(Sublime `expand_selection: brackets`): 감싸는 괄호 **안**을 선택 · 이미 그 안이 전부 선택돼 있으면 괄호까지 포함.
+    pub fn expand_to_brackets(&mut self) -> bool {
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let (a, b) = self
+            .edit
+            .selection()
+            .unwrap_or((self.edit.caret(), self.edit.caret()));
+        let (a, b) = (a.min(chars.len()), b.min(chars.len()));
+        let Some((o, c)) = Self::enclosing_brackets(&chars, a, b) else {
+            return false;
+        };
+        let (from, to) = if a == o + 1 && b == c {
+            (o, c + 1) // 안쪽이 이미 선택됨 → 괄호 포함
+        } else {
+            (o + 1, c)
+        };
+        self.edit.set_selection(from, to);
+        self.ml_user_scrolled = false;
+        true
+    }
+
     pub fn select_next_occurrence(&mut self) -> bool {
         let chars: Vec<char> = self.edit.text().chars().collect();
         if chars.is_empty() {
@@ -1860,6 +2158,10 @@ impl TextBox {
             ctx.fill_rect(Rect::new(gr.right(), b.y + 1, 1, b.h - 2), theme.border);
         }
         // 소프트 행 → 논리 줄 번호(행 시작이 논리 줄 시작이면 번호 · 접힌 나머지 행은 빈칸).
+        if self.diff_dirty.get() {
+            self.recompute_diff();
+        }
+        let diff_marks = self.diff_marks.borrow();
         let logical_starts: Vec<usize> = Self::logical_lines(&display)
             .into_iter()
             .map(|(st, _)| st)
@@ -1983,8 +2285,30 @@ impl TextBox {
                     let gx = b.x + self.s(10) + gw - self.s(8) - mark_extra - nw;
                     // 표시 띠의 색 막대(줄번호와 경계선 사이 · 3px).
                     if mark_extra > 0 {
-                        if let Some((_, c)) = self.line_marks.iter().find(|(l, _)| *l == n) {
-                            let mx = b.x + self.s(10) + gw - self.s(4) - mark_extra + self.s(1);
+                        let mx = b.x + self.s(10) + gw - self.s(4) - mark_extra + self.s(1);
+                        // 줄 변경 유형(기준선 대비): 추가 = ok · 수정 = warn · 아래 삭제 = danger 쐐기(줄 위쪽 경계).
+                        if let Ok(k) = diff_marks.binary_search_by_key(&n, |(l, _)| *l) {
+                            let (_, kind) = diff_marks[k];
+                            match kind {
+                                DiffKind::Added | DiffKind::Modified => {
+                                    let c = if kind == DiffKind::Added {
+                                        theme.ok
+                                    } else {
+                                        theme.warn
+                                    };
+                                    if let Some(r) = clipv(Rect::new(mx, y, self.s(3), lh)) {
+                                        ctx.fill_rect(r, c);
+                                    }
+                                }
+                                DiffKind::DeletedAbove => {
+                                    if let Some(r) =
+                                        clipv(Rect::new(mx - self.s(1), y, self.s(5), self.s(2)))
+                                    {
+                                        ctx.fill_rect(r, theme.danger);
+                                    }
+                                }
+                            }
+                        } else if let Some((_, c)) = self.line_marks.iter().find(|(l, _)| *l == n) {
                             if let Some(r) = clipv(Rect::new(mx, y + 1, self.s(3), lh - 2)) {
                                 ctx.fill_rect(r, *c);
                             }
@@ -2238,7 +2562,16 @@ impl TextBox {
                 let (ls, le) = (*start_idx, *start_idx + line_len);
                 // 문자 인덱스 → 표시 열(탭 확장) — 선택/출현이 있는 행만 센다.
                 let has_sel = sels.iter().any(|&(a, e)| a < le + 1 && e > ls);
-                if !has_sel && needle.is_none() {
+                let has_find =
+                    self.minimap_find && self.find_marks.iter().any(|&(a, e)| a < le + 1 && e > ls);
+                // 오류 줄 = 이 행이 속한 논리 줄(행 시작 인덱스 기준).
+                let is_err = !self.minimap_errors.is_empty() && {
+                    let li = logical_starts
+                        .partition_point(|&st| st <= *start_idx)
+                        .saturating_sub(1);
+                    self.minimap_errors.contains(&li)
+                };
+                if !has_sel && needle.is_none() && !has_find && !is_err {
                     continue;
                 }
                 let lchars: Vec<char> = line_str.chars().collect();
@@ -2263,6 +2596,24 @@ impl TextBox {
                             ctx.fill_rect_alpha(r, color, alpha);
                         }
                     };
+                if is_err {
+                    // 오류 줄: 행 전체 옅은 danger + 오른쪽 가장자리 2px 점(화면 밖이어도 보이게).
+                    dot(ctx, 0, cols, theme.danger, 0.35);
+                    let edge =
+                        Rect::new(band.right() - mm_cw.max(2) - 1, y, mm_cw.max(2), mm_row_h)
+                            .intersection(&band);
+                    if !edge.is_empty() {
+                        ctx.fill_rect(edge, theme.danger);
+                    }
+                }
+                if has_find {
+                    for &(a, e) in &self.find_marks {
+                        let (s0, s1) = (a.max(ls), e.min(le));
+                        if s1 > s0 {
+                            dot(ctx, colv[s0 - ls], colv[s1 - ls], theme.ok, 0.55);
+                        }
+                    }
+                }
                 if has_sel {
                     for &(a, e) in &sels {
                         let (s0, s1) = (a.max(ls), e.min(le));
@@ -2300,7 +2651,8 @@ impl TextBox {
                 - mm_off;
             let vh = (rows as i32 * mm_row_h).min(band.h);
             let vbox = Rect::new(band.x + 1, vy, band.w - 1, vh).intersection(&band);
-            if !vbox.is_empty() {
+            if !vbox.is_empty() && (!self.minimap_viewport_hover || hov > 0.0 || self.minimap_drag)
+            {
                 // Sublime식: 테두리 없는 회색 반투명 상자(hover 시 조금 진하게) · 색/알파/테두리는 설정.
                 let (color, alpha, border) = self.minimap_box;
                 let c = color.unwrap_or(Color(0x0080_8080));
@@ -2680,6 +3032,7 @@ impl TextBox {
                     self.edit.insert(c);
                     if self.multiline {
                         self.auto_ws_line = None; // 글자를 쳤으면 자동 공백이 아니다
+                        self.minimap_errors.clear(); // 편집 = 오류 표시 해제
                         self.outdent_on_close();
                     }
                 }
@@ -2704,6 +3057,21 @@ impl TextBox {
                         } else {
                             self.committed = true;
                         }
+                        inv.push(self.base.bounds);
+                    }
+                    // Ctrl/⌘+↑/↓ = 캐럿은 그대로 두고 한 줄 스크롤(Sublime `scroll_lines` · 사용자 09-17).
+                    Key::Up if primary && self.multiline => {
+                        let top = self.vscroll.get();
+                        self.vscroll.set(top.saturating_sub(1));
+                        self.ml_wheel_rem.set(0);
+                        self.ml_user_scrolled = true;
+                        inv.push(self.base.bounds);
+                    }
+                    Key::Down if primary && self.multiline => {
+                        let top = self.vscroll.get();
+                        self.vscroll.set(top + 1);
+                        self.ml_wheel_rem.set(0);
+                        self.ml_user_scrolled = true;
                         inv.push(self.base.bounds);
                     }
                     // 멀티라인 세로 이동(08-17) — 같은 열을 목표로 위/아래 줄.
@@ -2843,7 +3211,12 @@ impl Widget for TextBox {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        let before = self.edit.undo_len();
         self.on_event_inner(ev, inv);
+        // 편집이 있었으면(되돌리기 스택 변화 · 붙여넣기/삭제/타이핑 전부) 줄 변경 표시를 다시 계산(페인트에서).
+        if self.baseline.is_some() && (self.changed || self.edit.undo_len() != before) {
+            self.diff_dirty.set(true);
+        }
         // 캐럿이 자동 들여쓰기 줄을 떠났으면 비운다(docs/49 §3 · Char/Enter는 자기 자리에서 처리).
         if self.multiline
             && self.auto_ws_line.is_some()
@@ -3600,6 +3973,71 @@ c  d",
         t.on_event(&click(200, 15), &mut inv);
         assert!(t.dragging, "간격을 넘긴 클릭은 드래그 시작이어야 한다");
         assert!(t.edit.selection().is_none(), "단어 선택이 되면 안 된다");
+    }
+
+    /// 줄 변경 표시(기준선 디프): 수정 · 추가 · 삭제 쐐기 · 저장하면 사라짐.
+    #[test]
+    fn diff_marks_added_modified_deleted() {
+        let base: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let cur = ["a", "B", "c", "x", "d"];
+        let d = diff_lines(&base, &cur);
+        assert_eq!(d, vec![(1, DiffKind::Modified), (3, DiffKind::Added)]);
+        let cur2 = ["a", "d"];
+        assert_eq!(diff_lines(&base, &cur2), vec![(1, DiffKind::DeletedAbove)]);
+        let mut t = TextBox::new("p").with_multiline().with_text("a\nb");
+        t.set_baseline(Some("a\nb"));
+        assert!(t.diff_marks().is_empty());
+        t.set_focused(true);
+        t.edit.set_caret(3, false);
+        let mut inv = Invalidations::default();
+        t.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        t.on_event(&InputEvent::Char { c: 'z', now_ms: 0 }, &mut inv);
+        assert_eq!(t.diff_marks(), vec![(2, DiffKind::Added)]);
+        t.set_baseline(Some(&t.text()));
+        assert!(t.diff_marks().is_empty(), "저장 = 기준선 갱신 → 표시 없음");
+    }
+
+    /// Ctrl+M 괄호 짝 이동 · Ctrl+Shift+M 괄호 안 → 괄호 포함 확장(Sublime · T-114) · 주석 뒤 키워드는 들여쓰기 규칙에서 제외.
+    #[test]
+    fn bracket_goto_and_expand() {
+        let mut t = TextBox::new("p")
+            .with_multiline()
+            .with_text("f(a, (b), c) x");
+        t.set_focused(true);
+        t.edit.set_caret(1, false); // '(' 앞
+        assert!(t.goto_bracket(false));
+        assert_eq!(t.edit.caret(), 12, "짝 닫힘 뒤로");
+        assert!(t.goto_bracket(false));
+        assert_eq!(t.edit.caret(), 1, "다시 열림으로");
+        t.edit.set_caret(7, false); // 'b' 위(안쪽 괄호 안)
+        assert!(t.expand_to_brackets());
+        assert_eq!(t.edit.selection(), Some((6, 7)), "안쪽 괄호 안");
+        assert!(t.expand_to_brackets());
+        assert_eq!(t.edit.selection(), Some((5, 8)), "괄호 포함");
+        assert!(t.expand_to_brackets());
+        assert_eq!(t.edit.selection(), Some((2, 11)), "바깥 괄호 안");
+        // 주석 뒤 BEGIN은 증가 규칙 아님
+        let mut c = TextBox::new("p").with_multiline().with_text("x -- BEGIN");
+        c.set_indent(2, true);
+        c.set_focused(true);
+        c.edit.set_caret(10, false);
+        let mut inv = Invalidations::default();
+        c.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(c.text(), "x -- BEGIN\n");
     }
 
     /// Auto indent(docs/49): 유지 · 증가 · 괄호 사이 · 닫힘 내어쓰기 · 이탈 시 비움.

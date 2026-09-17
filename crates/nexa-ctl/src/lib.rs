@@ -47,10 +47,10 @@ pub use controls::{
 };
 pub use controls::{
     AutoIndent, BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, ColorPanel,
-    ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg, EditCtxAction,
-    FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon, OccurrenceStyle, PopupHit,
-    RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode,
-    TreeView, WhitespaceMode, WhitespaceStyle,
+    ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg, DiffKind,
+    EditCtxAction, FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon,
+    OccurrenceStyle, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid,
+    TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};

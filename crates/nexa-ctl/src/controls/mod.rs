@@ -56,8 +56,8 @@ pub use splitter::{SplitAxis, SplitEvent, Splitter};
 pub use switch::Switch;
 pub use tabbar::{TabAction, TabBar};
 pub use textbox::{
-    AutoIndent, EditCtxAction, IndentRules, OccurrenceStyle, TextBox, WhitespaceMode,
-    WhitespaceStyle,
+    diff_lines, AutoIndent, DiffKind, EditCtxAction, IndentRules, OccurrenceStyle, TextBox,
+    WhitespaceMode, WhitespaceStyle,
 };
 pub use timeout_button::{FiredBy, TimeoutButton};
 pub use toolbar::{ToolIcon, ToolItem, ToolTone, Toolbar, DEFAULT_ICON};
