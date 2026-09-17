@@ -850,6 +850,28 @@ mod resource_tests {
     }
 }
 
+/// OS 파일 관리자를 열고 **그 파일을 선택**한다(nexa-sql 탭 메뉴 "파일 위치 열기" · 09-17).
+/// Windows = `explorer.exe /select,<path>` · macOS = `open -R <path>` · Linux = 폴더를 `xdg-open`(선택은 파일 관리자마다 달라 생략).
+/// 프로세스는 분리 실행(기다리지 않음) — 실패는 `Err`(호스트가 상태줄에).
+pub fn reveal_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    {
+        let mut arg = std::ffi::OsString::from("/select,");
+        arg.push(path.as_os_str());
+        Command::new("explorer.exe").arg(arg).spawn().map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-R").arg(path).spawn().map(|_| ())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let dir = path.parent().unwrap_or(path);
+        Command::new("xdg-open").arg(dir).spawn().map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod service_tests {
     use super::*;
@@ -967,27 +989,5 @@ mod tests {
         );
         assert!(kind_name("", true).is_some());
         assert!(kind_name("txt", false).is_some());
-    }
-}
-
-/// OS 파일 관리자를 열고 **그 파일을 선택**한다(nexa-sql 탭 메뉴 "파일 위치 열기" · 09-17).
-/// Windows = `explorer.exe /select,<path>` · macOS = `open -R <path>` · Linux = 폴더를 `xdg-open`(선택은 파일 관리자마다 달라 생략).
-/// 프로세스는 분리 실행(기다리지 않음) — 실패는 `Err`(호스트가 상태줄에).
-pub fn reveal_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
-    use std::process::Command;
-    #[cfg(target_os = "windows")]
-    {
-        let mut arg = std::ffi::OsString::from("/select,");
-        arg.push(path.as_os_str());
-        Command::new("explorer.exe").arg(arg).spawn().map(|_| ())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open").arg("-R").arg(path).spawn().map(|_| ())
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let dir = path.parent().unwrap_or(path);
-        Command::new("xdg-open").arg(dir).spawn().map(|_| ())
     }
 }
