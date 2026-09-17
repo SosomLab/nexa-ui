@@ -394,6 +394,8 @@ pub struct TextBox {
     /// 멀티라인 콘텐츠 크기 (content_w, content_h) px — paint가 실측해 캐시하고
     /// on_event(폰트 못 재는 경로)가 스크롤바 계산에 쓴다.
     ml_content: std::cell::Cell<(i32, i32)>,
+    /// 단일행 가로 범위(총 px, 가용 px) — paint가 캐시 · 휠 가로 스크롤 클램프(nexa-sql 사용자 09-17).
+    sl_range: std::cell::Cell<(i32, i32)>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
     /// ★ 단일 행 hover 페이드(회색 계열 · `Slow` 1초 · nexa-sql 사용자 09-14) — 멀티라인(편집기)은 제외.
@@ -561,6 +563,7 @@ impl TextBox {
             gutter_px: std::cell::Cell::new(0),
             ml_bars: super::ScrollBars::new(),
             ml_content: std::cell::Cell::new((0, 0)),
+            sl_range: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
             hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Slow),
             highlighter: None,
@@ -3056,6 +3059,22 @@ impl TextBox {
             }
             return;
         }
+        // ★ 단일행 가로 스크롤(nexa-sql 사용자 09-17): 긴 값은 휠/트랙패드 좌우(세로 휠도 가로로)로 이동 · 자유 스크롤
+        //   플래그를 켜 paint가 캐럿을 따라가지 않게 · 키 입력이 오면 플래그가 풀려 다시 캐럿을 따라간다.
+        if !self.multiline {
+            if let InputEvent::Wheel { delta } | InputEvent::HWheel { delta } = ev {
+                let (total, avail) = self.sl_range.get();
+                if total > avail {
+                    let hs = (self.hscroll.get() - *delta / 3).clamp(0, total - avail);
+                    if hs != self.hscroll.get() {
+                        self.hscroll.set(hs);
+                        self.ml_user_scrolled = true;
+                        inv.push(self.base.bounds);
+                    }
+                }
+                return;
+            }
+        }
         // 멀티라인 스크롤바(08-18 · 대화 입력창과 동일) — 휠·HWheel·썸 드래그를
         // 먼저 먹는다. vp/콘텐츠 크기는 paint가 캐시한 값. 소비되면 텍스트 처리로
         // 흘리지 않는다(썸 드래그가 캐럿 이동으로 새지 않게).
@@ -3613,15 +3632,19 @@ impl Widget for TextBox {
         // 가용 폭 — 우측 여백(×·도움말 배지 자리)을 뺀다.
         let avail = (b.right() - self.s(24) - tx).max(self.s(20));
         let mut hs = self.hscroll.get();
+        self.sl_range.set((total_px, avail));
         if total_px <= avail {
             hs = 0; // 다 들어가면 스크롤 없음
         } else {
             hs = hs.clamp(0, total_px - avail); // 텍스트가 줄면 빈 공간이 남지 않게
-            if caret_px - hs > avail {
-                hs = caret_px - avail; // 캐럿이 오른쪽 밖 → 따라간다
-            }
-            if caret_px - hs < 0 {
-                hs = caret_px; // 캐럿이 왼쪽 밖
+                                                // 사용자가 휠로 옮겼으면(자유 스크롤) 캐럿을 따라가지 않는다.
+            if !self.ml_user_scrolled {
+                if caret_px - hs > avail {
+                    hs = caret_px - avail; // 캐럿이 오른쪽 밖 → 따라간다
+                }
+                if caret_px - hs < 0 {
+                    hs = caret_px; // 캐럿이 왼쪽 밖
+                }
             }
         }
         self.hscroll.set(hs);
@@ -3668,6 +3691,22 @@ impl Widget for TextBox {
             ctx.text(tx, ty, view, &self.placeholder, theme.text_dim);
         } else {
             ctx.text(tx, ty, view, &shown, theme.text);
+            // 단일행 가로 스크롤 표시(넘칠 때만 · 하단 2px 트랙+썸 · nexa-sql 사용자 09-17 "Single-line은 좌우 스크롤 표시").
+            if total_px > avail {
+                let bar_h = self.s(2).max(1);
+                let track = Rect::new(view_x0, b.bottom() - bar_h - 1, avail, bar_h);
+                ctx.fill_rect_alpha(track, theme.text_dim, 0.15);
+                let thumb_w = ((avail as i64 * avail as i64) / total_px.max(1) as i64) as i32;
+                let thumb_w = thumb_w.max(self.s(12)).min(avail);
+                let range = (avail - thumb_w).max(0);
+                let thumb_x = view_x0
+                    + ((hs as i64 * range as i64) / (total_px - avail).max(1) as i64) as i32;
+                ctx.fill_rect_alpha(
+                    Rect::new(thumb_x, track.y, thumb_w, bar_h),
+                    theme.text_dim,
+                    0.6,
+                );
+            }
         }
         // 조합 구간 밑줄 — "여기가 아직 확정 전"임을 대화 입력과 같은 문법으로 표시.
         if !self.edit.preedit().is_empty() {
@@ -4686,6 +4725,26 @@ mod minimap_tests {
     }
 
     /// ② 미니맵 클릭 = 그 자리가 뷰포트 가운데 오도록 스크롤 · 드래그 = 따라감 · 캐럿·선택은 불변.
+    /// 단일행: 긴 값은 휠/HWheel로 가로 이동(범위 클램프 · 자유 스크롤 → 캐럿 따라가기 중지 · 키 입력이 풀어 준다).
+    #[test]
+    fn single_line_wheel_scrolls_horizontally() {
+        let mut t = TextBox::new("").with_text("0123456789".repeat(20).as_str());
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 100, 24), &mut inv);
+        t.sl_range.set((1000, 80)); // paint가 캐시하는 값(총 1000px · 가용 80px)
+        t.on_event(&InputEvent::HWheel { delta: -30 }, &mut inv);
+        assert_eq!(t.hscroll.get(), 10);
+        assert!(t.ml_user_scrolled);
+        t.on_event(&InputEvent::Wheel { delta: -3000 }, &mut inv);
+        assert_eq!(t.hscroll.get(), 920, "끝에서 클램프");
+        t.on_event(&InputEvent::HWheel { delta: 9000 }, &mut inv);
+        assert_eq!(t.hscroll.get(), 0);
+        // 다 들어가면 무시.
+        t.sl_range.set((50, 80));
+        t.on_event(&InputEvent::HWheel { delta: -30 }, &mut inv);
+        assert_eq!(t.hscroll.get(), 0);
+    }
+
     #[test]
     fn minimap_click_and_drag_scroll_without_moving_caret() {
         let mut t = editor(200);
