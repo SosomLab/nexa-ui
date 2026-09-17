@@ -144,6 +144,38 @@ impl IndentRules {
     }
 }
 
+/// 레인보우 괄호·자동 닫기 옵션(nexa-sql docs/51 · 설정 `rainbow.*`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BracketOpts {
+    /// 깊이 색 · 짝 없음 · 현재 쌍 강조를 그린다.
+    pub rainbow: bool,
+    pub pairs: super::pairs::PairOpts,
+    /// 짝 없는 괄호를 danger로.
+    pub unmatched: bool,
+    /// 현재 쌍 강조: 0 = 끔 · 1 = 캐럿이 괄호 옆일 때 · 2 = 감싸는 쌍도.
+    pub match_mode: u8,
+    /// 깊이 색(비면 테마 `rainbow`).
+    pub colors: Vec<Color>,
+    /// 자동 닫기·감싸기·건너뛰기(편집 코어).
+    pub auto_close: bool,
+    /// 이 크기(글자 수)를 넘는 문서는 스캔하지 않는다.
+    pub max_chars: usize,
+}
+
+impl Default for BracketOpts {
+    fn default() -> Self {
+        BracketOpts {
+            rainbow: true,
+            pairs: super::pairs::PairOpts::default(),
+            unmatched: true,
+            match_mode: 1,
+            colors: Vec::new(),
+            auto_close: true,
+            max_chars: 2 << 20,
+        }
+    }
+}
+
 /// 줄 변경 유형(기준선 대비 · 거터 띠).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffKind {
@@ -346,6 +378,11 @@ pub struct TextBox {
     /// 기준선 대비 줄 변경(논리 줄 0 기준 · 정렬) — `DiffKind`. 편집 때마다 `diff_dirty`로 다시 계산(페인트에서).
     diff_marks: std::cell::RefCell<Vec<(usize, DiffKind)>>,
     diff_dirty: std::cell::Cell<bool>,
+    /// 괄호 쌍 표(docs/51 · 편집마다 무효 · 페인트/명령에서 재계산) + 옵션 + 우클릭 메뉴 추가 항목(호스트).
+    pair_table: std::cell::RefCell<Option<super::pairs::PairTable>>,
+    pairs_dirty: std::cell::Cell<bool>,
+    bracket_opts: BracketOpts,
+    menu_extras: Vec<super::ctxmenu::CtxItem>,
     /// 들여쓰기(nexa-sql 09-15 · docs/31): 탭 폭(칸) · Tab 키 = 공백(다음 탭 정지까지) 여부.
     tab_size: u8,
     indent_spaces: bool,
@@ -458,7 +495,7 @@ struct MlLine {
 }
 
 /// 우클릭 편집 메뉴에서 고른 행동 — 실행(클립보드 접근)은 호스트가 한다.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditCtxAction {
     /// 복사(⌘/Ctrl+C와 같은 경로).
     Copy,
@@ -466,6 +503,8 @@ pub enum EditCtxAction {
     Cut,
     /// 붙여넣기.
     Paste,
+    /// 호스트가 `set_menu_extras`로 넣은 항목(id 그대로 · 예: 괄호 이동).
+    Custom(String),
 }
 
 impl TextBox {
@@ -512,6 +551,10 @@ impl TextBox {
             baseline: None,
             diff_marks: std::cell::RefCell::new(Vec::new()),
             diff_dirty: std::cell::Cell::new(false),
+            pair_table: std::cell::RefCell::new(None),
+            pairs_dirty: std::cell::Cell::new(true),
+            bracket_opts: BracketOpts::default(),
+            menu_extras: Vec::new(),
             tab_size: 4,
             indent_spaces: false,
             tab_stops: true,
@@ -1265,6 +1308,204 @@ impl TextBox {
         let text = self.edit.text();
         let cur: Vec<&str> = text.lines().collect();
         *self.diff_marks.borrow_mut() = diff_lines(base, &cur);
+    }
+
+    /// 레인보우 괄호·자동 닫기 옵션(nexa-sql `rainbow.*`).
+    pub fn set_bracket_opts(&mut self, opts: BracketOpts) {
+        if self.bracket_opts.pairs != opts.pairs || self.bracket_opts.max_chars != opts.max_chars {
+            self.pairs_dirty.set(true);
+        }
+        self.bracket_opts = opts;
+    }
+
+    /// 우클릭 편집 메뉴에 덧붙일 항목(호스트 · 예: "괄호 이동 ▸" 서브메뉴 · 픽은 [`EditCtxAction::Custom`]).
+    pub fn set_menu_extras(&mut self, items: Vec<super::ctxmenu::CtxItem>) {
+        self.menu_extras = items;
+    }
+
+    /// 쌍 표(필요하면 재계산 · 상한 초과면 None).
+    fn ensure_pairs(&self) {
+        if !self.pairs_dirty.get() {
+            return;
+        }
+        self.pairs_dirty.set(false);
+        let text = self.edit.text();
+        let n = text.chars().count();
+        let table = if n > self.bracket_opts.max_chars {
+            None
+        } else {
+            Some(super::pairs::PairTable::build(
+                &text,
+                self.highlighter.as_deref(),
+                self.bracket_opts.pairs,
+            ))
+        };
+        *self.pair_table.borrow_mut() = table;
+    }
+
+    /// 쌍 표 복제(테스트·호스트 조회).
+    #[must_use]
+    pub fn pair_table(&self) -> Option<super::pairs::PairTable> {
+        self.ensure_pairs();
+        self.pair_table.borrow().clone()
+    }
+
+    /// 캐럿의 "문맥 쌍": 캐럿 옆 괄호의 쌍 → 없으면 감싸는 쌍. `(index, 캐럿이 괄호 옆인가)`.
+    fn bracket_context(&self) -> Option<(usize, bool)> {
+        self.ensure_pairs();
+        let t = self.pair_table.borrow();
+        let t = t.as_ref()?;
+        let caret = self.edit.caret();
+        if let Some(i) = t.pair_at(caret) {
+            return Some((i, true));
+        }
+        t.enclosing(caret).map(|i| (i, false))
+    }
+
+    fn goto_pair_open(&mut self, i: usize, shift: bool) -> bool {
+        let open = {
+            let t = self.pair_table.borrow();
+            match t.as_ref().and_then(|t| t.get(i)) {
+                Some(p) => p.open,
+                None => return false,
+            }
+        };
+        self.edit.set_caret(open, shift);
+        self.ml_user_scrolled = false;
+        true
+    }
+
+    /// 형제로 이동(`next` · Sublime 확장 명령 · docs/51 §4).
+    pub fn goto_bracket_sibling(&mut self, next: bool, shift: bool) -> bool {
+        let Some((i, _)) = self.bracket_context() else {
+            return false;
+        };
+        let target = self
+            .pair_table
+            .borrow()
+            .as_ref()
+            .and_then(|t| t.sibling(i, next));
+        match target {
+            Some(j) => self.goto_pair_open(j, shift),
+            None => false,
+        }
+    }
+
+    /// 상위로: 캐럿이 쌍 안이면 그 쌍의 열림 · 괄호 옆이면 부모의 열림.
+    pub fn goto_bracket_parent(&mut self, shift: bool) -> bool {
+        let Some((i, at_bracket)) = self.bracket_context() else {
+            return false;
+        };
+        let target = if at_bracket {
+            self.pair_table.borrow().as_ref().and_then(|t| t.parent(i))
+        } else {
+            Some(i)
+        };
+        match target {
+            Some(j) => self.goto_pair_open(j, shift),
+            None => false,
+        }
+    }
+
+    /// 하위로: 문맥 쌍의 첫 자식 열림.
+    pub fn goto_bracket_child(&mut self, shift: bool) -> bool {
+        let Some((i, _)) = self.bracket_context() else {
+            return false;
+        };
+        let target = self
+            .pair_table
+            .borrow()
+            .as_ref()
+            .and_then(|t| t.first_child(i));
+        match target {
+            Some(j) => self.goto_pair_open(j, shift),
+            None => false,
+        }
+    }
+
+    /// 자동 닫기·감싸기·건너뛰기(docs/51 §8-3 · Sublime `auto_match_enabled`). 처리했으면 true(호출측은 일반 삽입 생략).
+    fn auto_close(&mut self, c: char) -> bool {
+        if !self.multiline || !self.bracket_opts.auto_close || self.edit.has_multi() {
+            return false;
+        }
+        use super::pairs::PairKind;
+        let opts = self.bracket_opts.pairs;
+        let is_quote = matches!(c, '"' | '\'' | '`');
+        if is_quote && !opts.quotes {
+            return false;
+        }
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let next = chars.get(caret).copied();
+        let prev = caret.checked_sub(1).and_then(|i| chars.get(i)).copied();
+        // 닫힘 건너뛰기: 다음 글자가 지금 친 닫힘/인용부호와 같으면 캐럿만 넘긴다.
+        let is_closer = PairKind::from_close(c).is_some_and(|k| k != PairKind::Angle || opts.angle);
+        if (is_closer || is_quote) && next == Some(c) && self.edit.selection().is_none() {
+            self.edit.set_caret(caret + 1, false);
+            return true;
+        }
+        let Some(k) = PairKind::from_open(c) else {
+            return false;
+        };
+        if k == PairKind::Angle && !opts.angle {
+            return false;
+        }
+        let close = k.close_char();
+        // 선택 감싸기.
+        if let Some((a, b)) = self.edit.selection() {
+            let inner: String = chars[a..b].iter().collect();
+            self.edit.set_selection(a, b);
+            self.edit.insert_str(&format!("{c}{inner}{close}"));
+            self.edit.set_selection(a + 1, b + 1);
+            return true;
+        }
+        // 인용부호: 앞이 영숫자면(예 `don't`) 자동 닫기 안 함.
+        if is_quote && prev.is_some_and(|p| p.is_alphanumeric() || p == '_') {
+            return false;
+        }
+        // 괄호/인용부호: 다음 글자가 없거나 공백·닫힘일 때만 쌍으로.
+        let ok_next = match next {
+            None => true,
+            Some(n) => {
+                n.is_whitespace() || PairKind::from_close(n).is_some() || (is_quote && n == c)
+            }
+        };
+        if !ok_next {
+            return false;
+        }
+        self.edit.insert(c);
+        self.edit.insert(close);
+        self.edit.set_caret(caret + 1, false);
+        true
+    }
+
+    /// Backspace: 빈 쌍 `()`/`""` 사이면 둘 다 지운다.
+    fn backspace_pair(&mut self) -> bool {
+        if !self.multiline
+            || !self.bracket_opts.auto_close
+            || self.edit.has_multi()
+            || self.edit.selection().is_some()
+        {
+            return false;
+        }
+        use super::pairs::PairKind;
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let (Some(&p), Some(&n)) = (
+            caret.checked_sub(1).and_then(|i| chars.get(i)),
+            chars.get(caret),
+        ) else {
+            return false;
+        };
+        let Some(k) = PairKind::from_open(p) else {
+            return false;
+        };
+        if k.close_char() != n {
+            return false;
+        }
+        self.edit.set_selection(caret - 1, caret + 1);
+        self.edit.insert_str("");
+        true
     }
 
     pub fn set_line_marks(&mut self, marks: Vec<(usize, Color)>) {
@@ -2162,6 +2403,31 @@ impl TextBox {
             self.recompute_diff();
         }
         let diff_marks = self.diff_marks.borrow();
+        // 레인보우 괄호(docs/51): 표 준비 · 현재 쌍(캐럿 옆 → 옵션이면 감싸는 쌍).
+        if self.bracket_opts.rainbow || self.bracket_opts.match_mode > 0 {
+            self.ensure_pairs();
+        }
+        let pair_table = self.pair_table.borrow();
+        let cur_pair: Option<(usize, usize)> = if self.bracket_opts.match_mode == 0 {
+            None
+        } else {
+            pair_table.as_ref().and_then(|t| {
+                let c = self.edit.caret();
+                t.pair_at(c)
+                    .or_else(|| {
+                        (self.bracket_opts.match_mode >= 2)
+                            .then(|| t.enclosing(c))
+                            .flatten()
+                    })
+                    .and_then(|i| t.get(i))
+                    .map(|p| (p.open, p.close))
+            })
+        };
+        let rainbow: &[Color] = if self.bracket_opts.colors.is_empty() {
+            &theme.rainbow
+        } else {
+            &self.bracket_opts.colors
+        };
         let logical_starts: Vec<usize> = Self::logical_lines(&display)
             .into_iter()
             .map(|(st, _)| st)
@@ -2420,32 +2686,68 @@ impl TextBox {
             }
             if empty && li == 0 {
                 ctx.text(dx, ty, view, &self.placeholder, theme.text_dim);
-            } else if let Some(h) = &self.highlighter {
-                hl_spans.clear();
-                h.line_spans(line_str, &mut hl_state, &mut hl_spans);
+            } else {
+                // 글자별 색 = 구문 토큰 색 → 레인보우 괄호 덮어쓰기(같은 색 런으로 묶어 그린다).
                 let lchars: Vec<char> = line_str.chars().collect();
+                let mut colors: Vec<Color> = vec![theme.text; lchars.len()];
+                if let Some(h) = &self.highlighter {
+                    hl_spans.clear();
+                    h.line_spans(line_str, &mut hl_state, &mut hl_spans);
+                    let mut ci = 0usize;
+                    for (n, k) in &hl_spans {
+                        let end = (ci + n).min(lchars.len());
+                        for c in &mut colors[ci..end] {
+                            *c = k.color(theme);
+                        }
+                        ci = end;
+                    }
+                }
+                let (ls, le) = (*start_idx, *start_idx + lchars.len());
+                let mut underline: Vec<(usize, Color)> = Vec::new();
+                if let Some(t) = pair_table.as_ref() {
+                    if self.bracket_opts.rainbow {
+                        for &(pos, depth, unmatched) in t.marks_in(ls, le) {
+                            let i = pos - ls;
+                            if unmatched {
+                                if self.bracket_opts.unmatched {
+                                    colors[i] = theme.danger;
+                                    underline.push((i, theme.danger));
+                                }
+                            } else if !rainbow.is_empty() {
+                                colors[i] = rainbow[(depth as usize) % rainbow.len()];
+                            }
+                        }
+                    }
+                    if let Some((o, c)) = cur_pair {
+                        for pos in [o, c] {
+                            if pos >= ls && pos < le {
+                                underline.push((pos - ls, colors[pos - ls]));
+                            }
+                        }
+                    }
+                }
                 let mut ci = 0usize;
-                for (n, k) in &hl_spans {
-                    let end = (ci + n).min(lchars.len());
+                while ci < lchars.len() {
+                    let col = colors[ci];
+                    let mut end = ci + 1;
+                    while end < lchars.len() && colors[end] == col {
+                        end += 1;
+                    }
                     let sx = dx + w.get(ci).copied().unwrap_or(0);
-                    if sx < vx1 && end > ci {
+                    if sx < vx1 {
                         let seg: String = lchars[ci..end].iter().collect();
-                        ctx.text(sx, ty, view, &seg, k.color(theme));
+                        ctx.text(sx, ty, view, &seg, col);
                     }
                     ci = end;
                 }
-                if ci < lchars.len() {
-                    let seg: String = lchars[ci..].iter().collect();
-                    ctx.text(
-                        dx + w.get(ci).copied().unwrap_or(0),
-                        ty,
-                        view,
-                        &seg,
-                        theme.text,
-                    );
+                for (i, col) in underline {
+                    let x0 = dx + w.get(i).copied().unwrap_or(0);
+                    let x1 = dx + w.get(i + 1).copied().unwrap_or(x0 + self.s(8));
+                    let r = Rect::new(x0, ty + th - self.s(2), (x1 - x0).max(1), self.s(2));
+                    if let Some(rr) = clipv(r) {
+                        ctx.fill_rect(rr, col);
+                    }
                 }
-            } else {
-                ctx.text(dx, ty, view, line_str, theme.text);
             }
             // 공백 표시(·/→/¶ · 선택 안 또는 전체 · 반투명 = 배경과 섞은 색).
             if self.whitespace.mode != WhitespaceMode::None && !empty {
@@ -2724,7 +3026,7 @@ impl TextBox {
                         A::Copy => self.edit_ctx = Some(EditCtxAction::Copy),
                         A::Cut => self.edit_ctx = Some(EditCtxAction::Cut),
                         A::Paste => self.edit_ctx = Some(EditCtxAction::Paste),
-                        A::Extra(_) => {}
+                        A::Extra(id) => self.edit_ctx = Some(EditCtxAction::Custom(id)),
                     }
                 }
                 return;
@@ -2746,8 +3048,9 @@ impl TextBox {
                     self.base.bounds.w.max(self.s(200)),
                     self.base.bounds.h + self.s(140),
                 );
+                let extras = self.menu_extras.clone();
                 self.ctx_menu
-                    .open_at(x, y, self.base.scale, host, caps, Vec::new());
+                    .open_at(x, y, self.base.scale, host, caps, extras);
                 inv.push(self.base.bounds);
                 inv.push(self.ctx_menu.bounds());
             }
@@ -3015,7 +3318,13 @@ impl TextBox {
                 self.last_click.1 = 0; // 타이핑 = 클릭 체인 끊김(클릭-타이핑-클릭 ≠ 더블클릭)
                 self.ml_user_scrolled = false; // 타이핑 = 캐럿 이동 → 캐럿 추종 재개
                 if c == '\u{8}' {
-                    self.edit.backspace();
+                    if !self.backspace_pair() {
+                        self.edit.backspace();
+                    }
+                } else if self.auto_close(c) {
+                    // 자동 닫기·감싸기·건너뛰기(docs/51) — 이미 넣었다.
+                    self.auto_ws_line = None;
+                    self.minimap_errors.clear();
                 } else if c == '\t' && self.multiline && self.edit.selection_spans_lines() {
                     // 여러 줄 선택 + Tab = 블록 들여쓰기(Sublime · 09-16). Shift+Tab(내어쓰기)은 호스트 키맵이 명령으로 보낸다.
                     self.edit_command(EditCommand::Indent);
@@ -3214,8 +3523,11 @@ impl Widget for TextBox {
         let before = self.edit.undo_len();
         self.on_event_inner(ev, inv);
         // 편집이 있었으면(되돌리기 스택 변화 · 붙여넣기/삭제/타이핑 전부) 줄 변경 표시를 다시 계산(페인트에서).
-        if self.baseline.is_some() && (self.changed || self.edit.undo_len() != before) {
-            self.diff_dirty.set(true);
+        if self.changed || self.edit.undo_len() != before {
+            if self.baseline.is_some() {
+                self.diff_dirty.set(true);
+            }
+            self.pairs_dirty.set(true);
         }
         // 캐럿이 자동 들여쓰기 줄을 떠났으면 비운다(docs/49 §3 · Char/Enter는 자기 자리에서 처리).
         if self.multiline
@@ -3973,6 +4285,65 @@ c  d",
         t.on_event(&click(200, 15), &mut inv);
         assert!(t.dragging, "간격을 넘긴 클릭은 드래그 시작이어야 한다");
         assert!(t.edit.selection().is_none(), "단어 선택이 되면 안 된다");
+    }
+
+    /// 레인보우 쌍 표 · 형제/상위/하위 이동 · 자동 닫기/감싸기/건너뛰기/빈 쌍 삭제(docs/51).
+    #[test]
+    fn brackets_navigation_and_auto_close() {
+        let mut t = TextBox::new("p")
+            .with_multiline()
+            .with_text("f(a, [bb], {c})");
+        t.set_focused(true);
+        let mut inv = Invalidations::default();
+        t.edit.set_caret(7, false); // bb 사이 (`[bb]` 안 · 괄호 옆이면 "괄호 위"로 본다)
+        assert!(t.goto_bracket_parent(false));
+        assert_eq!(t.edit.caret(), 5, "감싸는 [ 로");
+        assert!(t.goto_bracket_parent(false));
+        assert_eq!(t.edit.caret(), 1, "부모 ( 로");
+        assert!(t.goto_bracket_child(false));
+        assert_eq!(t.edit.caret(), 5, "첫 자식 [");
+        assert!(t.goto_bracket_sibling(true, false));
+        assert_eq!(t.edit.caret(), 11, "다음 형제 중괄호");
+        assert!(t.goto_bracket_sibling(false, false));
+        assert_eq!(t.edit.caret(), 5);
+        assert!(!t.goto_bracket_sibling(false, false), "더 없음");
+        // 자동 닫기
+        let mut a = TextBox::new("p").with_multiline().with_text("");
+        a.set_focused(true);
+        for c in ['(', 'x'] {
+            a.on_event(&InputEvent::Char { c, now_ms: 0 }, &mut inv);
+        }
+        assert_eq!(a.text(), "(x)");
+        a.on_event(&InputEvent::Char { c: ')', now_ms: 0 }, &mut inv);
+        assert_eq!(
+            (a.text().as_str(), a.edit.caret()),
+            ("(x)", 3),
+            "닫힘 건너뛰기"
+        );
+        a.on_event(&InputEvent::Char { c: '"', now_ms: 0 }, &mut inv);
+        assert_eq!(a.text(), "(x)\"\"");
+        a.on_event(
+            &InputEvent::Char {
+                c: '\u{8}',
+                now_ms: 0,
+            },
+            &mut inv,
+        );
+        assert_eq!(a.text(), "(x)", "빈 쌍 Backspace = 둘 다");
+        // 감싸기
+        a.edit.set_selection(1, 2);
+        a.on_event(&InputEvent::Char { c: '[', now_ms: 0 }, &mut inv);
+        assert_eq!(a.text(), "([x])");
+        assert_eq!(a.edit.selection(), Some((2, 3)));
+        // 끄면 그냥 삽입
+        let mut b = TextBox::new("p").with_multiline().with_text("");
+        b.set_bracket_opts(BracketOpts {
+            auto_close: false,
+            ..BracketOpts::default()
+        });
+        b.set_focused(true);
+        b.on_event(&InputEvent::Char { c: '(', now_ms: 0 }, &mut inv);
+        assert_eq!(b.text(), "(");
     }
 
     /// 줄 변경 표시(기준선 디프): 수정 · 추가 · 삭제 쐐기 · 저장하면 사라짐.

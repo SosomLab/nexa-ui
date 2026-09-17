@@ -42,6 +42,8 @@ pub struct Theme {
     pub syn_string: Color,
     pub syn_comment: Color,
     pub syn_number: Color,
+    /// 레인보우 괄호 깊이 색 6(nexa-sql docs/51 · D-95 테마 기본).
+    pub rainbow: [Color; 6],
     /// 위험 행위(파일 실체화 승인·차단 등).
     pub danger: Color,
     /// 긍정 상태(대조 완료 등).
@@ -74,6 +76,14 @@ impl Theme {
             syn_string: Color(0x00E3_A26A),
             syn_comment: Color(0x007C_8A5A),
             syn_number: Color(0x00B5_CEA8),
+            rainbow: [
+                Color(0x00F2_C94C),
+                Color(0x00DA_70D6),
+                Color(0x004F_C1FF),
+                Color(0x007E_E787),
+                Color(0x00FF_9F43),
+                Color(0x00B3_92F0),
+            ],
             danger: Color(0x00E5_534B),
             ok: Color(0x002E_A043),
             warn: Color(0x00B5_7C1E),
@@ -102,6 +112,14 @@ impl Theme {
             syn_string: Color(0x00A3_1515),
             syn_comment: Color(0x0057_8A2A),
             syn_number: Color(0x0009_8658),
+            rainbow: [
+                Color(0x00B5_8900),
+                Color(0x00D3_3682),
+                Color(0x0026_8BD2),
+                Color(0x002A_A198),
+                Color(0x00CB_4B16),
+                Color(0x006C_71C4),
+            ],
             danger: Color(0x00D3_2F2F),
             ok: Color(0x001A_7F37),
             warn: Color(0x009A_6700),

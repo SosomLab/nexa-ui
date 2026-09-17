@@ -55,9 +55,11 @@ pub use scroll::ScrollBars;
 pub use splitter::{SplitAxis, SplitEvent, Splitter};
 pub use switch::Switch;
 pub use tabbar::{TabAction, TabBar};
+pub mod pairs;
+pub use pairs::{Pair, PairKind, PairOpts, PairTable};
 pub use textbox::{
-    diff_lines, AutoIndent, DiffKind, EditCtxAction, IndentRules, OccurrenceStyle, TextBox,
-    WhitespaceMode, WhitespaceStyle,
+    diff_lines, AutoIndent, BracketOpts, DiffKind, EditCtxAction, IndentRules, OccurrenceStyle,
+    TextBox, WhitespaceMode, WhitespaceStyle,
 };
 pub use timeout_button::{FiredBy, TimeoutButton};
 pub use toolbar::{ToolIcon, ToolItem, ToolTone, Toolbar, DEFAULT_ICON};

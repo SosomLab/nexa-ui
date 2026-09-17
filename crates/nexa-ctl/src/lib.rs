@@ -46,11 +46,12 @@ pub use controls::{
     Toolbar, VAlign,
 };
 pub use controls::{
-    AutoIndent, BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, ColorPanel,
-    ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg, DiffKind,
-    EditCtxAction, FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon,
-    OccurrenceStyle, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid,
-    TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
+    AutoIndent, BorderSpec, BracketOpts, Button, ButtonMode, Checkbox, Choose, ChoosePicker,
+    ColorPanel, ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg,
+    DiffKind, EditCtxAction, FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon,
+    OccurrenceStyle, Pair, PairKind, PairOpts, PairTable, PopupHit, RadioGroup, RadioOption,
+    ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode,
+    WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
@@ -58,7 +59,7 @@ pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};
-pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
+pub use theme::{color_from_hex, color_to_hex, Color, FontPrefs, IconImage, SlotFont, Theme};
 pub use widget::{Invalidations, Widget};
 
 pub use tokens::{motion, radius, space, type_scale, Elevation, State};

@@ -2,7 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
-- **2026-09-17 (26차 · win)** — ★ **`ToolDock`** 툴바 그룹 도크(그룹·구분자 계층 · 그립 드래그 순서 · 떼어 내기 액션 · `DockLayout` 문자열 · 툴바 소유 한 곳) · `ToolItem::separator` · `Toolbar::preferred_width/items/item_enabled/clear_hover` · 배지/툴팁/`ToolTone::Custom` · `MenuEntry::Disabled` · TextBox 세로 중앙 · **`OccurrenceStyle`**(1px 선/여백 · 인접 행 선 공유 · 미니맵 색 구분) · nexa-fs `reveal_in_file_manager` → [journal](journal/2026-09-17.md)
+- **2026-09-17 (26차 · win)** — ★ **`ToolDock`** 툴바 그룹 도크(그룹·구분자 계층 · 그립 드래그 순서 · 떼어 내기 액션 · `DockLayout` 문자열 · 툴바 소유 한 곳) · `ToolItem::separator` · `Toolbar::preferred_width/items/item_enabled/clear_hover` · 배지/툴팁/`ToolTone::Custom` · `MenuEntry::Disabled` · TextBox 세로 중앙 · **`OccurrenceStyle`**(1px 선/여백 · 인접 행 선 공유 · 미니맵 색 구분) · nexa-fs `reveal_in_file_manager` → [journal](journal/2026-09-17.md) · **레인보우 괄호 코어**(`controls/pairs.rs` `PairTable` · `TextBox` `BracketOpts`/`set_menu_extras`/`EditCtxAction::Custom` · 형제/상위/하위 이동 · 자동 닫기/감싸기/빈 쌍 Backspace · 깊이 색·짝 없음·현재 쌍 페인트 · `Theme.rainbow` · 245 green)
 
 - **2026-09-16 (25차 · mac)** — **미니맵**(`set_minimap` · 창 한정 캐시) · 찾기 범위/전부 선택 · 자원 상한 세터 3 · ★ **`nexa-sys`** OS 신호 크레이트(D-60). → [journal](journal/2026-09-16.md)
 - **2026-09-16 (24차 · mac)** — TextBox **픽셀 스크롤**(휠 잔여 이월 · 세로 클립 · `set_scroll_snap`) · **`EditCommand` 14종**(`edit/ops.rs` 조각 편집 재매핑) · `set_find_marks` · 여러 줄 Tab · 휠 양방향 시뮬 테스트. → [journal](journal/2026-09-16.md)
