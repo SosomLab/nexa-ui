@@ -607,7 +607,10 @@ impl TextBox {
     /// hover 페이드가 움직이는 중인가(호스트가 프레임을 예약할지).
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.hover.is_animating() || self.minimap_hover.is_animating()
+        // 단일행 가로 스크롤 표시가 떠 있는 동안에도 틱이 와야 제때 사라진다(자동 숨김 · nexa-sql 09-18).
+        self.hover.is_animating()
+            || self.minimap_hover.is_animating()
+            || (!self.multiline && self.ml_bars.is_visible())
     }
 
     /// ★ 미니맵 켬/끔(멀티라인에서만 그려진다 · 기본 끔 · nexa-sql `editor.minimap`). 끄면 캐시를 비운다.
@@ -3069,6 +3072,8 @@ impl TextBox {
                     if hs != self.hscroll.get() {
                         self.hscroll.set(hs);
                         self.ml_user_scrolled = true;
+                        // 표시는 **스크롤하는 동안만** — 오버레이 스크롤바와 같은 자동 숨김 시계(`scroll::hide_delay_ms`).
+                        self.ml_bars.show();
                         inv.push(self.base.bounds);
                     }
                 }
@@ -3638,7 +3643,11 @@ impl Widget for TextBox {
         } else {
             hs = hs.clamp(0, total_px - avail); // 텍스트가 줄면 빈 공간이 남지 않게
                                                 // 사용자가 휠로 옮겼으면(자유 스크롤) 캐럿을 따라가지 않는다.
-            if !self.ml_user_scrolled {
+            if !self.ml_user_scrolled && !self.base.focused {
+                // ★ 포커스가 없는 상자는 **앞부분부터** 보여 준다(nexa-sql 09-18): 값을 넣으면 캐럿이 끝에 가서 긴 경로·URL의
+                //   꼬리만 보이던 것 — 읽는 사람에게는 첫머리가 기준이다. 포커스를 받으면 종전대로 캐럿을 따라간다.
+                hs = 0;
+            } else if !self.ml_user_scrolled {
                 if caret_px - hs > avail {
                     hs = caret_px - avail; // 캐럿이 오른쪽 밖 → 따라간다
                 }
@@ -3691,8 +3700,8 @@ impl Widget for TextBox {
             ctx.text(tx, ty, view, &self.placeholder, theme.text_dim);
         } else {
             ctx.text(tx, ty, view, &shown, theme.text);
-            // 단일행 가로 스크롤 표시(넘칠 때만 · 하단 2px 트랙+썸 · nexa-sql 사용자 09-17 "Single-line은 좌우 스크롤 표시").
-            if total_px > avail {
+            // 단일행 가로 스크롤 표시(넘칠 때 · 하단 2px 트랙+썸 · nexa-sql 09-17) — **스크롤하는 동안만** 보이고 잠시 뒤 사라진다(09-18).
+            if total_px > avail && self.ml_bars.is_visible() {
                 let bar_h = self.s(2).max(1);
                 let track = Rect::new(view_x0, b.bottom() - bar_h - 1, avail, bar_h);
                 ctx.fill_rect_alpha(track, theme.text_dim, 0.15);
@@ -4251,6 +4260,28 @@ c  d",
         t.set_text("short");
         measure(&t);
         assert_eq!(t.hscroll.get(), 0, "다 들어가면 스크롤 없음");
+    }
+
+    /// nexa-sql 09-18: 포커스 없는 상자는 앞부분부터 · 가로 스크롤 표시는 스크롤할 때만 뜨고 시간이 지나면 사라진다.
+    #[test]
+    fn unfocused_shows_start_and_hbar_auto_hides() {
+        let (mut t, mut inv) = tb();
+        t.set_text(&"m".repeat(200));
+        t.edit.set_caret(200, false);
+        measure(&t);
+        assert_eq!(t.hscroll.get(), 0, "포커스 없음 = 첫 글자부터");
+        assert!(!t.ml_bars.is_visible(), "스크롤 전에는 표시 없음");
+        assert!(!t.is_animating());
+        t.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        assert!(t.hscroll.get() > 0);
+        assert!(t.ml_bars.is_visible(), "스크롤하면 표시");
+        assert!(t.is_animating(), "사라질 때까지 틱을 요청한다");
+        t.tick(1_000);
+        let late = 1_000 + crate::controls::scroll::hide_delay_ms() + 10;
+        t.tick(late);
+        assert!(!t.ml_bars.is_visible(), "시간이 지나면 사라진다");
+        measure(&t);
+        assert!(t.hscroll.get() > 0, "사용자가 옮긴 위치는 유지");
     }
 
     #[test]
