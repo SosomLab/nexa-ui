@@ -392,6 +392,16 @@ impl ToolDock {
         self.bars.iter().any(|b| b.item_enabled(id))
     }
 
+    /// 항목의 자리(도크에 붙어 있는 그룹만 · 플로팅 그룹은 다른 창이라 None).
+    #[must_use]
+    pub fn item_rect(&self, id: &str) -> Option<Rect> {
+        let gid = self.group_of(id)?.to_string();
+        if self.is_floating(&gid) {
+            return None;
+        }
+        self.bar(&gid)?.item_rect(id)
+    }
+
     /// 어느 그룹에 속한 항목인가.
     #[must_use]
     pub fn group_of(&self, item_id: &str) -> Option<&str> {

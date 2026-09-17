@@ -316,6 +316,13 @@ impl Toolbar {
         }
     }
 
+    /// 항목의 자리(창 좌표 · 보이는 항목만) — 호스트가 드롭다운 메뉴를 버튼 아래에 붙일 때 쓴다(nexa-sql 09-18).
+    #[must_use]
+    pub fn item_rect(&self, id: &str) -> Option<Rect> {
+        let i = self.items.iter().position(|it| it.id == id && it.visible)?;
+        Some(self.slot_rect(i))
+    }
+
     fn slot_rect(&self, i: usize) -> Rect {
         let b = self.base.bounds;
         let slot = self.slot();
