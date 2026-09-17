@@ -887,7 +887,7 @@ impl FilePicker {
             exts: self.current_filter().exts.clone(),
             dirs_only,
             batch: 0,
-            skip_probe: false,
+            skip_probe: !crate::probe_chevrons_enabled(),
         }
     }
 
@@ -2465,6 +2465,18 @@ fn fallback_icon(is_dir: bool) -> IconImage {
         }
     }
     IconImage::from_rgba(N, N, rgba)
+}
+
+/// 빈 폴더 셰브론 프로브(폴더마다 첫 일치 열거) 켜기/끄기 — 설정 `file.probe_chevrons`(끄면 모든 폴더에 셰브론 · nexa-sql 09-17 실행 속도 향상).
+static PROBE_CHEVRONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_probe_chevrons(on: bool) {
+    PROBE_CHEVRONS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn probe_chevrons_enabled() -> bool {
+    PROBE_CHEVRONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[cfg(test)]

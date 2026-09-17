@@ -232,6 +232,12 @@ impl EditState {
         Some((a.min(self.caret), a.max(self.caret)))
     }
 
+    /// 주 선택이 **거꾸로**(뒤에서 앞으로 드래그 → 캐럿이 앞)인가 — 선택이 없으면 false.
+    #[must_use]
+    pub fn selection_reversed(&self) -> bool {
+        self.anchor.is_some_and(|a| a > self.caret)
+    }
+
     /// 선택 텍스트(복사용).
     #[must_use]
     pub fn selected_text(&self) -> Option<String> {
@@ -336,6 +342,44 @@ impl EditState {
         self.caret = to;
         self.last_op = None;
         true
+    }
+
+    /// 캐럿 하나를 **더한다**(Ctrl+클릭 · Sublime) — 지금 주 선택/캐럿은 추가 목록으로 내려가고 새 자리가 주 캐럿.
+    /// 같은 자리에 이미 캐럿이 있으면 **뺀다**(토글 · 마지막 하나는 남긴다). 반환 = 더했으면 true.
+    pub fn toggle_caret(&mut self, idx: usize) -> bool {
+        let n = self.buf.len();
+        let idx = idx.min(n);
+        let cur = (self.anchor.unwrap_or(self.caret), self.caret);
+        // 이미 있는 캐럿(빈 구간) 제거.
+        if let Some(i) = self.extra.iter().position(|&(a, c)| a == c && c == idx) {
+            self.extra.remove(i);
+            self.last_op = None;
+            return false;
+        }
+        if cur.0 == cur.1 && cur.1 == idx {
+            if let Some((a, c)) = self.extra.pop() {
+                self.anchor = (a != c).then_some(a);
+                self.caret = c;
+            }
+            self.last_op = None;
+            return false;
+        }
+        self.extra.push(cur);
+        self.anchor = None;
+        self.caret = idx;
+        self.last_op = None;
+        true
+    }
+
+    /// 단어 경계(Sublime `words`/`word_ends`): 문자 부류 = 공백 · 단어(영숫자·`_`·비ASCII 문자) · 구분자(그 밖).
+    /// 왼쪽 = 공백을 건너뛴 뒤 같은 부류 런의 시작 · 오른쪽 = 공백을 건너뛴 뒤 같은 부류 런의 끝.
+    pub fn word_boundary(&self, from: usize, right: bool) -> usize {
+        word_boundary(&self.buf, from, right)
+    }
+
+    /// 서브워드 경계(Sublime `subwords`/`subword_ends`): 단어 안에서 `_`·소문자→대문자·글자↔숫자 전환도 경계.
+    pub fn subword_boundary(&self, from: usize, right: bool) -> usize {
+        subword_boundary(&self.buf, from, right)
     }
 
     /// 구간 목록으로 선택을 통째로 바꾼다(열 선택 드래그) — 마지막 구간이 주 선택.
@@ -595,9 +639,167 @@ impl EditState {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Space,
+    Word,
+    Sep,
+}
+
+fn class_of(c: char) -> CharClass {
+    if c.is_whitespace() {
+        CharClass::Space
+    } else if c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Sep
+    }
+}
+
+/// 단어 경계(Sublime · 줄바꿈은 공백으로 취급하되 줄을 넘지 않는다).
+pub fn word_boundary(buf: &[char], from: usize, right: bool) -> usize {
+    let n = buf.len();
+    let mut i = from.min(n);
+    if right {
+        // 공백 건너뛰기(줄바꿈 하나는 넘는다 · 그 뒤 첫 런의 끝).
+        while i < n && buf[i].is_whitespace() && buf[i] != '\n' {
+            i += 1;
+        }
+        if i < n && buf[i] == '\n' {
+            return i + 1;
+        }
+        if i >= n {
+            return n;
+        }
+        let k = class_of(buf[i]);
+        while i < n && class_of(buf[i]) == k {
+            i += 1;
+        }
+        i
+    } else {
+        while i > 0 && buf[i - 1].is_whitespace() && buf[i - 1] != '\n' {
+            i -= 1;
+        }
+        if i > 0 && buf[i - 1] == '\n' {
+            return i - 1;
+        }
+        if i == 0 {
+            return 0;
+        }
+        let k = class_of(buf[i - 1]);
+        while i > 0 && class_of(buf[i - 1]) == k {
+            i -= 1;
+        }
+        i
+    }
+}
+
+/// 서브워드 경계 — 단어 런 안에서 `_` 양쪽 · 소문자→대문자 · 대문자 연속→마지막 대문자+소문자(`HTMLParser` → `HTML|Parser`) ·
+/// 글자↔숫자 전환에서 멈춘다. 단어 밖(공백·구분자)은 단어 경계와 같다.
+pub fn subword_boundary(buf: &[char], from: usize, right: bool) -> usize {
+    let n = buf.len();
+    let i = from.min(n);
+    let is_sub_break = |a: char, b: char| -> bool {
+        // a = 앞 글자 · b = 뒤 글자(경계는 a|b 사이)
+        if a == '_' || b == '_' {
+            return true;
+        }
+        (a.is_lowercase() && b.is_uppercase())
+            || (a.is_alphabetic() && b.is_ascii_digit())
+            || (a.is_ascii_digit() && b.is_alphabetic())
+    };
+    if right {
+        if i >= n || class_of(buf[i]) != CharClass::Word {
+            return word_boundary(buf, i, true);
+        }
+        let mut j = i + 1;
+        // `_` 바로 위면 그 런을 통째로 넘긴다.
+        if buf[i] == '_' {
+            while j < n && buf[j] == '_' {
+                j += 1;
+            }
+            return j;
+        }
+        while j < n && class_of(buf[j]) == CharClass::Word {
+            if is_sub_break(buf[j - 1], buf[j]) {
+                break;
+            }
+            // 대문자 연속 뒤 소문자: `HTMLParser` → `HTML|Parser`(경계 = 마지막 대문자 앞)
+            if buf[j - 1].is_uppercase()
+                && buf[j].is_uppercase()
+                && j + 1 < n
+                && buf[j + 1].is_lowercase()
+            {
+                break;
+            }
+            j += 1;
+        }
+        j
+    } else {
+        if i == 0 || class_of(buf[i - 1]) != CharClass::Word {
+            return word_boundary(buf, i, false);
+        }
+        let mut j = i - 1;
+        if buf[j] == '_' {
+            while j > 0 && buf[j - 1] == '_' {
+                j -= 1;
+            }
+            return j;
+        }
+        while j > 0 && class_of(buf[j - 1]) == CharClass::Word {
+            if is_sub_break(buf[j - 1], buf[j]) {
+                break;
+            }
+            if buf[j - 1].is_uppercase()
+                && buf[j].is_uppercase()
+                && j < i
+                && j + 1 < n
+                && buf[j + 1].is_lowercase()
+            {
+                break;
+            }
+            j -= 1;
+        }
+        j
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sublime 단어/서브워드 경계 · Ctrl+클릭 캐럿 토글(nexa-sql 사용자 09-17).
+    #[test]
+    fn word_subword_boundaries_and_caret_toggle() {
+        let b: Vec<char> = "sales_customer.HTMLParser  x1y".chars().collect();
+        // words: 오른쪽 = 런 끝 · 왼쪽 = 런 시작
+        assert_eq!(word_boundary(&b, 0, true), 14, "sales_customer|");
+        assert_eq!(word_boundary(&b, 14, true), 15, "구분자 `.` 런");
+        assert_eq!(word_boundary(&b, 15, true), 25, "HTMLParser|");
+        assert_eq!(word_boundary(&b, 25, true), 30, "공백 건너뛰고 x1y|");
+        assert_eq!(word_boundary(&b, 30, false), 27, "|x1y");
+        assert_eq!(word_boundary(&b, 14, false), 0);
+        // subwords
+        assert_eq!(subword_boundary(&b, 0, true), 5, "sales|_");
+        assert_eq!(subword_boundary(&b, 5, true), 6, "_|customer");
+        assert_eq!(subword_boundary(&b, 6, true), 14);
+        assert_eq!(subword_boundary(&b, 15, true), 19, "HTML|Parser");
+        assert_eq!(subword_boundary(&b, 19, true), 25);
+        assert_eq!(subword_boundary(&b, 25, false), 19, "HTML|Parser 왼쪽");
+        assert_eq!(subword_boundary(&b, 14, false), 6, "_|customer 왼쪽");
+        assert_eq!(subword_boundary(&b, 30, false), 29, "x1|y");
+        // caret toggle
+        let mut e = EditState::new();
+        e.set_text("ab cd");
+        e.set_caret(1, false);
+        assert!(e.toggle_caret(4));
+        assert_eq!(e.carets(), vec![1, 4]);
+        assert!(!e.toggle_caret(4), "같은 자리 = 제거");
+        assert_eq!(e.carets(), vec![1]);
+        assert!(e.toggle_caret(3));
+        assert!(!e.toggle_caret(1), "추가 목록의 캐럿 제거");
+        assert_eq!(e.carets(), vec![3]);
+    }
 
     #[test]
     fn insert_and_caret_advance() {

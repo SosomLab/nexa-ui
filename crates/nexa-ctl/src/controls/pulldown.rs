@@ -21,6 +21,8 @@ use std::cell::RefCell;
 pub enum MenuEntry {
     /// 액션 항목(값 = 보고 id · 라벨 · 선택적 앞 이미지).
     Item(ComboItem),
+    /// **비활성** 항목(흐리게 · hover/선택 없음 · 09-17 nexa-sql "이미 있으면 메뉴 Disable").
+    Disabled(ComboItem),
     /// 구분선.
     Separator,
 }
@@ -134,7 +136,7 @@ impl MenuBar {
 
     fn entry_h(&self, e: &MenuEntry) -> i32 {
         match e {
-            MenuEntry::Item(_) => self.s(ITEM_H),
+            MenuEntry::Item(_) | MenuEntry::Disabled(_) => self.s(ITEM_H),
             MenuEntry::Separator => self.s(SEP_H),
         }
     }
@@ -151,7 +153,7 @@ impl MenuBar {
             m.entries
                 .iter()
                 .map(|e| match e {
-                    MenuEntry::Item(it) => self.estimate_w(&it.label),
+                    MenuEntry::Item(it) | MenuEntry::Disabled(it) => self.estimate_w(&it.label),
                     MenuEntry::Separator => 0,
                 })
                 .max()
@@ -335,7 +337,9 @@ impl Widget for MenuBar {
                     d.entries
                         .iter()
                         .map(|e| match e {
-                            MenuEntry::Item(it) => ctx.text_width(&it.label),
+                            MenuEntry::Item(it) | MenuEntry::Disabled(it) => {
+                                ctx.text_width(&it.label)
+                            }
                             MenuEntry::Separator => 0,
                         })
                         .max()
@@ -375,9 +379,10 @@ impl Widget for MenuBar {
                             theme.border,
                         );
                     }
-                    MenuEntry::Item(it) => {
+                    MenuEntry::Item(it) | MenuEntry::Disabled(it) => {
+                        let disabled = matches!(e, MenuEntry::Disabled(_));
                         let row = Rect::new(pop.x + 1, y, pop.w - 2, h);
-                        if self.hover_item == Some(k) {
+                        if self.hover_item == Some(k) && !disabled {
                             ctx.fill_rect(row, theme.sel_bg);
                         }
                         let cy = row.y + h / 2;
@@ -389,7 +394,13 @@ impl Widget for MenuBar {
                             ctx.image_scaled(fit, img, row);
                         }
                         let tx = tx + self.s(LEADING_ICON) + self.s(6);
-                        ctx.text(tx, cy - th / 2, row, &it.label, theme.text);
+                        ctx.text(
+                            tx,
+                            cy - th / 2,
+                            row,
+                            &it.label,
+                            if disabled { theme.text_dim } else { theme.text },
+                        );
                     }
                 }
                 y += h;

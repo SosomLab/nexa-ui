@@ -74,6 +74,8 @@ pub enum ToolTone {
     Accent,
     /// 위험색(`Theme::danger`).
     Danger,
+    /// 호스트가 정한 색(테마 밖 상태색 — 09-17 nexa-sql 트랜잭션 상태: 갱신 = 호박 · DDL = 보라).
+    Custom(Color),
 }
 
 /// 툴바 항목 — 액션 id + 아이콘 (+ 오른쪽 정렬 여부).
@@ -95,6 +97,10 @@ pub struct ToolItem {
     pub tone: ToolTone,
     /// 드롭다운 표시(아이콘 오른쪽 ▾ · 슬롯이 10px 넓어진다 · 클릭은 같은 액션 · nexa-sql 보기 모드 09-16).
     pub dropdown: bool,
+    /// **구분자**(09-17 nexa-sql 툴바 그룹): 세로 선 하나 — hover·클릭 없음 · 폭 [`SEP_W`]. `id`는 비어 있어도 된다.
+    pub separator: bool,
+    /// **배지**(09-17 nexa-sql 트랜잭션 버튼): 슬롯 오른쪽 위 작은 캡슐(색 = 색조 · 글자 = 배경색). `None` = 없음.
+    pub badge: Option<String>,
 }
 
 impl ToolItem {
@@ -109,7 +115,17 @@ impl ToolItem {
             enabled: true,
             tone: ToolTone::Default,
             dropdown: false,
+            separator: false,
+            badge: None,
         }
+    }
+
+    /// 구분자 항목(세로 선) — 그룹 안에서 묶음을 나눈다(09-17).
+    #[must_use]
+    pub fn separator() -> Self {
+        let mut it = Self::new("", ToolIcon::Glyph(String::new()));
+        it.separator = true;
+        it
     }
 
     /// 드롭다운 화살표(체이닝).
@@ -159,6 +175,8 @@ impl ToolItem {
 const SLOT_PAD: i32 = 4;
 /// 드롭다운 화살표 칸 폭(논리 px).
 const DROP_W: i32 = 10;
+/// 구분자 항목 폭(논리 px · 선 1px + 좌우 여백).
+pub const SEP_W: i32 = 9;
 /// 툴바 상하 여백(논리 px).
 const BAR_PAD: i32 = 4;
 /// 기본 아이콘 크기(논리 px) — 사용자 확정(08-14 · 24→**32**).
@@ -256,9 +274,37 @@ impl Toolbar {
         } else {
             0
         };
+        if self.items[i].separator {
+            return self.s(SEP_W);
+        }
         match &self.items[i].icon {
             ToolIcon::StatusMask { size, .. } => self.s(*size),
             _ => self.slot() + extra,
+        }
+    }
+
+    /// 보이는 항목을 모두 담는 **권장 폭**(물리 px · 좌우 여백 6 포함) — 툴바 그룹 도크·플로팅 창 크기의 근거(09-17).
+    #[must_use]
+    pub fn preferred_width(&self) -> i32 {
+        let mut w = self.s(6) * 2;
+        for (i, it) in self.items.iter().enumerate() {
+            if it.visible {
+                w += self.item_w(i) + self.gap_before(i);
+            }
+        }
+        w
+    }
+
+    /// 항목 목록(읽기).
+    #[must_use]
+    pub fn items(&self) -> &[ToolItem] {
+        &self.items
+    }
+
+    /// 일시 상태(hover·눌림) 비우기 — 다른 창으로 옮겨 그리거나 가려질 때(포커스 규칙 ⑤ · 09-17).
+    pub fn clear_hover(&mut self, inv: &mut Invalidations) {
+        if self.hover.take().is_some() | self.pressed.take().is_some() {
+            inv.push(self.base.bounds);
         }
     }
 
@@ -346,6 +392,30 @@ impl Toolbar {
         }
     }
 
+    /// 항목의 활성 상태(호스트 테스트·상태 동기화 검증용 · nexa-sql 09-17). 없는 id = false.
+    pub fn item_enabled(&self, id: &str) -> bool {
+        self.items.iter().any(|it| it.id == id && it.enabled)
+    }
+
+    /// 배지 글자(`None` = 지운다) — 같으면 아무 일도 없다.
+    pub fn set_item_badge(&mut self, id: &str, badge: Option<&str>, inv: &mut Invalidations) {
+        if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
+            if it.badge.as_deref() != badge {
+                it.badge = badge.map(str::to_string);
+                inv.push(self.base.bounds);
+            }
+        }
+    }
+
+    /// 툴팁 문구 교체(상태에 따라 바뀌는 설명 · 09-17).
+    pub fn set_item_tip(&mut self, id: &str, tip: &str) {
+        if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
+            if it.tip != tip {
+                it.tip = tip.to_string();
+            }
+        }
+    }
+
     pub fn set_item_enabled(&mut self, id: &str, enabled: bool, inv: &mut Invalidations) {
         if let Some(i) = self.items.iter().position(|it| it.id == id) {
             if self.items[i].enabled != enabled {
@@ -393,6 +463,7 @@ impl Toolbar {
     fn item_at(&self, x: i32, y: i32) -> Option<usize> {
         (0..self.items.len()).find(|&i| {
             self.items[i].visible
+                && !self.items[i].separator
                 && self.items[i].enabled
                 && self.slot_rect(i).contains(Point { x, y })
         })
@@ -479,6 +550,15 @@ impl Widget for Toolbar {
                 continue;
             }
             let slot = self.slot_rect(i);
+            if it.separator {
+                let lx = slot.x + slot.w / 2;
+                let inset = self.s(4);
+                ctx.fill_rect(
+                    Rect::new(lx, slot.y + inset, 1, (slot.h - inset * 2).max(1)),
+                    theme.border,
+                );
+                continue;
+            }
             let is_pressed = self.pressed == Some(i);
             let is_hover = self.hover == Some(i);
             // hover/pressed 배경은 그리지 않는다(09-15 nexa-sql 사용자 — 슬롯 아래가 밑줄처럼 보였다) ·
@@ -554,6 +634,7 @@ impl Widget for Toolbar {
                             ToolTone::Ok => super::switch::ON_GREEN,
                             ToolTone::Accent => theme.accent,
                             ToolTone::Danger => theme.danger,
+                            ToolTone::Custom(c) => c,
                         }
                     };
                     let img = self.tinted(i, *w, *h, alpha, color);
@@ -561,6 +642,24 @@ impl Widget for Toolbar {
                     ctx.image_scaled(fit, &img, slot);
                     if !it.enabled {
                         ctx.fill_rect_alpha(fit, theme.chrome_bg, 0.45);
+                    }
+                    // 배지 — 슬롯 오른쪽 위 캡슐(색 = 색조 색 · 글자 = 크롬 배경색 · 상태줄 글꼴).
+                    if let Some(b) = it.badge.as_deref().filter(|b| !b.is_empty()) {
+                        let bg = match it.tone {
+                            ToolTone::Default => theme.accent,
+                            _ => color,
+                        };
+                        ctx.select_font(FontSlot::Status, true);
+                        let tw = ctx.text_width(b);
+                        let th = ctx.text_height();
+                        let padx = self.s(3);
+                        let bw = (tw + padx * 2).max(th);
+                        let bx = slot.right() - bw + self.s(2);
+                        let by = slot.y - self.s(1);
+                        let br = Rect::new(bx, by, bw, th);
+                        ctx.fill_rect(br, bg);
+                        ctx.text(bx + (bw - tw) / 2, by, br, b, theme.chrome_bg);
+                        ctx.select_font(FontSlot::Base, false);
                     }
                 }
                 ToolIcon::Avatar {

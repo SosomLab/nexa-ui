@@ -32,6 +32,118 @@ pub struct WhitespaceStyle {
     pub alpha: f32,
 }
 
+/// 동일 출현 외곽선 스타일(nexa-sql `editor.occurrence_*` · 사용자 09-17 "1px 선 · 글에 안 겹치게 1px 여백 · 색+투명도").
+/// 상자 = 글자 상자 좌우 2px 확장(1px 여백 + 1px 선) · 세로 = 행 전체 + 1(위/아래 행의 상자가 **선을 공유**해
+/// 떨어지거나 2px가 되지 않는다 · Sublime). 선 색은 배경에 알파를 미리 섞어 불투명으로 그린다(겹친 선이 진해지지 않게).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OccurrenceStyle {
+    /// 둥근 사각형(false = 사각형).
+    pub round: bool,
+    /// 선 색(None = 테마 `accent`) · 알파 0 = 선 없음.
+    pub line: Option<Color>,
+    pub line_alpha: f32,
+    /// 선 두께 px(0 = 선 없음).
+    pub width: i32,
+    /// 배경 색(None 또는 알파 0 = 투명).
+    pub fill: Option<Color>,
+    pub fill_alpha: f32,
+}
+
+impl Default for OccurrenceStyle {
+    fn default() -> Self {
+        OccurrenceStyle {
+            round: false,
+            line: None,
+            line_alpha: 0.7,
+            width: 1,
+            fill: None,
+            fill_alpha: 0.0,
+        }
+    }
+}
+
+/// Auto indent 설정(nexa-sql docs/49 · Sublime `auto_indent`/`smart_indent`/`indent_to_bracket`/`trim_automatic_white_space`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoIndent {
+    /// Enter = 현재 줄 들여쓰기 유지.
+    pub enabled: bool,
+    /// 열림 뒤 증가 · 닫는 토큰 입력 시 감소 · 괄호 사이 indentOutdent.
+    pub smart: bool,
+    /// 닫히지 않은 괄호 다음 열에 정렬(증가보다 우선).
+    pub to_bracket: bool,
+    /// 자동으로 넣은 공백만 남은 줄에서 떠나면 비운다.
+    pub trim: bool,
+}
+
+impl Default for AutoIndent {
+    fn default() -> Self {
+        AutoIndent {
+            enabled: true,
+            smart: true,
+            to_bracket: false,
+            trim: true,
+        }
+    }
+}
+
+/// 들여쓰기 규칙 세트(docs/49 §2 `editor.indent_rules`) — 괄호 + 증가/감소 키워드(대소문자 무시).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct IndentRules {
+    pub open: Vec<char>,
+    pub close: Vec<char>,
+    pub increase_words: Vec<&'static str>,
+    pub decrease_words: Vec<&'static str>,
+}
+
+impl IndentRules {
+    /// 괄호만.
+    #[must_use]
+    pub fn brackets() -> Self {
+        IndentRules {
+            open: vec!['(', '[', '{'],
+            close: vec![')', ']', '}'],
+            increase_words: Vec::new(),
+            decrease_words: Vec::new(),
+        }
+    }
+
+    /// SQL/PLSQL/T-SQL 블록.
+    #[must_use]
+    pub fn sql() -> Self {
+        IndentRules {
+            open: vec!['(', '[', '{'],
+            close: vec![')', ']', '}'],
+            increase_words: vec![
+                "BEGIN",
+                "THEN",
+                "ELSE",
+                "ELSIF",
+                "LOOP",
+                "DECLARE",
+                "IS",
+                "AS",
+                "CASE",
+                "EXCEPTION",
+                "DO",
+            ],
+            decrease_words: vec!["END", "ELSE", "ELSIF", "WHEN", "EXCEPTION", "UNTIL"],
+        }
+    }
+
+    /// 규칙 없음(유지만).
+    #[must_use]
+    pub fn none() -> Self {
+        IndentRules::default()
+    }
+
+    fn pair_of(&self, open: char) -> Option<char> {
+        self.open
+            .iter()
+            .position(|&o| o == open)
+            .and_then(|i| self.close.get(i).copied())
+    }
+}
+
 impl Default for WhitespaceStyle {
     fn default() -> Self {
         WhitespaceStyle {
@@ -156,6 +268,13 @@ pub struct TextBox {
     ruler_alpha: f32,
     /// ★ 선택한 글과 같은 다른 출현을 외곽선으로(Sublime · nexa-sql 09-16) — 선택된 출현은 채움 그대로.
     occurrence_hl: bool,
+    occ_style: OccurrenceStyle,
+    auto_indent: AutoIndent,
+    indent_rules: IndentRules,
+    /// 자동 들여쓰기만 넣어 둔 줄의 시작 인덱스(이탈 시 비움 · 사용자가 글자를 치면 해제).
+    auto_ws_line: Option<usize>,
+    /// 닫는 토큰 내어쓰기를 이미 한 줄(같은 줄 두 번 방지).
+    outdented_line: Option<usize>,
     /// 공백 문자 표시(설정 `editor.whitespace*`).
     whitespace: WhitespaceStyle,
     /// ★ 미니맵(Sublime식 · nexa-sql T-97 · 사용자 09-16) — 멀티라인일 때만 본문 오른쪽(스크롤바 안쪽)에 세로 띠.
@@ -174,12 +293,15 @@ pub struct TextBox {
     minimap_hover: crate::tokens::Fade,
     /// 미니맵 드래그 중(클릭 위치를 뷰포트 가운데로 · 따라감).
     minimap_drag: bool,
+    /// 뷰포트 상자 — 색(None = Sublime식 회색 `0x808080`) · 알파(None = 0.18 · hover +0.10) · 테두리(기본 없음 · 사용자 09-17).
+    minimap_box: (Option<Color>, Option<f32>, bool),
     /// 본문 텍스트 가용 폭(마지막 페인트 실측 · 테스트).
     ml_avail: std::cell::Cell<i32>,
 }
 
 /// 미니맵 기본 폭(논리 px).
-pub const MINIMAP_DEFAULT_WIDTH: i32 = 80;
+/// 09-17 nexa-sql 사용자 "미니맵 크기를 지금의 2배로" → 80 → 160.
+pub const MINIMAP_DEFAULT_WIDTH: i32 = 160;
 /// 미니맵이 한 번에 래스터하는 행 상한 — 띠에 보이는 행만 그리므로 창 높이가 정하지만, 거대한 창에서도 시간이
 /// 튀지 않게 상한을 둔다(넘는 행은 빈 칸).
 pub const MINIMAP_MAX_LINES: usize = 4000;
@@ -292,6 +414,11 @@ impl TextBox {
             ruler_color: None,
             ruler_alpha: 0.25,
             occurrence_hl: true,
+            occ_style: OccurrenceStyle::default(),
+            auto_indent: AutoIndent::default(),
+            indent_rules: IndentRules::sql(),
+            auto_ws_line: None,
+            outdented_line: None,
             whitespace: WhitespaceStyle::default(),
             minimap: false,
             minimap_w: MINIMAP_DEFAULT_WIDTH,
@@ -301,6 +428,7 @@ impl TextBox {
             minimap_lay: std::cell::Cell::new((0, 1, 0, 1)),
             minimap_hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Fast),
             minimap_drag: false,
+            minimap_box: (None, None, false),
             ml_avail: std::cell::Cell::new(0),
         }
     }
@@ -338,6 +466,11 @@ impl TextBox {
     }
 
     /// 미니맵 폭(논리 px · 20~400 · 기본 [`MINIMAP_DEFAULT_WIDTH`] · nexa-sql `editor.minimap_width`).
+    /// 뷰포트 상자 스타일(nexa-sql `editor.minimap_box_color` · `editor.minimap_border`).
+    pub fn set_minimap_box(&mut self, color: Option<Color>, alpha: Option<f32>, border: bool) {
+        self.minimap_box = (color, alpha, border);
+    }
+
     pub fn set_minimap_width(&mut self, px: i32) {
         self.minimap_w = px.clamp(20, 400);
     }
@@ -504,6 +637,241 @@ impl TextBox {
     /// 선택한 글과 같은 다른 출현 외곽선 켬/끔.
     pub fn set_occurrence_highlight(&mut self, on: bool) {
         self.occurrence_hl = on;
+    }
+
+    /// 동일 출현 외곽선 스타일(모양·선·배경).
+    pub fn set_occurrence_style(&mut self, st: OccurrenceStyle) {
+        self.occ_style = st;
+    }
+
+    /// Auto indent 설정 + 규칙 세트(nexa-sql `editor.auto_indent`/`smart_indent`/`indent_to_bracket`/`trim_auto_whitespace`/`indent_rules`).
+    pub fn set_auto_indent(&mut self, cfg: AutoIndent, rules: IndentRules) {
+        self.auto_indent = cfg;
+        self.indent_rules = rules;
+        self.auto_ws_line = None;
+        self.outdented_line = None;
+    }
+
+    fn indent_unit(&self) -> String {
+        if self.indent_spaces {
+            " ".repeat(usize::from(self.tab_size.max(1)))
+        } else {
+            "\t".to_string()
+        }
+    }
+
+    /// 줄 시작 인덱스(문자 기준).
+    fn line_start_of(chars: &[char], i: usize) -> usize {
+        chars[..i.min(chars.len())]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map_or(0, |p| p + 1)
+    }
+
+    /// Enter(docs/49 §3): 유지 → 괄호 열 정렬 → 증가 → 괄호 사이 indentOutdent. 다중 캐럿·조합 중·설정 off = 개행만.
+    fn newline_with_indent(&mut self) {
+        if !self.auto_indent.enabled || self.edit.has_multi() || !self.edit.preedit().is_empty() {
+            self.edit.insert('\n');
+            return;
+        }
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let ls = Self::line_start_of(&chars, caret);
+        let le = ls
+            + chars[ls..]
+                .iter()
+                .position(|&c| c == '\n')
+                .unwrap_or(chars.len() - ls);
+        let before: String = chars[ls..caret].iter().collect();
+        let after: String = chars[caret..le].iter().collect();
+        let ws: String = before
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let unit = self.indent_unit();
+        let ts = usize::from(self.tab_size.max(1));
+        let mut indent = ws.clone();
+        let mut opened: Option<char> = None;
+        if self.auto_indent.smart {
+            // 닫히지 않은 마지막 열림 괄호(열 정렬·짝 판정용).
+            let mut stack: Vec<(char, usize)> = Vec::new();
+            for (col, ch) in before.chars().enumerate() {
+                if self.indent_rules.open.contains(&ch) {
+                    stack.push((ch, col));
+                } else if self.indent_rules.close.contains(&ch) {
+                    stack.pop();
+                }
+            }
+            let trimmed = before.trim_end();
+            let last_char = trimmed.chars().last();
+            let last_word: String = trimmed
+                .chars()
+                .rev()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>()
+                .to_ascii_uppercase();
+            if self.auto_indent.to_bracket {
+                if let Some(&(_, col)) = stack.last() {
+                    // 괄호 다음 열까지 공백(탭은 tab_size로 환산한 시각 열).
+                    let vis: usize = before.chars().take(col + 1).fold(0, |acc, c| {
+                        if c == '\t' {
+                            (acc / ts + 1) * ts
+                        } else {
+                            acc + 1
+                        }
+                    });
+                    indent = " ".repeat(vis);
+                }
+            }
+            let ends_open = last_char.is_some_and(|c| self.indent_rules.open.contains(&c));
+            let ends_word = !last_word.is_empty()
+                && self
+                    .indent_rules
+                    .increase_words
+                    .iter()
+                    .any(|w| *w == last_word);
+            if ends_open || ends_word {
+                if !(self.auto_indent.to_bracket && !stack.is_empty()) {
+                    indent.push_str(&unit);
+                }
+                if ends_open {
+                    opened = last_char;
+                }
+            }
+        }
+        let closing_next = opened
+            .and_then(|o| self.indent_rules.pair_of(o))
+            .is_some_and(|c| after.trim_start().starts_with(c));
+        if closing_next {
+            // 괄호 사이: 가운데 줄 +1 · 닫힘 줄은 원래 들여쓰기 · 캐럿은 가운데 줄 끝.
+            let ins = format!("\n{indent}\n{ws}");
+            self.edit.insert_str(&ins);
+            let mid = caret + 1 + indent.chars().count();
+            self.edit.set_caret(mid, false);
+            self.auto_ws_line = (!indent.is_empty()).then_some(caret + 1);
+        } else {
+            self.edit.insert_str(&format!("\n{indent}"));
+            self.auto_ws_line = (!indent.is_empty()).then_some(caret + 1);
+        }
+        self.outdented_line = None;
+    }
+
+    /// 닫는 토큰 입력 뒤(docs/49 §3): 현재 줄이 `공백 + 닫는 토큰`뿐이면 한 단위 내어쓰기(줄당 1회).
+    fn outdent_on_close(&mut self) {
+        if !(self.auto_indent.enabled && self.auto_indent.smart) || self.edit.has_multi() {
+            return;
+        }
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let ls = Self::line_start_of(&chars, caret);
+        if self.outdented_line == Some(ls) {
+            return;
+        }
+        let line: String = chars[ls..caret].iter().collect();
+        let body = line.trim_start();
+        let ws_len = line.len() - body.len();
+        if ws_len == 0 || body.is_empty() {
+            return;
+        }
+        let is_close = (body.chars().count() == 1
+            && body
+                .chars()
+                .next()
+                .is_some_and(|c| self.indent_rules.close.contains(&c)))
+            || self
+                .indent_rules
+                .decrease_words
+                .iter()
+                .any(|w| w.eq_ignore_ascii_case(body));
+        if !is_close {
+            return;
+        }
+        // 앞 공백에서 한 단위 제거(공백이면 tab_size개 · 탭이면 1개 · 모자라면 전부).
+        let ws: Vec<char> = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let remove = if ws.last() == Some(&'\t') {
+            1
+        } else {
+            let n = ws.iter().rev().take_while(|c| **c == ' ').count();
+            n.min(usize::from(self.tab_size.max(1)))
+        };
+        if remove == 0 {
+            return;
+        }
+        let a = ls + ws.len() - remove;
+        let b = ls + ws.len();
+        let keep = self.edit.caret() - remove;
+        self.edit.set_selection(a, b);
+        self.edit.insert_str("");
+        self.edit.set_caret(keep, false);
+        self.outdented_line = Some(ls);
+        self.auto_ws_line = None;
+    }
+
+    /// 이탈(docs/49 §3): 자동 공백만 남은 줄에서 캐럿이 떠났으면 그 공백을 지운다.
+    fn trim_auto_ws(&mut self) {
+        let Some(ls) = self.auto_ws_line else { return };
+        if !self.auto_indent.trim {
+            self.auto_ws_line = None;
+            return;
+        }
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        if ls > chars.len() {
+            self.auto_ws_line = None;
+            return;
+        }
+        let le = ls
+            + chars[ls..]
+                .iter()
+                .position(|&c| c == '\n')
+                .unwrap_or(chars.len() - ls);
+        if caret >= ls && caret <= le {
+            return; // 아직 그 줄
+        }
+        let only_ws = chars[ls..le].iter().all(|c| *c == ' ' || *c == '\t');
+        if only_ws && le > ls && !self.edit.has_multi() {
+            let keep = if caret > le { caret - (le - ls) } else { caret };
+            self.edit.set_selection(ls, le);
+            self.edit.insert_str("");
+            self.edit.set_caret(keep, false);
+            self.changed = true;
+        }
+        self.auto_ws_line = None;
+    }
+
+    /// 출현 상자 하나 — 배경(선 안쪽) → 선(사각형 = 정수 픽셀 4변 · 둥근 = SDF). 선 색은 `field_bg`에 알파를 미리 섞는다.
+    fn paint_occurrence_box(&self, ctx: &mut dyn DrawCtx, theme: &Theme, r: Rect) {
+        let st = self.occ_style;
+        let w = st.width.clamp(0, 4);
+        let radius = if st.round { self.s(3) } else { 0 };
+        if let Some(fc) = st.fill {
+            if st.fill_alpha > 0.0 {
+                let inner = Rect::new(r.x + w, r.y + w, (r.w - 2 * w).max(0), (r.h - 2 * w).max(0));
+                if !inner.is_empty() {
+                    ctx.fill_round_rect_alpha(inner, radius, fc, st.fill_alpha.min(1.0));
+                }
+            }
+        }
+        if w == 0 || st.line_alpha <= 0.0 {
+            return;
+        }
+        let lc = theme
+            .field_bg
+            .lerp(st.line.unwrap_or(theme.accent), st.line_alpha.min(1.0));
+        if st.round {
+            ctx.stroke_round_rect(r, radius, lc, w as f32);
+        } else {
+            ctx.fill_rect(Rect::new(r.x, r.y, r.w, w), lc);
+            ctx.fill_rect(Rect::new(r.x, r.bottom() - w, r.w, w), lc);
+            ctx.fill_rect(Rect::new(r.x, r.y, w, r.h), lc);
+            ctx.fill_rect(Rect::new(r.right() - w, r.y, w, r.h), lc);
+        }
     }
 
     /// 세로 안내선 열 목록(0 = 없음) — 설정 `editor.rulers`(기본 80).
@@ -1015,6 +1383,7 @@ impl TextBox {
             return false;
         }
         let taken = self.edit.regions();
+        let reversed = self.edit.selection_reversed();
         let n = chars.len();
         let m = needle.len();
         if m > n {
@@ -1030,7 +1399,12 @@ impl TextBox {
             if taken.contains(&(i, i + m)) {
                 continue;
             }
-            return self.edit.add_selection(i, i + m);
+            // 추가 구간의 캐럿 방향 = 주 선택과 같게(뒤→앞 드래그였으면 새 구간도 캐럿이 앞 · nexa-sql 사용자 09-17).
+            return if reversed {
+                self.edit.add_selection(i + m, i)
+            } else {
+                self.edit.add_selection(i, i + m)
+            };
         }
         false
     }
@@ -1056,12 +1430,33 @@ impl TextBox {
         };
         let (r0, r1) = (row_at(ay), row_at(by));
         let (lo, hi) = (r0.min(r1), r0.max(r1));
+        // ★ Sublime 규칙(nexa-sql 사용자 09-17 캡처): 시작 Col(클릭 x)보다 **짧은 줄은 제외**(컬럼 모드에서 내용 없음) ·
+        //   끝 Col은 포인터 x 기준 — 줄이 그보다 짧으면 줄 끝까지, 길면 그 Col까지(줄마다 다르게 클램프).
+        //   x → 열은 줄마다 실측 경계(`xs`)로 잡되 "줄이 시작 x에 닿는가"는 글자 폭 절반의 여유로 판정.
+        let cw = lay
+            .iter()
+            .filter(|l| l.xs.len() > 1)
+            .map(|l| (l.xs[l.xs.len() - 1] - l.xs[0]) / (l.xs.len() as i32 - 1))
+            .max()
+            .unwrap_or(self.s(8))
+            .max(1);
+        let x_start = ax.min(bx);
         let mut out = Vec::with_capacity(hi - lo + 1);
         for li in lo..=hi {
-            let y = lay[li].top;
+            let line = &lay[li];
+            let end_x = *line.xs.last().unwrap_or(&line.xs[0]);
+            if end_x + cw / 2 < x_start {
+                continue; // 시작 Col에 못 미치는 줄
+            }
+            let y = line.top;
             let i0 = self.ml_caret_at(ax, y);
             let i1 = self.ml_caret_at(bx, y);
             out.push((i0, i1));
+        }
+        if out.is_empty() {
+            let y = lay[r1].top;
+            let i = self.ml_caret_at(bx, y);
+            out.push((i, i));
         }
         // 드래그 방향에 따라 마지막(= 주 선택)을 커서 쪽 줄로.
         if r1 < r0 {
@@ -1559,6 +1954,8 @@ impl TextBox {
         for (vi, li) in (top..lines.len().min(top + rows + extra_row)).enumerate() {
             let (start_idx, line_str) = &lines[li];
             let y = top0 + (vi as i32) * lh - rem;
+            // 글자는 행(선택 반전·캐럿 띠) 안에서 **세로 중앙**(nexa-sql 사용자 09-17: 선택 배경 위쪽에 붙어 보였다).
+            let ty = y + ((lh - th) / 2).max(0);
             let line_len = line_str.chars().count();
             // 이 행이 선택에 걸리는가 — 줄번호를 선택 색으로 표시한다(여러 행 선택이 한눈에 · 사용자 09-15).
             let row_selected = sels.iter().any(|&(a, e)| {
@@ -1684,18 +2081,11 @@ impl TextBox {
                             let x0 = dx + w.get(i).copied().unwrap_or(0);
                             let x1 = dx + w.get(i + n).copied().unwrap_or(0);
                             if x1 > x0 && x1 > vx0 && x0 < vx1 && y >= vy0 && y + lh <= vy1 {
-                                ctx.stroke_round_rect_alpha(
-                                    Rect::new(
-                                        x0.max(vx0),
-                                        y + 1,
-                                        (x1.min(vx1) - x0.max(vx0)).max(1),
-                                        lh - 2,
-                                    ),
-                                    self.s(2),
-                                    theme.accent,
-                                    1.0,
-                                    0.7,
-                                );
+                                // 상자 = 글자 좌우 2px(1px 여백 + 1px 선) · 세로 = 행 + 1 → 인접 행 상자와 선 공유.
+                                let bx0 = (x0 - 2).max(vx0);
+                                let bx1 = (x1 + 2).min(vx1);
+                                let r = Rect::new(bx0, y, (bx1 - bx0).max(1), lh + 1);
+                                self.paint_occurrence_box(ctx, theme, r);
                             }
                         }
                         i += n;
@@ -1705,7 +2095,7 @@ impl TextBox {
                 }
             }
             if empty && li == 0 {
-                ctx.text(dx, y, view, &self.placeholder, theme.text_dim);
+                ctx.text(dx, ty, view, &self.placeholder, theme.text_dim);
             } else if let Some(h) = &self.highlighter {
                 hl_spans.clear();
                 h.line_spans(line_str, &mut hl_state, &mut hl_spans);
@@ -1716,7 +2106,7 @@ impl TextBox {
                     let sx = dx + w.get(ci).copied().unwrap_or(0);
                     if sx < vx1 && end > ci {
                         let seg: String = lchars[ci..end].iter().collect();
-                        ctx.text(sx, y, view, &seg, k.color(theme));
+                        ctx.text(sx, ty, view, &seg, k.color(theme));
                     }
                     ci = end;
                 }
@@ -1724,18 +2114,19 @@ impl TextBox {
                     let seg: String = lchars[ci..].iter().collect();
                     ctx.text(
                         dx + w.get(ci).copied().unwrap_or(0),
-                        y,
+                        ty,
                         view,
                         &seg,
                         theme.text,
                     );
                 }
             } else {
-                ctx.text(dx, y, view, line_str, theme.text);
+                ctx.text(dx, ty, view, line_str, theme.text);
             }
             // 공백 표시(·/→/¶ · 선택 안 또는 전체 · 반투명 = 배경과 섞은 색).
             if self.whitespace.mode != WhitespaceMode::None && !empty {
                 let ws = &self.whitespace;
+                // 기준색 = 흐린 글자색(사용자 09-17: 잠시 글자색으로 바꿨다가 원래대로 — 진짜 원인은 설정 창 저장 결함이었다).
                 let base = ws.color.unwrap_or(theme.text_dim);
                 let col = base.lerp(theme.field_bg, 1.0 - ws.alpha.clamp(0.0, 1.0));
                 let (ls, le) = (*start_idx, *start_idx + line_len);
@@ -1760,14 +2151,14 @@ impl TextBox {
                     }
                     let mx = dx + w.get(ci).copied().unwrap_or(0);
                     if mx >= vx0 && mx < vx1 {
-                        ctx.text(mx, y, view, mark.encode_utf8(&mut buf), col);
+                        ctx.text(mx, ty, view, mark.encode_utf8(&mut buf), col);
                     }
                 }
                 // 줄끝 표시 — 이 행이 논리 줄의 끝(다음 글자가 '\n')일 때.
                 if ws.eol != '\0' && le >= sa && le < se && eol_chars.get(le) == Some(&'\n') {
                     let mx = dx + w.get(line_len).copied().unwrap_or(0);
                     if mx >= vx0 && mx < vx1 {
-                        ctx.text(mx, y, view, ws.eol.encode_utf8(&mut buf), col);
+                        ctx.text(mx, ty, view, ws.eol.encode_utf8(&mut buf), col);
                     }
                 }
             }
@@ -1862,13 +2253,16 @@ impl TextBox {
                     };
                     colv.push(col);
                 }
-                let dot = |ctx: &mut dyn DrawCtx, c0: usize, c1: usize, alpha: f32| {
-                    let (x0, x1) = (mm_x(c0), mm_x(c1).max(mm_x(c0) + mm_cw));
-                    let r = Rect::new(x0, y, x1 - x0, mm_row_h).intersection(&band);
-                    if !r.is_empty() {
-                        ctx.fill_rect_alpha(r, theme.accent, alpha);
-                    }
-                };
+                // 선택 = 강조색 · 같은 값의 다른 출현 = 외곽선 색(기본 warn 계열로 구분 · 사용자 09-17 "다중 선택과 선택 대상은 다르게").
+                let occ_color = self.occ_style.line.unwrap_or(theme.warn);
+                let dot =
+                    |ctx: &mut dyn DrawCtx, c0: usize, c1: usize, color: Color, alpha: f32| {
+                        let (x0, x1) = (mm_x(c0), mm_x(c1).max(mm_x(c0) + mm_cw));
+                        let r = Rect::new(x0, y, x1 - x0, mm_row_h).intersection(&band);
+                        if !r.is_empty() {
+                            ctx.fill_rect_alpha(r, color, alpha);
+                        }
+                    };
                 if has_sel {
                     for &(a, e) in &sels {
                         let (s0, s1) = (a.max(ls), e.min(le));
@@ -1878,7 +2272,7 @@ impl TextBox {
                             } else {
                                 colv[s1 - ls]
                             };
-                            dot(ctx, colv[s0 - ls], c1, 0.55);
+                            dot(ctx, colv[s0 - ls], c1, theme.accent, 0.6);
                         }
                     }
                 }
@@ -1889,7 +2283,7 @@ impl TextBox {
                         if lchars[i..i + n] == nd[..] {
                             let (a0, a1) = (ls + i, ls + i + n);
                             if !sels.iter().any(|(a, e)| *a < a1 && a0 < *e) {
-                                dot(ctx, colv[i], colv[i + n], 0.35);
+                                dot(ctx, colv[i], colv[i + n], occ_color, 0.45);
                             }
                             i += n;
                         } else {
@@ -1907,8 +2301,14 @@ impl TextBox {
             let vh = (rows as i32 * mm_row_h).min(band.h);
             let vbox = Rect::new(band.x + 1, vy, band.w - 1, vh).intersection(&band);
             if !vbox.is_empty() {
-                ctx.fill_rect_alpha(vbox, theme.text, 0.07 + 0.10 * hov);
-                ctx.stroke_round_rect_alpha(vbox, 0, theme.text_dim, 1.0, 0.45 + 0.4 * hov);
+                // Sublime식: 테두리 없는 회색 반투명 상자(hover 시 조금 진하게) · 색/알파/테두리는 설정.
+                let (color, alpha, border) = self.minimap_box;
+                let c = color.unwrap_or(Color(0x0080_8080));
+                let a = alpha.unwrap_or(0.18);
+                ctx.fill_rect_alpha(vbox, c, (a + 0.10 * hov).min(1.0));
+                if border {
+                    ctx.stroke_round_rect_alpha(vbox, 0, c, 1.0, (a * 2.5 + 0.2 * hov).min(1.0));
+                }
             }
         } else {
             self.minimap_cache.replace(None);
@@ -1940,17 +2340,8 @@ impl Control for TextBox {
     }
 }
 
-impl Widget for TextBox {
-    fn bounds(&self) -> Rect {
-        self.base.bounds
-    }
-
-    fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
-        self.base.bounds = bounds;
-        inv.push(bounds);
-    }
-
-    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+impl TextBox {
+    fn on_event_inner(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         // hover 목표(단일 행만) — 밝기는 `tick`이 옮긴다. 미니맵 뷰포트 상자도 같은 부품(띠 위 = 진하게).
         if let InputEvent::MouseMove { x, y } = *ev {
             self.hover
@@ -2081,7 +2472,12 @@ impl Widget for TextBox {
                 self.last_click.1 = 0;
                 self.minimap_scroll_to(y, inv);
             }
-            InputEvent::MouseDown { x, y, shift, .. } => {
+            InputEvent::MouseDown {
+                x,
+                y,
+                shift,
+                primary,
+            } => {
                 let badge = self.help_badge_rect(self.base.bounds);
                 if self.handle_help_click(x, y, badge) {
                     inv.push(self.base.bounds);
@@ -2114,6 +2510,13 @@ impl Widget for TextBox {
                     }
                     if self.edit.preedit().is_empty() {
                         let idx = self.ml_caret_at(x, y);
+                        // ★ Ctrl/⌘+클릭 = 그 자리에 캐럿 추가(같은 자리면 제거 · Sublime · 사용자 09-17).
+                        if primary && !shift {
+                            self.edit.toggle_caret(idx);
+                            self.last_click = (0, 0);
+                            inv.push(self.base.bounds);
+                            return;
+                        }
                         // ★ 더블 = 단어 · 트리플 = **논리 줄**(09-02 사용자 요청 — 단일 줄과
                         //   같은 체인 규약: 같은 위치 연속 클릭만 잇고 ⇧는 제외).
                         let chain = self.click_chain_alive();
@@ -2275,6 +2678,10 @@ impl Widget for TextBox {
                     }
                 } else if !c.is_control() && self.accepts(c) && self.room() > 0 {
                     self.edit.insert(c);
+                    if self.multiline {
+                        self.auto_ws_line = None; // 글자를 쳤으면 자동 공백이 아니다
+                        self.outdent_on_close();
+                    }
                 }
                 self.changed = true;
                 inv.push(self.base.bounds);
@@ -2289,9 +2696,10 @@ impl Widget for TextBox {
                 self.ml_user_scrolled = false; // 키 이동/편집 = 캐럿 이동 → 캐럿 추종 재개
                 match key {
                     Key::Enter => {
-                        // 멀티라인은 Enter = 개행(확정은 상위의 적용 버튼 몫).
+                        // 멀티라인은 Enter = 개행(확정은 상위의 적용 버튼 몫) + auto indent(docs/49).
                         if self.multiline {
-                            self.edit.insert('\n');
+                            self.trim_auto_ws();
+                            self.newline_with_indent();
                             self.changed = true;
                         } else {
                             self.committed = true;
@@ -2335,9 +2743,50 @@ impl Widget for TextBox {
                         self.edit.key(EditKey::Right, shift);
                         inv.push(self.base.bounds);
                     }
+                    // 단어/서브워드 이동(Sublime `words`/`word_ends`/`subwords` · 호스트가 수식키를 번역 · 사용자 09-17).
+                    Key::WordLeft | Key::WordRight | Key::SubwordLeft | Key::SubwordRight => {
+                        let right = matches!(key, Key::WordRight | Key::SubwordRight);
+                        let sub = matches!(key, Key::SubwordLeft | Key::SubwordRight);
+                        let from = self.edit.caret();
+                        let to = if sub {
+                            self.edit.subword_boundary(from, right)
+                        } else {
+                            self.edit.word_boundary(from, right)
+                        };
+                        self.edit.set_caret(to, shift);
+                        self.ml_user_scrolled = false;
+                        inv.push(self.base.bounds);
+                    }
+                    // Ctrl/⌘+Home/End = 문서 처음/끝(Sublime `bof`/`eof`).
+                    Key::Home if primary && self.multiline => {
+                        self.edit.set_caret(0, shift);
+                        self.ml_user_scrolled = false;
+                        inv.push(self.base.bounds);
+                    }
+                    Key::End if primary && self.multiline => {
+                        let n = self.edit.text().chars().count();
+                        self.edit.set_caret(n, shift);
+                        self.ml_user_scrolled = false;
+                        inv.push(self.base.bounds);
+                    }
                     Key::Home => {
                         if self.multiline {
-                            self.edit.set_caret(self.ml_line_edge(false), shift);
+                            // ★ 스마트 Home(Sublime `bol`): 첫 글자(들여쓰기 뒤)로 · 이미 거기면 열 0.
+                            let hard = self.ml_line_edge(false);
+                            let text = self.edit.text();
+                            let chars: Vec<char> = text.chars().collect();
+                            let mut soft = hard;
+                            while soft < chars.len() && (chars[soft] == ' ' || chars[soft] == '\t')
+                            {
+                                soft += 1;
+                            }
+                            let cur = self.edit.caret();
+                            let to = if cur == soft || soft >= chars.len() && cur == hard {
+                                hard
+                            } else {
+                                soft
+                            };
+                            self.edit.set_caret(to, shift);
                         } else {
                             self.edit.key(EditKey::Home, shift);
                         }
@@ -2379,6 +2828,28 @@ impl Widget for TextBox {
                 inv.push(self.base.bounds);
             }
             _ => {}
+        }
+    }
+}
+
+impl Widget for TextBox {
+    fn bounds(&self) -> Rect {
+        self.base.bounds
+    }
+
+    fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
+        self.base.bounds = bounds;
+        inv.push(bounds);
+    }
+
+    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        self.on_event_inner(ev, inv);
+        // 캐럿이 자동 들여쓰기 줄을 떠났으면 비운다(docs/49 §3 · Char/Enter는 자기 자리에서 처리).
+        if self.multiline
+            && self.auto_ws_line.is_some()
+            && matches!(ev, InputEvent::Key { .. } | InputEvent::MouseDown { .. })
+        {
+            self.trim_auto_ws();
         }
     }
 
@@ -2957,6 +3428,53 @@ mod tests {
         }
     }
 
+    /// text() 호출 문자열만 기록 — 공백 표시 마크가 실제로 그려지는지.
+    struct TextRec(Vec<String>);
+    impl crate::draw::DrawCtx for TextRec {
+        fn fill_rect(&mut self, _r: Rect, _c: crate::theme::Color) {}
+        fn text_opaque(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _clip: Rect,
+            _t: &str,
+            _f: crate::theme::Color,
+            _b: crate::theme::Color,
+        ) {
+        }
+        fn text(&mut self, _x: i32, _y: i32, _clip: Rect, t: &str, _f: crate::theme::Color) {
+            self.0.push(t.to_string());
+        }
+        fn text_width(&mut self, text: &str) -> i32 {
+            text.chars().count() as i32 * 7
+        }
+    }
+
+    /// 공백 표시 = 전체(nexa-sql 사용자 09-17 "전체로 바꿔도 안 보임"): 선택이 없어도 모든 줄의 공백·줄끝 마크가 그려져야 한다.
+    #[test]
+    fn whitespace_all_mode_draws_marks_without_selection() {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t.set_text(
+            "a b
+c  d",
+        );
+        t.set_whitespace(WhitespaceStyle {
+            mode: WhitespaceMode::All,
+            space: '.',
+            tab: '>',
+            eol: '$',
+            color: None,
+            alpha: 0.4,
+        });
+        let mut rec = TextRec(Vec::new());
+        t.paint(&mut rec, &crate::theme::Theme::dark());
+        let dots = rec.0.iter().filter(|s| s.as_str() == ".").count();
+        let eols = rec.0.iter().filter(|s| s.as_str() == "$").count();
+        assert_eq!((dots, eols), (3, 1), "그린 글자: {:?}", rec.0);
+    }
+
     #[test]
     fn selection_highlight_clipped_to_box() {
         // 08-13 실기 — 가로 스크롤 상태의 전체 선택 하이라이트가 컨트롤 좌우로
@@ -3082,6 +3600,125 @@ mod tests {
         t.on_event(&click(200, 15), &mut inv);
         assert!(t.dragging, "간격을 넘긴 클릭은 드래그 시작이어야 한다");
         assert!(t.edit.selection().is_none(), "단어 선택이 되면 안 된다");
+    }
+
+    /// Auto indent(docs/49): 유지 · 증가 · 괄호 사이 · 닫힘 내어쓰기 · 이탈 시 비움.
+    #[test]
+    fn auto_indent_enter_close_and_trim() {
+        let mut t = TextBox::new("p").with_multiline().with_text("");
+        t.set_indent(4, true);
+        t.set_focused(true);
+        let mut inv = Invalidations::default();
+        let enter = InputEvent::Key {
+            key: Key::Enter,
+            shift: false,
+            primary: false,
+        };
+        let type_str = |t: &mut TextBox, s: &str, inv: &mut Invalidations| {
+            for c in s.chars() {
+                t.on_event(&InputEvent::Char { c, now_ms: 0 }, inv);
+            }
+        };
+        type_str(&mut t, "    SELECT a", &mut inv);
+        t.on_event(&enter, &mut inv);
+        assert_eq!(t.text(), "    SELECT a\n    ", "유지");
+        type_str(&mut t, "BEGIN", &mut inv);
+        t.on_event(&enter, &mut inv);
+        assert_eq!(
+            t.text(),
+            "    SELECT a\n    BEGIN\n        ",
+            "키워드 뒤 증가"
+        );
+        type_str(&mut t, "END", &mut inv);
+        assert_eq!(
+            t.text(),
+            "    SELECT a\n    BEGIN\n    END",
+            "END 입력 = 내어쓰기"
+        );
+        // 괄호 사이
+        let mut b = TextBox::new("p").with_multiline().with_text("f()");
+        b.set_indent(2, true);
+        b.set_focused(true);
+        b.edit.set_caret(2, false);
+        b.on_event(&enter, &mut inv);
+        assert_eq!(b.text(), "f(\n  \n)", "indentOutdent");
+        assert_eq!(b.edit.caret(), 5);
+        // 이탈 시 자동 공백 비움
+        let mut c = TextBox::new("p").with_multiline().with_text("  x");
+        c.set_indent(2, true);
+        c.set_focused(true);
+        c.edit.set_caret(3, false);
+        c.on_event(&enter, &mut inv);
+        assert_eq!(c.text(), "  x\n  ");
+        c.on_event(
+            &InputEvent::Key {
+                key: Key::Up,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(c.text(), "  x\n", "떠나면 공백만 남은 줄은 비움");
+        // 끄면 개행만
+        let mut d = TextBox::new("p").with_multiline().with_text("  x");
+        d.set_auto_indent(
+            AutoIndent {
+                enabled: false,
+                ..AutoIndent::default()
+            },
+            IndentRules::sql(),
+        );
+        d.set_focused(true);
+        d.edit.set_caret(3, false);
+        d.on_event(&enter, &mut inv);
+        assert_eq!(d.text(), "  x\n");
+    }
+
+    /// 단어/서브워드 키 · 스마트 Home · Ctrl+Home/End(사용자 09-17 Sublime 커서 규칙).
+    #[test]
+    fn word_keys_smart_home_and_doc_edges() {
+        let mut t = TextBox::new("p")
+            .with_multiline()
+            .with_text("    sales_customer x\nnext");
+        let key = |k: Key, shift: bool, primary: bool| InputEvent::Key {
+            key: k,
+            shift,
+            primary,
+        };
+        let mut inv = Invalidations::default();
+        t.set_focused(true);
+        t.edit.set_caret(4, false);
+        t.on_event(&key(Key::WordRight, false, false), &mut inv);
+        assert_eq!(t.edit.caret(), 18, "sales_customer|");
+        t.edit.set_caret(4, false);
+        t.on_event(&key(Key::SubwordRight, false, false), &mut inv);
+        assert_eq!(t.edit.caret(), 9, "sales|_");
+        t.on_event(&key(Key::SubwordLeft, true, false), &mut inv);
+        assert_eq!(t.edit.selection(), Some((4, 9)), "Shift = 선택 확장");
+        // 스마트 Home: 첫 글자 → 열 0 → 첫 글자
+        t.edit.set_caret(10, false);
+        t.on_event(&key(Key::Home, false, false), &mut inv);
+        assert_eq!(t.edit.caret(), 4);
+        t.on_event(&key(Key::Home, false, false), &mut inv);
+        assert_eq!(t.edit.caret(), 0);
+        t.on_event(&key(Key::Home, false, false), &mut inv);
+        assert_eq!(t.edit.caret(), 4);
+        t.on_event(&key(Key::End, false, true), &mut inv);
+        assert_eq!(t.edit.caret(), 25, "Ctrl+End = 문서 끝");
+        t.on_event(&key(Key::Home, false, true), &mut inv);
+        assert_eq!(t.edit.caret(), 0, "Ctrl+Home = 문서 처음");
+    }
+
+    /// 뒤→앞으로 드래그한 선택(캐럿이 앞)에서 Ctrl+D → 추가 구간도 캐럿이 앞(사용자 09-17).
+    #[test]
+    fn ctrl_d_keeps_reversed_caret_side() {
+        let mut t = TextBox::new("p").with_multiline().with_text("ab cd ab cd");
+        t.edit.set_selection(2, 0);
+        assert!(t.edit.selection_reversed());
+        assert!(t.select_next_occurrence());
+        assert_eq!(t.edit.selection(), Some((6, 8)));
+        assert_eq!(t.edit.caret(), 6, "새 구간도 캐럿이 앞");
+        assert!(t.edit.selection_reversed());
     }
 
     #[test]
@@ -3216,15 +3853,15 @@ mod minimap_tests {
         t.set_minimap(true);
         paint(&t);
         let band = t.minimap_rect();
-        assert_eq!(band.w, MINIMAP_DEFAULT_WIDTH, "기본 폭 80(배율 1)");
+        assert_eq!(band.w, MINIMAP_DEFAULT_WIDTH, "기본 폭 160(배율 1)");
         assert_eq!(band.right(), 400 - 13, "스크롤바(11+2) 안쪽");
         assert_eq!(band.y, 1);
         assert_eq!(band.h, 298);
         let avail_on = t.ml_avail.get();
-        // 종전 오른쪽 여백 10 → 띠 앞 4 + 띠 80 + 스크롤바 13.
+        // 종전 오른쪽 여백 10 → 띠 앞 4 + 띠(기본 폭) + 스크롤바 13.
         assert_eq!(
             avail_off - avail_on,
-            80 + 4 + 13 - 10,
+            MINIMAP_DEFAULT_WIDTH + 4 + 13 - 10,
             "본문 폭이 그만큼 준다"
         );
         t.set_minimap_width(120);

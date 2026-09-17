@@ -18,15 +18,33 @@ pub struct RgbaIcon {
     pub rgba: Vec<u8>,
 }
 
+/// OS 아이콘 서비스 켜기/끄기(설정 `file.os_icons` · 끄면 조회가 즉시 `None` = 호스트가 코드 도형으로 · 09-17 실행 속도 향상).
+static OS_ICONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_os_icons(on: bool) {
+    OS_ICONS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn os_icons_enabled() -> bool {
+    OS_ICONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 확장자(점 없음 · 소문자) 또는 폴더의 **종류별** 아이콘(디스크 접근 없음).
 #[must_use]
 pub fn icon_for_kind(ext: &str, is_dir: bool, large: bool) -> Option<RgbaIcon> {
+    if !os_icons_enabled() {
+        return None;
+    }
     imp::icon_for_kind(ext, is_dir, large)
 }
 
 /// 실제 경로의 아이콘(특수 폴더·드라이브 — 셸이 경로를 본다 · 느릴 수 있어 사이드바 같은 소수 항목에만).
 #[must_use]
 pub fn icon_for_path(path: &std::path::Path, large: bool) -> Option<RgbaIcon> {
+    if !os_icons_enabled() {
+        return None;
+    }
     imp::icon_for_path(path, large)
 }
 
@@ -949,5 +967,27 @@ mod tests {
         );
         assert!(kind_name("", true).is_some());
         assert!(kind_name("txt", false).is_some());
+    }
+}
+
+/// OS 파일 관리자를 열고 **그 파일을 선택**한다(nexa-sql 탭 메뉴 "파일 위치 열기" · 09-17).
+/// Windows = `explorer.exe /select,<path>` · macOS = `open -R <path>` · Linux = 폴더를 `xdg-open`(선택은 파일 관리자마다 달라 생략).
+/// 프로세스는 분리 실행(기다리지 않음) — 실패는 `Err`(호스트가 상태줄에).
+pub fn reveal_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    {
+        let mut arg = std::ffi::OsString::from("/select,");
+        arg.push(path.as_os_str());
+        Command::new("explorer.exe").arg(arg).spawn().map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-R").arg(path).spawn().map(|_| ())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let dir = path.parent().unwrap_or(path);
+        Command::new("xdg-open").arg(dir).spawn().map(|_| ())
     }
 }

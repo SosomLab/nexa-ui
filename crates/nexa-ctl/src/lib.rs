@@ -41,14 +41,16 @@ pub mod view_mode;
 pub mod widget;
 
 pub use controls::{
-    rgba_from_hex, rgba_to_hex, FiredBy, HAlign, MenuBar, MenuDef, MenuEntry, TabAction, TabBar,
-    TimeoutButton, ToolIcon, ToolItem, ToolTone, Toolbar, VAlign,
+    rgba_from_hex, rgba_to_hex, DockAction, DockLayout, FiredBy, HAlign, MenuBar, MenuDef,
+    MenuEntry, TabAction, TabBar, TimeoutButton, ToolDock, ToolGroup, ToolIcon, ToolItem, ToolTone,
+    Toolbar, VAlign,
 };
 pub use controls::{
-    BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, ColorPanel, ColorPicker, Combo,
-    ComboControl, ComboItem, Control, ControlBase, CtlMsg, EditCtxAction, FlatRow, GridColumn,
-    ImageFit, LabelSide, MenuIcon, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox,
-    TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
+    AutoIndent, BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, ColorPanel,
+    ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg, EditCtxAction,
+    FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon, OccurrenceStyle, PopupHit,
+    RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode,
+    TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};

@@ -19,6 +19,21 @@ use crate::geom::{Point, Rect};
 use crate::theme::{IconImage, Theme};
 use crate::FontSlot;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// 메뉴 항목 아이콘을 그릴지(09-17 nexa-sql "실행 속도 향상" — 우클릭마다 마스크 틴트/래스터 비용 0). 토글 도형은 유지.
+static MENU_ICONS: AtomicBool = AtomicBool::new(true);
+
+/// 메뉴 항목 아이콘 켜기/끄기(전역 · 설정 `ui.menu_icons`).
+pub fn set_menu_icons(on: bool) {
+    MENU_ICONS.store(on, Ordering::Relaxed);
+}
+
+/// 메뉴 항목 아이콘을 그리는가.
+#[must_use]
+pub fn menu_icons_enabled() -> bool {
+    MENU_ICONS.load(Ordering::Relaxed)
+}
 
 // 레이아웃 상수(논리 px).
 const PAD_H: i32 = 12;
@@ -311,16 +326,17 @@ impl ContextMenu {
     }
 
     fn has_icons(&self) -> bool {
-        self.items.iter().any(|it| {
-            matches!(
-                it,
-                CtxItem::Item { icon: Some(_), .. }
-                    | CtxItem::Item {
-                        checked: Some(_),
-                        ..
-                    }
-            )
-        })
+        menu_icons_enabled()
+            && self.items.iter().any(|it| {
+                matches!(
+                    it,
+                    CtxItem::Item { icon: Some(_), .. }
+                        | CtxItem::Item {
+                            checked: Some(_),
+                            ..
+                        }
+                )
+            })
     }
 
     fn has_arrows(&self) -> bool {
@@ -757,7 +773,8 @@ impl ContextMenu {
                         })),
                         _ => None,
                     };
-                    if let Some(ic) = icon.as_ref().or(toggle.as_ref()) {
+                    let icon = icon.as_ref().filter(|_| menu_icons_enabled());
+                    if let Some(ic) = icon.or(toggle.as_ref()) {
                         let sz = self.s(ICON_PX);
                         let img = match &ic.rgba {
                             Some(rgba) if *enabled => {

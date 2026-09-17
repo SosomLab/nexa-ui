@@ -34,6 +34,14 @@ pub enum Key {
     Escape,
     /// Delete(앞으로 삭제) — Backspace는 `Char('\u{8}')`로 온다.
     Delete,
+    /// 단어 왼쪽(Sublime `move by: words` · Win/Linux Ctrl+← · mac ⌥←) — 호스트가 수식키를 번역해 보낸다.
+    WordLeft,
+    /// 단어 오른쪽 끝(Sublime `word_ends`).
+    WordRight,
+    /// 서브워드 왼쪽(`_`·camelCase 경계 · Win/Linux Alt+← · mac ⌃←).
+    SubwordLeft,
+    /// 서브워드 오른쪽.
+    SubwordRight,
 }
 
 /// 위젯이 받는 입력 이벤트.
