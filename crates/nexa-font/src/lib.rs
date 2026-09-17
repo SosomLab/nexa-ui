@@ -372,6 +372,24 @@ fn loaded(mut font: Font, chain: Vec<String>) -> Loaded {
 
 /// UI 글꼴: 한글 UI 본 → 기호 폴백 → 고정폭 폴백. `family`를 주면 그 본을 앞에 두고 시스템 본을 첫 폴백으로.
 #[must_use]
+/// ★ macOS 시스템 UI 글꼴(SF · `/System/Library/Fonts/SFNS.ttf`) — 파인더·시스템 앱의 라틴 글꼴. CoreText는 이 글꼴을
+/// 이름 `.AppleSystemUIFont`로만 연다(".SF NS"·"SF Pro"는 다른 글꼴로 대체됨 · 09-17 실측). 한글은 Apple SD Gothic Neo 폴백.
+#[cfg(target_os = "macos")]
+fn system_latin_font() -> Option<Found> {
+    let data = map_font(Path::new("/System/Library/Fonts/SFNS.ttf"))?;
+    Font::from_static(data, 0).ok()?;
+    Some(Found {
+        data,
+        index: 0,
+        name: ".AppleSystemUIFont",
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_latin_font() -> Option<Found> {
+    None
+}
+
 pub fn ui_font(family: Option<&str>) -> Option<Loaded> {
     let sys = system_ui_font();
     let mut chain = Vec::new();
@@ -395,8 +413,21 @@ pub fn ui_font(family: Option<&str>) -> Option<Loaded> {
         },
         None => {
             let s = sys?;
-            chain.push(s.name.to_string());
-            Font::from_static(s.data, s.index).ok()?
+            // macOS: 라틴 = 시스템 UI 글꼴(SF · 파인더와 같은 얼굴·자간) → 한글 = SD Gothic Neo 폴백(사용자 09-17).
+            match system_latin_font() {
+                Some(l) => {
+                    let mut f = Font::from_static(l.data, l.index).ok()?;
+                    chain.push(l.name.to_string());
+                    if f.push_fallback(s.data, s.index).is_ok() {
+                        chain.push(s.name.to_string());
+                    }
+                    f
+                }
+                None => {
+                    chain.push(s.name.to_string());
+                    Font::from_static(s.data, s.index).ok()?
+                }
+            }
         }
     };
     for f in symbol_fallback_fonts() {
@@ -518,8 +549,9 @@ mod tests {
     fn coretext_path_renders_like_finder() {
         let u = ui_font(None).expect("UI 본");
         nexa_gfx::text::set_text_gdi(true);
-        let text = "Nexa SQL Script_1.sql 한글 결과 0123 Hg";
-        let size = 15.0;
+        let text = "Login List Nexa SQL 한글 결과 0123 Hg";
+        // em 13(파인더 13pt) = SF height/upm 1.1777 × 13.
+        let size = 15.31;
         let w = u.font.measure(text, size);
         assert!(w > 100.0);
         assert!(u.font.glyph_is_subpixel('H', size) || true);
