@@ -2,6 +2,14 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-19 (40차 · mac)** — TextBox 성능: `EditState::rev`/`chars()` · 내용 폭 캐시 · 슬라이스 줄 분해(2 MB 페인트 195→13 ms · ↓ 7.5→0 ms · `examples/bench_editor`) · 목표 열(`goal_x`) · `set_warning`. → [journal](journal/2026-09-18.md)
+- **2026-09-19 (39차 · mac)** — ToolDock 드래그 고스트·다중 행(`;`)·Esc 취소 · TextBox 첫/마지막 줄 ↑/↓ = 줄 끝 · `polyline_clipped`/셰브론 클립 · CtxMenu 토글 = 체크박스. → [journal](journal/2026-09-18.md)
+- **2026-09-19 (38차 · mac)** — `TextBox::set_modified`(왼쪽 강조 띠) · `ButtonTone::Accent` — nexa-sql 접속 폼 바뀜 표시(T-131). → [journal](journal/2026-09-18.md)
+- **2026-09-19 (37차 · mac)** — TabBadge 색: S 초록 · P 강조 파랑 · 끊김 흐림. → [journal](journal/2026-09-18.md)
+- **2026-09-19 (36차 · mac)** — Toolbar 툴팁 클램프 = 도크 폭(오른쪽 그룹 잘림 해결). → [journal](journal/2026-09-18.md)
+- **2026-09-18 (35차 · mac)** — TabBadge = 둥근 바탕 + 연결됨 색 글자 S/P(끊김은 플러그+사선). → [journal](journal/2026-09-18.md)
+- **2026-09-18 (34차 · mac)** — `CtxItem::with_mark`(✓ 체크 표시 · 아이콘 칸 · 글자 열 정렬). → [journal](journal/2026-09-18.md)
+- **2026-09-18 (33차 · mac)** — Toolbar 드롭다운 ▾ 영역 클릭 = `id#drop`(본체와 구별 · nexa-sql Disconnect ▾). → [journal](journal/2026-09-18.md)
 - **2026-09-18 (32차 · mac)** — **`TabBadge`** 탭 앞 표식(이미지 버튼 · 좌클릭 `Badge` / 우클릭 `BadgeContext` · Link/LinkOff/Shared) · `Toolbar/ToolDock::item_rect` · TextBox 단일행: 포커스 없으면 앞부분부터 · 가로 스크롤 표시 자동 숨김. → [journal](journal/2026-09-18.md)
 
 - **2026-09-17 (26차 · win)** — ★ **`ToolDock`** 툴바 그룹 도크(그룹·구분자 계층 · 그립 드래그 순서 · 떼어 내기 액션 · `DockLayout` 문자열 · 툴바 소유 한 곳) · `ToolItem::separator` · `Toolbar::preferred_width/items/item_enabled/clear_hover` · 배지/툴팁/`ToolTone::Custom` · `MenuEntry::Disabled` · TextBox 세로 중앙 · **`OccurrenceStyle`**(1px 선/여백 · 인접 행 선 공유 · 미니맵 색 구분) · nexa-fs `reveal_in_file_manager` → [journal](journal/2026-09-17.md) · **레인보우 괄호 코어**(`controls/pairs.rs` `PairTable` · `TextBox` `BracketOpts`/`set_menu_extras`/`EditCtxAction::Custom` · 형제/상위/하위 이동 · 자동 닫기/감싸기/빈 쌍 Backspace · 깊이 색·짝 없음·현재 쌍 페인트 · `Theme.rainbow` · 245 green)
