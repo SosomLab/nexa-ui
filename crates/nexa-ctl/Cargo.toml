@@ -15,3 +15,7 @@ workspace = true
 # 문자열(i18n)·크기 배율 같은 앱 정책은 전부 **주입**으로 받는다(controls::set_ctl_labels 등).
 [dependencies]
 nexa-gfx.workspace = true
+
+[dev-dependencies]
+# 편집기 벤치 예제(`examples/bench_editor.rs`)용 — 시스템 고정폭 글꼴.
+nexa-font.workspace = true
