@@ -355,6 +355,10 @@ pub struct TextBox {
     /// 사용자가 휠/바로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
     /// vscroll/mhscroll을 그대로 존중(자유 스크롤). 편집(캐럿 이동) 시 거짓으로 리셋.
     ml_user_scrolled: bool,
+    /// **바뀜 표시**(nexa-sql 접속 폼 09-19): 저장본과 다른 칸 = 왼쪽 안쪽 2px 강조 띠(편집기 줄 변경 표시와 같은 어휘).
+    modified: bool,
+    /// 경고 띠(빠진 필수 칸 · nexa-sql 09-19) — `modified`보다 우선 · 색 = `theme.warn`.
+    warning: bool,
     /// 휠의 줄 단위 반올림에서 남은 px(다음 휠 사건에 이월 · 트랙패드 느린 스크롤 · 09-16).
     ml_wheel_rem: std::cell::Cell<i32>,
     /// 줄 경계 스냅(행 단위 스크롤 모드).
@@ -398,6 +402,13 @@ pub struct TextBox {
     sl_range: std::cell::Cell<(i32, i32)>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
+    /// ★ 세로 이동의 **목표 x**(Sublime `xpos` · nexa-sql 사용자 09-19): ↑/↓를 연달아 누르는 동안 처음 출발한 시각 열을
+    /// 기억해, 빈 줄·짧은 줄을 지나도 긴 줄에서 다시 그 열로 돌아온다. 다른 캐럿 이동·편집이면 비운다.
+    goal_x: Option<i32>,
+    /// 내용 폭 캐시 (본문 세대, 글꼴 키, wrap, 폭) — 페인트가 채운다.
+    ml_width_cache: std::cell::Cell<(u64, i32, bool, i32)>,
+    /// 목표 열(글자 수) — 배치가 없을 때(아직 안 그렸음 · 테스트)의 대체 기준.
+    goal_col: Option<usize>,
     /// ★ 단일 행 hover 페이드(회색 계열 · `Slow` 1초 · nexa-sql 사용자 09-14) — 멀티라인(편집기)은 제외.
     hover: crate::tokens::Fade,
     /// 구문 강조(멀티라인 · 옵션) — 줄 단위 스팬을 색으로 그린다.
@@ -541,6 +552,8 @@ impl TextBox {
             vscroll: std::cell::Cell::new(0),
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
+            modified: false,
+            warning: false,
             ml_wheel_rem: std::cell::Cell::new(0),
             scroll_snap: false,
             line_comment: None,
@@ -565,6 +578,9 @@ impl TextBox {
             ml_content: std::cell::Cell::new((0, 0)),
             sl_range: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
+            goal_x: None,
+            ml_width_cache: std::cell::Cell::new((u64::MAX, 0, false, 0)),
+            goal_col: None,
             hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Slow),
             highlighter: None,
             rulers: Vec::new(),
@@ -698,7 +714,7 @@ impl TextBox {
     }
 
     /// 창 안 행들의 앞 `cols`글자 해시(FNV-1a 64) — 캐시 키. 탭은 그대로 섞는다(탭 폭은 별도 키).
-    fn minimap_hash(lines: &[(usize, String)], cols: usize, tab_size: u8) -> u64 {
+    fn minimap_hash(lines: &[(usize, &str)], cols: usize, tab_size: u8) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         let mut mix = |v: u32| {
             h ^= u64::from(v);
@@ -718,7 +734,7 @@ impl TextBox {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn minimap_raster(
         &self,
-        lines: &[(usize, String)],
+        lines: &[(usize, &str)],
         key: &MinimapKey,
         theme: &Theme,
         hl_state: u32,
@@ -1208,8 +1224,8 @@ impl TextBox {
 
     /// 캐럿이 있는 줄의 열(0 기준 · 탭은 다음 정지까지).
     fn caret_column(&self) -> usize {
-        let text = self.edit.text();
-        let chars: Vec<char> = text.chars().collect();
+        // 본문을 다시 만들지 않는다(09-19 성능: 키 하나에 2 MB String + Vec<char> 두 번 만들던 것).
+        let chars: &[char] = self.edit.chars();
         let caret = self.edit.caret().min(chars.len());
         let line_start = chars[..caret]
             .iter()
@@ -1588,62 +1604,107 @@ impl TextBox {
 
     /// 논리 줄 분해 — `(첫 글자 char 인덱스, 줄 문자열)`. `'\n'`은 줄에 안 담고
     /// 다음 줄의 start를 그 뒤로 민다. 빈 텍스트도 한 줄(빈 줄)로 본다.
-    fn logical_lines(text: &str) -> Vec<(usize, String)> {
-        let mut out = Vec::new();
+    /// 논리 줄 = (첫 글자 char 인덱스, 슬라이스) — **줄마다 String을 만들지 않는다**(09-19 성능: 2 MB 본문에서 페인트마다
+    /// 2만 줄 할당이 두 번 있었다 · 지금은 슬라이스 하나씩).
+    fn logical_lines(text: &str) -> Vec<(usize, &str)> {
+        let mut out = Vec::with_capacity(text.len() / 32 + 1);
         let mut line_start = 0usize; // 이 줄 첫 글자의 char 인덱스
+        let mut byte_start = 0usize;
         let mut pos = 0usize; // 지금까지 훑은 char 수
-        let mut cur = String::new();
-        for ch in text.chars() {
+        for (bi, ch) in text.char_indices() {
+            pos += 1;
             if ch == '\n' {
-                out.push((line_start, std::mem::take(&mut cur)));
-                pos += 1;
+                out.push((line_start, &text[byte_start..bi]));
                 line_start = pos; // 다음 줄 시작 = '\n' 바로 뒤
-            } else {
-                cur.push(ch);
-                pos += 1;
+                byte_start = bi + 1;
             }
         }
-        out.push((line_start, cur)); // 마지막 줄(개행으로 안 끝난 부분)
+        out.push((line_start, &text[byte_start..])); // 마지막 줄(개행으로 안 끝난 부분)
         out
     }
 
-    /// 멀티라인 세로 이동(위/아래) — 같은 열을 목표로, 짧은 줄이면 줄 끝으로.
+    /// 캐럿(char 인덱스)의 그린 x — 페인트가 남긴 줄 배치에서(없으면 None).
+    fn caret_x_of(&self, idx: usize) -> Option<i32> {
+        let lay = self.line_lay.borrow();
+        let line = lay.iter().rev().find(|l| l.start_idx <= idx)?;
+        line.xs.get(idx - line.start_idx).copied()
+    }
+
+    /// 줄(첫 글자 인덱스 `start`)에서 목표 x에 가장 가까운 글자 경계 인덱스 — 배치가 없으면 None.
+    fn idx_at_x_in_line(&self, start: usize, x: i32) -> Option<usize> {
+        let lay = self.line_lay.borrow();
+        let line = lay.iter().find(|l| l.start_idx == start)?;
+        let mut best = 0usize;
+        let mut best_d = i32::MAX;
+        for (i, cx) in line.xs.iter().enumerate() {
+            let d = (x - cx).abs();
+            if d < best_d {
+                best_d = d;
+                best = i;
+            }
+        }
+        Some(start + best)
+    }
+
+    /// 멀티라인 세로 이동(위/아래) — **목표 x**(시각 열)를 향해: 처음 ↑/↓에서 지금 캐럿의 x를 목표로 잡고, 이후 연속 이동에서는
+    /// 그 목표를 유지한다(Sublime · VS Code). 짧은 줄은 줄 끝(빈 줄은 1열), 다시 긴 줄이면 목표 열로. 탭·한글(2칸)도 그린 x라
+    /// 정확하다. 배치가 없으면(아직 안 그렸음) 글자 열로 대신한다.
     fn ml_move_vert(&mut self, down: bool, shift: bool) {
-        let text = self.edit.text();
-        let chars: Vec<char> = text.chars().collect();
+        // 본문을 다시 만들지 않는다(09-19 성능: 키 하나에 2 MB String + Vec<char> 두 번 만들던 것).
+        let chars: &[char] = self.edit.chars();
         let caret = self.edit.caret().min(chars.len());
         let line_start = chars[..caret]
             .iter()
             .rposition(|&c| c == '\n')
             .map_or(0, |p| p + 1);
         let col = caret - line_start;
+        // 목표 = 연속 이동이면 유지 · 아니면 지금 캐럿(x 우선 · 배치가 없으면 글자 열).
+        let goal = self.goal_x.or_else(|| self.caret_x_of(caret));
+        let goal_col = self.goal_col.unwrap_or(col);
+        let place = |this: &mut Self, start: usize, end: usize| {
+            let idx = goal
+                .and_then(|gx| this.idx_at_x_in_line(start, gx))
+                .map_or((start + goal_col).min(end), |i| i.min(end));
+            this.edit.set_caret(idx, shift);
+        };
         if down {
             let rel = chars[line_start..].iter().position(|&c| c == '\n');
-            let Some(nl) = rel else { return }; // 마지막 줄 — 아래 없음
+            // 마지막 줄 — 아래가 없으면 **줄 끝**으로(Sublime·VS Code·mac 관례 · nexa-sql 사용자 09-19).
+            let Some(nl) = rel else {
+                self.edit.set_caret(chars.len(), shift);
+                return;
+            };
             let next_start = line_start + nl + 1;
             let next_end = next_start
                 + chars[next_start..]
                     .iter()
                     .position(|&c| c == '\n')
                     .unwrap_or(chars.len() - next_start);
-            self.edit.set_caret((next_start + col).min(next_end), shift);
+            place(self, next_start, next_end);
         } else {
             if line_start == 0 {
-                return; // 첫 줄 — 위 없음
+                // 첫 줄 — 위가 없으면 **줄 맨 앞**으로(관례 · 09-19).
+                self.edit.set_caret(0, shift);
+                self.goal_x = None;
+                self.goal_col = None;
+                return;
             }
             let prev_end = line_start - 1; // '\n' 위치
             let prev_start = chars[..prev_end]
                 .iter()
                 .rposition(|&c| c == '\n')
                 .map_or(0, |p| p + 1);
-            self.edit.set_caret((prev_start + col).min(prev_end), shift);
+            place(self, prev_start, prev_end);
         }
+        // 이번 이동의 목표를 남긴다(다음 ↑/↓가 이어 쓴다).
+        self.goal_x = goal;
+        self.goal_col = Some(goal_col);
     }
 
     /// 멀티라인 줄 처음/끝 인덱스(Home/End).
     fn ml_line_edge(&self, end: bool) -> usize {
-        let text = self.edit.text();
-        let chars: Vec<char> = text.chars().collect();
+        // 본문을 다시 만들지 않는다(09-19 성능: 키 하나에 2 MB String + Vec<char> 두 번 만들던 것).
+        let chars: &[char] = self.edit.chars();
         let caret = self.edit.caret().min(chars.len());
         let start = chars[..caret]
             .iter()
@@ -2043,9 +2104,31 @@ impl TextBox {
         self.edit.set_text(text);
     }
 
+    /// 바뀜 표시(저장본과 다름) 켜기/끄기 — 호스트가 비교해서 넣는다.
+    pub fn set_modified(&mut self, on: bool) {
+        self.modified = on;
+    }
+
+    /// 경고 띠(빠진 필수 칸) — 바뀜 띠와 같은 자리 · 경고가 우선.
+    pub fn set_warning(&mut self, on: bool) {
+        self.warning = on;
+    }
+
     /// 내용이 바뀌었으면 새 텍스트를 꺼낸다(1회성).
     pub fn take_changed(&mut self) -> Option<String> {
         std::mem::take(&mut self.changed).then(|| self.edit.text())
+    }
+
+    /// 본문 변경 세대(캐시 키 · `EditState::rev`) — 호스트가 "저장본과 다른가"·줄/열 같은 O(n) 계산을 세대가 바뀔 때만 한다.
+    #[must_use]
+    pub fn text_rev(&self) -> u64 {
+        self.edit.rev()
+    }
+
+    /// 본문 글자 슬라이스(복사 0).
+    #[must_use]
+    pub fn chars(&self) -> &[char] {
+        self.edit.chars()
     }
 
     /// 캐럿의 **문자 인덱스**(호스트가 "캐럿 위치의 문장" 같은 것을 계산 — nexa-sql Ctrl+Enter 한 문장 실행 · 09-14).
@@ -2213,9 +2296,10 @@ impl TextBox {
         ctx.select_font(FontSlot::Base, false);
         let th = ctx.text_height();
         let lh = self.line_h();
-        let text = self.edit.text();
+        // 본문(String)은 preedit가 있을 때만 새로 만든다 — 없으면 EditState의 char 슬라이스로 바로(09-19 성능).
+        let buf: &[char] = self.edit.chars();
         // 줄번호 거터 폭 — 논리 줄 수의 자릿수 × 숫자 폭 + 여백(줄 수가 변해도 자릿수가 같으면 폭 불변).
-        let logical_count = text.split('\n').count().max(1);
+        let logical_count = (buf.iter().filter(|&&c| c == '\n').count() + 1).max(1);
         // 표시 띠(4px) + 첫 글자 앞 여백(2px) = 거터에 6px 더(줄번호는 그만큼 왼쪽에 머문다).
         let mark_extra = if self.gutter_marks && self.line_numbers && self.multiline {
             self.s(6)
@@ -2248,46 +2332,53 @@ impl TextBox {
         self.ml_avail.set(avail);
 
         // 표시 텍스트 — 조합 중이면 캐럿 자리에 preedit를 끼워 그린다(편집 불변).
-        let chars: Vec<char> = text.chars().collect();
-        let caret_i = self.edit.caret().min(chars.len());
+        let caret_i = self.edit.caret().min(buf.len());
         let preedit_n = self.edit.preedit().chars().count();
-        let display = if preedit_n == 0 {
-            text
+        let display: String = if preedit_n == 0 {
+            buf.iter().collect()
         } else {
-            let before: String = chars[..caret_i].iter().collect();
-            let after: String = chars[caret_i..].iter().collect();
+            let before: String = buf[..caret_i].iter().collect();
+            let after: String = buf[caret_i..].iter().collect();
             format!("{before}{}{after}", self.edit.preedit())
         };
         let disp_caret = caret_i + preedit_n;
         // ★ wrap = 논리 줄을 폭(avail)에 맞춰 소프트 행으로 접는다(공백 경계 선호).
         //   행이 (시작 char 인덱스, 문자열) 계약을 지키므로 선택 반전·히트테스트(line_lay)가
         //   그대로 따라온다.
-        let lines: Vec<(usize, String)> = if self.wrap {
-            let mut rows: Vec<(usize, String)> = Vec::new();
+        let lines: Vec<(usize, &str)> = if self.wrap {
+            let mut rows: Vec<(usize, &str)> = Vec::new();
             for (lstart, lstr) in Self::logical_lines(&display) {
-                let chars: Vec<char> = lstr.chars().collect();
-                if chars.is_empty() {
-                    rows.push((lstart, String::new()));
+                // 글자 경계의 바이트 오프셋(끝 포함) — 행을 슬라이스로 자른다.
+                let bytes: Vec<usize> = lstr
+                    .char_indices()
+                    .map(|(b, _)| b)
+                    .chain(std::iter::once(lstr.len()))
+                    .collect();
+                let n = bytes.len() - 1;
+                if n == 0 {
+                    rows.push((lstart, ""));
                     continue;
                 }
                 let mut wpx = Vec::new();
-                ctx.text_prefix_widths(&lstr, &mut wpx);
+                ctx.text_prefix_widths(lstr, &mut wpx);
                 let mut row_start = 0usize;
-                while row_start < chars.len() {
+                while row_start < n {
                     let base = wpx[row_start];
                     let mut end = row_start + 1;
-                    while end < chars.len() && wpx[end + 1] - base <= avail {
+                    while end < n && wpx[end + 1] - base <= avail {
                         end += 1;
                     }
                     let mut brk = end;
-                    if end < chars.len() {
-                        if let Some(sp) = chars[row_start..end].iter().rposition(|c| *c == ' ') {
+                    if end < n {
+                        let seg = &lstr[bytes[row_start]..bytes[end]];
+                        let seg_chars: Vec<char> = seg.chars().collect();
+                        if let Some(sp) = seg_chars.iter().rposition(|c| *c == ' ') {
                             if sp > 0 {
                                 brk = row_start + sp + 1;
                             }
                         }
                     }
-                    rows.push((lstart + row_start, chars[row_start..brk].iter().collect()));
+                    rows.push((lstart + row_start, &lstr[bytes[row_start]..bytes[brk]]));
                     row_start = brk;
                 }
             }
@@ -2332,13 +2423,24 @@ impl TextBox {
         let mut cw = Vec::new();
         ctx.text_prefix_widths(caret_str, &mut cw);
         let caret_px = cw.get(caret_col).copied().unwrap_or(0);
-        // 콘텐츠 크기(스크롤바·클램프용) — 모든 줄의 최대 폭 + 총 높이. on_event가
-        // 폰트를 못 재므로 여기서 실측해 캐시한다.
-        let content_w = lines
-            .iter()
-            .map(|(_, s)| ctx.text_width(s))
-            .max()
-            .unwrap_or(0);
+        // 콘텐츠 크기(스크롤바·클램프용) — 모든 줄의 최대 폭 + 총 높이. on_event가 폰트를 못 재므로 여기서 실측한다.
+        // ★ 본문 세대(`edit.rev`)·글꼴·wrap이 같으면 **다시 재지 않는다**(09-19 성능: 2 MB 본문에서 페인트마다 전 줄을
+        //   폰트 엔진으로 재던 것이 195ms 중 대부분이었다). preedit는 폭에 넣지 않는다(조합 중 몇 글자).
+        let font_key = ctx.text_width("0");
+        let cache = self.ml_width_cache.get();
+        let content_w = if cache.0 == self.edit.rev() && cache.1 == font_key && cache.2 == self.wrap
+        {
+            cache.3
+        } else {
+            let w = lines
+                .iter()
+                .map(|(_, s)| ctx.text_width(s))
+                .max()
+                .unwrap_or(0);
+            self.ml_width_cache
+                .set((self.edit.rev(), font_key, self.wrap, w));
+            w
+        };
         let content_h = lines.len() as i32 * lh + self.s(16);
         self.ml_content.set((content_w, content_h));
         let max_hs = if self.wrap {
@@ -2382,7 +2484,7 @@ impl TextBox {
         // ★ 동일 출현 외곽선의 바늘: 주 선택(마지막 구간)의 글 — 한 줄 · 공백만이 아님 · 200자 이하.
         let needle: Option<Vec<char>> = if self.occurrence_hl && preedit_n == 0 {
             self.edit.selection().and_then(|(a, e)| {
-                let n: Vec<char> = chars.get(a..e)?.to_vec();
+                let n: Vec<char> = buf.get(a..e)?.to_vec();
                 (n.len() <= 200
                     && !n.is_empty()
                     && !n.contains(&'\n')
@@ -2434,10 +2536,15 @@ impl TextBox {
         } else {
             &self.bracket_opts.colors
         };
-        let logical_starts: Vec<usize> = Self::logical_lines(&display)
-            .into_iter()
-            .map(|(st, _)| st)
-            .collect();
+        // 논리 줄 시작(괄호 짝·거터 표시용) — wrap이 아니면 `lines`가 곧 논리 줄이라 다시 훑지 않는다.
+        let logical_starts: Vec<usize> = if self.wrap {
+            Self::logical_lines(&display)
+                .into_iter()
+                .map(|(st, _)| st)
+                .collect()
+        } else {
+            lines.iter().map(|(st, _)| *st).collect()
+        };
         let mut lay = self.line_lay.borrow_mut();
         lay.clear();
         let dx = tx - hs; // 가로 스크롤 반영 시작 x
@@ -3465,7 +3572,7 @@ impl TextBox {
                         inv.push(self.base.bounds);
                     }
                     Key::End if primary && self.multiline => {
-                        let n = self.edit.text().chars().count();
+                        let n = self.edit.chars().len();
                         self.edit.set_caret(n, shift);
                         self.ml_user_scrolled = false;
                         inv.push(self.base.bounds);
@@ -3474,8 +3581,7 @@ impl TextBox {
                         if self.multiline {
                             // ★ 스마트 Home(Sublime `bol`): 첫 글자(들여쓰기 뒤)로 · 이미 거기면 열 0.
                             let hard = self.ml_line_edge(false);
-                            let text = self.edit.text();
-                            let chars: Vec<char> = text.chars().collect();
+                            let chars: &[char] = self.edit.chars();
                             let mut soft = hard;
                             while soft < chars.len() && (chars[soft] == ' ' || chars[soft] == '\t')
                             {
@@ -3545,6 +3651,23 @@ impl Widget for TextBox {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         let before = self.edit.undo_len();
+        // ↑/↓(수식키 없이 · Shift 확장 포함)만 목표 x를 이어 쓴다 — 그 밖의 입력(←/→·Home/End·클릭·타이핑·휠은 제외)은 목표를 비운다.
+        let vertical = matches!(
+            ev,
+            InputEvent::Key {
+                key: Key::Up | Key::Down,
+                primary: false,
+                ..
+            }
+        );
+        let scrolling = matches!(
+            ev,
+            InputEvent::Wheel { .. } | InputEvent::HWheel { .. } | InputEvent::MouseMove { .. }
+        );
+        if !vertical && !scrolling {
+            self.goal_x = None;
+            self.goal_col = None;
+        }
         self.on_event_inner(ev, inv);
         // 편집이 있었으면(되돌리기 스택 변화 · 붙여넣기/삭제/타이핑 전부) 줄 변경 표시를 다시 계산(페인트에서).
         if self.changed || self.edit.undo_len() != before {
@@ -3579,6 +3702,19 @@ impl Widget for TextBox {
             ctx.fill_round_rect_alpha(b, self.s(6), theme.text, hov);
         }
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
+        if self.warning || self.modified {
+            // 왼쪽 안쪽 띠(테두리 안 · 둥근 모서리 피해 위아래 4px 들여서) — 경고(빠진 필수 칸) > 바뀜.
+            let m = self.s(4);
+            let c = if self.warning {
+                theme.warn
+            } else {
+                theme.accent
+            };
+            ctx.fill_rect(
+                Rect::new(b.x + 1, b.y + m, self.s(2).max(1), (b.h - m * 2).max(1)),
+                c,
+            );
+        }
         if self.focus_ring {
             self.draw_focus_ring(ctx, theme, b);
         }
@@ -3816,6 +3952,47 @@ mod tests {
             t.on_event(&ch(c), &mut inv);
         }
         assert_eq!(t.text(), "abX\ncd", "Up = 윗줄 같은 열");
+        // 첫 줄에서 Up = 줄 맨 앞 · 마지막 줄에서 Down = 줄 끝(09-19).
+        t.on_event(&key(Key::Up), &mut inv);
+        t.on_event(&ch('^'), &mut inv);
+        assert_eq!(t.text(), "^abX\ncd", "첫 줄 Up = 맨 앞");
+        t.on_event(&key(Key::Down), &mut inv);
+        t.on_event(&key(Key::Down), &mut inv);
+        t.on_event(&ch('$'), &mut inv);
+        assert_eq!(t.text(), "^abX\ncd$", "마지막 줄 Down = 줄 끝");
+    }
+
+    /// 목표 열 유지(Sublime · 09-19): 4열에서 출발 → 빈 줄(1열) → 3열짜리 줄(끝) → 긴 줄이면 다시 4열 · ←/→면 목표 초기화.
+    #[test]
+    fn vertical_move_keeps_goal_column() {
+        let mut t = TextBox::new("p").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 200, 80), &mut inv);
+        t.set_focused(true);
+        let key = |k| InputEvent::Key {
+            key: k,
+            shift: false,
+            primary: false,
+        };
+        t.set_text("abcdefg\n\nabc\nabcdefg");
+        // 1행 4열(인덱스 4).
+        t.select_range(4, 4, &mut inv);
+        t.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(t.caret(), 8, "빈 줄 = 1열");
+        t.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(t.caret(), 12, "3열짜리 줄 = 끝(3열)");
+        t.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(t.caret(), 13 + 4, "긴 줄 = 다시 4열");
+        t.on_event(&key(Key::Up), &mut inv);
+        t.on_event(&key(Key::Up), &mut inv);
+        t.on_event(&key(Key::Up), &mut inv);
+        assert_eq!(t.caret(), 4, "위로 돌아와도 4열");
+        // ← 뒤엔 새 열이 목표.
+        t.on_event(&key(Key::Left), &mut inv);
+        t.on_event(&key(Key::Down), &mut inv);
+        t.on_event(&key(Key::Down), &mut inv);
+        t.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(t.caret(), 13 + 3);
     }
 
     /// 논리 줄 분해 — 첫 글자 char 인덱스가 정확해야 클릭 매핑이 맞는다.
@@ -3823,9 +4000,9 @@ mod tests {
     fn logical_lines_indices() {
         let v = TextBox::logical_lines("ab\ncde\n");
         assert_eq!(v.len(), 3);
-        assert_eq!(v[0], (0, "ab".to_string()));
-        assert_eq!(v[1], (3, "cde".to_string()));
-        assert_eq!(v[2], (7, String::new()));
+        assert_eq!(v[0], (0, "ab"));
+        assert_eq!(v[1], (3, "cde"));
+        assert_eq!(v[2], (7, ""));
     }
 
     #[test]
