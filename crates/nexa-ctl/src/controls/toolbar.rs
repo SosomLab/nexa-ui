@@ -130,6 +130,7 @@ impl ToolItem {
 
     /// 드롭다운 화살표(체이닝).
     #[must_use]
+    /// ▾ 영역을 누르면 클릭 id가 `"<id>#drop"`으로 온다(본체 = 기본 동작 · ▾ = 목록).
     pub fn with_dropdown(mut self) -> Self {
         self.dropdown = true;
         self
@@ -441,6 +442,17 @@ impl Toolbar {
     /// hover 항목의 툴팁을 그린다(08-23) — **팝업 레이어**에서 부른다(다른
     /// 크롬(필터 바 등)이 바 아래 띠를 덮으므로 paint 안에서 그리면 가려진다).
     pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        // 혼자 있는 바(플로팅 창)는 자기 폭보다 넓게 허용(창이 좁아도 툴팁은 보이게).
+        let x1 = self
+            .base
+            .bounds
+            .right()
+            .max(self.base.bounds.x + self.s(240));
+        self.paint_tooltip_in(ctx, theme, (self.base.bounds.x, x1));
+    }
+
+    /// 툴팁을 `clamp_x = (x0, x1)` 안에 — 도크가 **창 폭**을 준다(오른쪽 끝 그룹의 툴팁이 창 밖으로 잘리던 것 · nexa-sql 09-19).
+    pub fn paint_tooltip_in(&self, ctx: &mut dyn DrawCtx, theme: &Theme, clamp_x: (i32, i32)) {
         if let Some(i) = self.hover {
             if self.items[i].visible && !self.items[i].tip.is_empty() {
                 let mut anchor = self.slot_rect(i);
@@ -456,10 +468,7 @@ impl Toolbar {
                     ctx,
                     theme,
                     anchor,
-                    (
-                        self.base.bounds.x,
-                        self.base.bounds.right().max(anchor.right() + self.s(240)),
-                    ),
+                    clamp_x,
                     &self.items[i].tip,
                     self.base.scale,
                 );
@@ -530,7 +539,16 @@ impl Widget for Toolbar {
             InputEvent::MouseUp { x, y } => {
                 if let Some(i) = self.pressed.take() {
                     if self.item_at(x, y) == Some(i) {
-                        self.clicked = Some(self.items[i].id.clone());
+                        // 드롭다운 항목의 ▾ 영역(오른쪽 DROP_W)에서 놓으면 `id#drop` — 호스트가 본체 클릭과 구별한다(nexa-sql Disconnect ▾ 09-18).
+                        let it = &self.items[i];
+                        let slot = self.slot_rect(i);
+                        let on_drop = it.dropdown
+                            && x >= slot.right() - self.s(DROP_W) - self.s(self.slot_pad);
+                        self.clicked = Some(if on_drop {
+                            format!("{}#drop", it.id)
+                        } else {
+                            it.id.clone()
+                        });
                     }
                     inv.push(self.base.bounds);
                 }
@@ -549,7 +567,15 @@ impl Widget for Toolbar {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        self.paint_offset(ctx, theme, 0, 0);
+    }
+}
+
+impl Toolbar {
+    /// 자기 자리에서 (dx, dy)만큼 옮겨 그린다 — 도크가 드래그 고스트(이동 대상이 보이는 채 끌기 · 09-19)를 그릴 때.
+    pub fn paint_offset(&self, ctx: &mut dyn DrawCtx, theme: &Theme, dx: i32, dy: i32) {
         let b = self.base.bounds;
+        let b = Rect::new(b.x + dx, b.y + dy, b.w, b.h);
         ctx.fill_rect(b, theme.chrome_bg);
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
         for (i, it) in self.items.iter().enumerate() {
@@ -557,6 +583,7 @@ impl Widget for Toolbar {
                 continue;
             }
             let slot = self.slot_rect(i);
+            let slot = Rect::new(slot.x + dx, slot.y + dy, slot.w, slot.h);
             if it.separator {
                 let lx = slot.x + slot.w / 2;
                 let inset = self.s(4);

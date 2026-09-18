@@ -63,6 +63,8 @@ pub enum ButtonTone {
     Safe,
     /// 되돌림·위험(붉은 벽돌 = theme.danger · 예: 인증 취소).
     Danger,
+    /// 강조(theme.accent · 예: 저장하지 않은 변경이 있어 눌러야 하는 Save · nexa-sql 09-19).
+    Accent,
 }
 
 /// 버튼 컨트롤(이미지 버튼 포함 — 별도 컨트롤로 나누지 않음 · 사용자 확정).
@@ -417,6 +419,7 @@ impl Widget for Button {
                     ),
                     ButtonTone::Safe => (dim_if(theme.ok, self.pressed), on),
                     ButtonTone::Danger => (dim_if(theme.danger, self.pressed), on),
+                    ButtonTone::Accent => (dim_if(theme.accent, self.pressed), on),
                 };
                 ctx.fill_round_rect(b, radius, bg);
                 if matches!(self.tone, ButtonTone::Default) {
