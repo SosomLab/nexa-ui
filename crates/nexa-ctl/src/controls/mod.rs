@@ -671,6 +671,17 @@ pub fn draw_chevron_down(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
 /// ★ 펼침/접힘 셰브론(nexa-dir2 파일 그리드와 같은 모양 · 꺾임 **90°** · 사용자 09-15 "dir2 모양 그대로").
 /// `area` 한 변 = 글꼴 높이 정도 · 다리 길이 = 변의 0.32 · `expanded` = ∨ · 아니면 ›. 색은 호출자(접힘 = 흐림 · 펼침/hover = 본문).
 pub fn draw_chevron_90(ctx: &mut dyn DrawCtx, area: Rect, color: Color, expanded: bool) {
+    draw_chevron_90_in(ctx, area, color, expanded, None);
+}
+
+/// [`draw_chevron_90`]에 클립 — 부분적으로 보이는 행(스크롤로 반쯤 잘린 행)에서도 보이는 부분만 그린다(nexa-sql 09-19).
+pub fn draw_chevron_90_in(
+    ctx: &mut dyn DrawCtx,
+    area: Rect,
+    color: Color,
+    expanded: bool,
+    clip: Option<Rect>,
+) {
     let cx = area.x + area.w / 2;
     let cy = area.y + area.h / 2;
     let len = (area.w as f32 * 0.32).max(3.0);
@@ -691,7 +702,10 @@ pub fn draw_chevron_90(ctx: &mut dyn DrawCtx, area: Rect, color: Color, expanded
             (cx - a / 2, cy + b),
         ]
     };
-    ctx.polyline(&pts, color, w);
+    match clip {
+        Some(c) => ctx.polyline_clipped(&pts, color, w, c),
+        None => ctx.polyline(&pts, color, w),
+    }
 }
 
 pub fn draw_chevron_right(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {

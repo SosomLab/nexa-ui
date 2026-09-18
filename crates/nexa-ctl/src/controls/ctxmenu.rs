@@ -117,6 +117,9 @@ pub enum CtxItem {
         checked: Option<bool>,
         /// 현재 선택된 항목(라디오 의미) — 아이콘·라벨을 강조색으로(hover 행은 반전 그대로 · nexa-sql 보기 모드 09-16).
         active: bool,
+        /// **체크 표시**(✓ · 아이콘 칸) — 목록 중 "지금 것". `Some(_)`인 항목이 하나라도 있으면(체크가 하나도 안 켜져 있어도)
+        /// 전 행이 그 칸을 비워 두어 글자가 늘 같은 열에 놓인다 · 메뉴 아이콘 설정과 무관(nexa-sql 탭 연결 목록 09-18).
+        mark: Option<bool>,
     },
     /// 구분선.
     Separator,
@@ -135,6 +138,7 @@ impl CtxItem {
             children: Vec::new(),
             checked: None,
             active: false,
+            mark: None,
         }
     }
     /// 활성 여부를 지정한 항목.
@@ -149,6 +153,7 @@ impl CtxItem {
             children: Vec::new(),
             checked: None,
             active: false,
+            mark: None,
         }
     }
     /// 하위 메뉴 항목(라벨 + 자식 목록 · 활성 자식이 없으면 비활성).
@@ -170,6 +175,7 @@ impl CtxItem {
             children,
             checked: None,
             active: false,
+            mark: None,
         }
     }
     /// 아이콘 붙이기(빌더).
@@ -195,6 +201,15 @@ impl CtxItem {
     pub fn with_active(mut self, on: bool) -> Self {
         if let Self::Item { active, .. } = &mut self {
             *active = on;
+        }
+        self
+    }
+
+    /// ✓ 체크 표시(라디오 목록의 "지금 것").
+    #[must_use]
+    pub fn with_mark(mut self, on: bool) -> Self {
+        if let Self::Item { mark, .. } = &mut self {
+            *mark = Some(on);
         }
         self
     }
@@ -326,17 +341,22 @@ impl ContextMenu {
     }
 
     fn has_icons(&self) -> bool {
-        menu_icons_enabled()
-            && self.items.iter().any(|it| {
-                matches!(
-                    it,
-                    CtxItem::Item { icon: Some(_), .. }
-                        | CtxItem::Item {
-                            checked: Some(_),
-                            ..
-                        }
-                )
-            })
+        let any_mark = self
+            .items
+            .iter()
+            .any(|it| matches!(it, CtxItem::Item { mark: Some(_), .. }));
+        any_mark
+            || (menu_icons_enabled()
+                && self.items.iter().any(|it| {
+                    matches!(
+                        it,
+                        CtxItem::Item { icon: Some(_), .. }
+                            | CtxItem::Item {
+                                checked: Some(_),
+                                ..
+                            }
+                    )
+                }))
     }
 
     fn has_arrows(&self) -> bool {
@@ -742,6 +762,7 @@ impl ContextMenu {
                     children,
                     checked,
                     active,
+                    mark,
                     ..
                 } => {
                     let h = self.row_h();
@@ -765,32 +786,35 @@ impl ContextMenu {
                     let mut x = r.x + self.s(PAD_H);
                     // 아이콘(상태색 틴트 · 세로 중앙) — 없는 행도 칸은 비워 둔다(글자 세로 정렬).
                     // 토글 항목은 켜짐/꺼짐 도형이 아이콘 칸에(항목 아이콘이 따로 있으면 그것 우선).
-                    let toggle = match (icon.is_some(), checked) {
-                        (false, Some(on)) => Some(super::glyph(if *on {
-                            super::GlyphKind::ToggleOn
-                        } else {
-                            super::GlyphKind::ToggleOff
-                        })),
-                        _ => None,
-                    };
                     let icon = icon.as_ref().filter(|_| menu_icons_enabled());
-                    if let Some(ic) = icon.or(toggle.as_ref()) {
+                    // 토글 항목(`checked`) = **일반 체크박스**(nexa-sql 로그 창 사용자 09-19 "스위치는 보기 불편") — 종전의
+                    // 스위치 글리프(ToggleOn/Off)는 켜짐이 손잡이 위치로만 보여 알아보기 어려웠다. 아이콘이 있으면 아이콘이 우선.
+                    if icon.is_none() {
+                        if let Some(on) = checked {
+                            let sz = self.s(ICON_PX);
+                            let bx = sz * 3 / 4;
+                            let area = Rect::new(x + (sz - bx) / 2, y + (h - bx) / 2, bx, bx);
+                            super::draw_checkbox_glyph(ctx, theme, area, *on && *enabled, true);
+                        }
+                    }
+                    if *mark == Some(true) {
+                        // ✓ 체크 표시 — 로그인 목록의 체크 상자와 같은 글리프(부품 재사용).
+                        let sz = self.s(ICON_PX);
+                        let area = Rect::new(
+                            x + sz / 6,
+                            y + (h - sz) / 2 + sz / 6,
+                            sz * 2 / 3,
+                            sz * 2 / 3,
+                        );
+                        super::draw_check_mark(ctx, area, fg);
+                    } else if let Some(ic) = icon {
                         let sz = self.s(ICON_PX);
                         let img = match &ic.rgba {
                             Some(rgba) if *enabled => {
                                 IconImage::from_rgba(ic.w, ic.h, rgba.to_vec())
                             }
                             _ => {
-                                // 토글 켜짐 = Switch 컨트롤과 같은 초록 — 손잡이 위치만으로는 켜짐이 잘 안 보인다(사용자 09-16).
-                                let tint = if icon.is_none()
-                                    && *enabled
-                                    && matches!(checked, Some(true))
-                                {
-                                    super::switch::ON_GREEN
-                                } else {
-                                    fg
-                                };
-                                let (cr, cg, cb) = tint.rgb();
+                                let (cr, cg, cb) = fg.rgb();
                                 IconImage::from_alpha_tinted(ic.w, ic.h, &ic.alpha, (cr, cg, cb))
                             }
                         };

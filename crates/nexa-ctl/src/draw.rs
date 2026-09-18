@@ -206,6 +206,12 @@ pub trait DrawCtx {
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
         let _ = (pts, color, width);
     }
+
+    /// [`Self::polyline`]에 클립 — `clip` 밖은 그리지 않는다(부분적으로 잘린 행의 셰브론 · nexa-sql 09-19). 기본 = 클립 없이.
+    fn polyline_clipped(&mut self, pts: &[(i32, i32)], color: Color, width: f32, clip: Rect) {
+        let _ = clip;
+        self.polyline(pts, color, width);
+    }
 }
 
 /// 공용 툴팁(08-23 — 툴바·필터 바): `anchor` 아래 6px에 역상 캡슐(어두운 바탕 +

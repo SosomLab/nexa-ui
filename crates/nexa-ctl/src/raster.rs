@@ -681,6 +681,16 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
+        self.polyline_in(pts, color, width, None);
+    }
+
+    fn polyline_clipped(&mut self, pts: &[(i32, i32)], color: Color, width: f32, clip: Rect) {
+        self.polyline_in(pts, color, width, Some(clip));
+    }
+}
+
+impl RasterCtx<'_, '_, '_> {
+    fn polyline_in(&mut self, pts: &[(i32, i32)], color: Color, width: f32, clip: Option<Rect>) {
         if pts.len() < 2 {
             return;
         }
@@ -690,7 +700,13 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             let pad = half_w.ceil() as i32 + 1;
             let x0 = a.0.min(b.0) - pad;
             let y0 = a.1.min(b.1) - pad;
-            let area = Rect::new(x0, y0, (a.0.max(b.0) + pad) - x0, (a.1.max(b.1) + pad) - y0);
+            let mut area = Rect::new(x0, y0, (a.0.max(b.0) + pad) - x0, (a.1.max(b.1) + pad) - y0);
+            if let Some(c) = clip {
+                area = area.intersection(&c);
+                if area.w <= 0 || area.h <= 0 {
+                    continue;
+                }
+            }
             let (ax, ay, bx, by) = (a.0 as f32, a.1 as f32, b.0 as f32, b.1 as f32);
             self.coverage_fill(area, color, move |x, y| {
                 seg_dist(x, y, ax, ay, bx, by) - half_w

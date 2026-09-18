@@ -30,6 +30,9 @@ pub enum EditKey {
 #[derive(Clone, Debug)]
 pub struct EditState {
     buf: Vec<char>,
+    /// ★ 본문 변경 세대(nexa-sql 09-19 성능): 버퍼가 바뀔 때마다 +1 — 페인트의 O(n) 계산(내용 폭·줄 분해)·호스트의
+    /// "저장본과 다른가" 판정이 본문을 다시 훑는 대신 이 값으로 캐시를 판단한다.
+    rev: u64,
     caret: usize,
     anchor: Option<usize>,
     /// 추가 선택/캐럿(Sublime find_under_expand = Ctrl+D · 열 선택 · nexa-sql 09-15) — `(anchor, caret)`.
@@ -73,6 +76,7 @@ impl Default for EditState {
     fn default() -> Self {
         EditState {
             buf: Vec::new(),
+            rev: 0,
             caret: 0,
             anchor: None,
             extra: Vec::new(),
@@ -139,6 +143,7 @@ impl EditState {
     }
 
     fn restore(&mut self, s: Snap) {
+        self.rev = self.rev.wrapping_add(1);
         self.buf = s.buf;
         self.caret = s.caret.min(self.buf.len());
         self.anchor = s.anchor.map(|a| a.min(self.buf.len()));
@@ -208,6 +213,18 @@ impl EditState {
     #[must_use]
     pub fn text(&self) -> String {
         self.buf.iter().collect()
+    }
+
+    /// 본문 변경 세대 — 같은 값이면 본문이 같다(캐시 키).
+    #[must_use]
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
+    /// 본문 글자 슬라이스(복사 0) — 캐럿 이동·줄 계산이 `text()`로 String을 다시 만들지 않게.
+    #[must_use]
+    pub fn chars(&self) -> &[char] {
+        &self.buf
     }
 
     /// 비어 있는가.
@@ -283,6 +300,7 @@ impl EditState {
             self.anchor = None;
             return false;
         };
+        self.rev = self.rev.wrapping_add(1);
         self.buf.drain(a..b);
         self.caret = a;
         self.anchor = None;
@@ -435,9 +453,11 @@ impl EditState {
                 }
             }
             if removed > 0 {
+                self.rev = self.rev.wrapping_add(1);
                 self.buf.drain(a2..a2 + removed);
             }
             for (i, c) in ins.iter().enumerate() {
+                self.rev = self.rev.wrapping_add(1);
                 self.buf.insert(a2 + i, *c);
             }
             delta += ins.len() as isize - removed as isize;
@@ -464,6 +484,7 @@ impl EditState {
             return;
         }
         self.delete_selection();
+        self.rev = self.rev.wrapping_add(1);
         self.buf.insert(self.caret, c);
         self.caret += 1;
     }
@@ -478,6 +499,7 @@ impl EditState {
         }
         self.delete_selection();
         for c in s.chars() {
+            self.rev = self.rev.wrapping_add(1);
             self.buf.insert(self.caret, c);
             self.caret += 1;
         }
@@ -496,6 +518,7 @@ impl EditState {
         self.record(EditOp::Delete, self.anchor.is_some());
         if !self.delete_selection() && self.caret > 0 {
             self.caret -= 1;
+            self.rev = self.rev.wrapping_add(1);
             self.buf.remove(self.caret);
         }
     }
@@ -537,6 +560,7 @@ impl EditState {
 
     /// 전체 교체(캐럿 끝·선택 해제).
     pub fn set_text(&mut self, text: &str) {
+        self.rev = self.rev.wrapping_add(1);
         self.buf = text.chars().collect();
         self.caret = self.buf.len();
         self.anchor = None;
@@ -618,6 +642,7 @@ impl EditState {
                 }
                 self.record(EditOp::Delete, self.anchor.is_some());
                 if !self.delete_selection() && self.caret < self.buf.len() {
+                    self.rev = self.rev.wrapping_add(1);
                     self.buf.remove(self.caret);
                 }
             }

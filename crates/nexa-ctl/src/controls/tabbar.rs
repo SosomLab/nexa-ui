@@ -55,11 +55,11 @@ pub enum TabBadge {
     /// 표식 없음(폭도 차지하지 않는다).
     #[default]
     None,
-    /// 연결됨 — 강조색 플러그.
+    /// 전용 연결됨 — 연결됨 색의 글자 **P**.
     Link,
-    /// 끊김 — 흐린 플러그 + 사선.
+    /// 끊김/미연결 — 흐린 플러그 + 사선.
     LinkOff,
-    /// 공유 연결(여럿 중 하나를 쓰는 탭) — 중립색 플러그. 전용([`TabBadge::Link`] 강조색)과 색으로 구별한다.
+    /// 공유 연결됨 — 연결됨 색의 글자 **S**.
     Shared,
 }
 
@@ -563,21 +563,29 @@ impl TabBar {
 
     /// 앞 표식 — 둥근 상자(버튼 바탕) + 플러그 글리프(두 갈래 · 몸통 · 선). 끊김 = 흐림 + 사선.
     fn draw_badge(&self, ctx: &mut dyn DrawCtx, r: Rect, kind: TabBadge, theme: &Theme, st: State) {
-        let on = kind != TabBadge::LinkOff;
-        let color = match kind {
-            TabBadge::Link => self.tab_accent(theme),
-            TabBadge::Shared => theme.text,
-            _ => theme.text_dim,
-        };
+        // 바탕은 늘 둥근 사각형(nexa-sql 09-18) · 연결됨 = "연결됨 색"(Switch 켜짐 초록)의 글자 **S**(공유)/**P**(전용) ·
+        // 끊김/미연결 = 흐린 플러그 + 사선(그대로).
         let radius = (r.w / 4).max(2);
-        // 버튼 바탕: 옅은 색조 + 테두리 느낌의 상태 레이어(hover/눌림).
-        let tint = match kind {
-            TabBadge::Link => 0.18,
-            _ => 0.10,
+        let on = kind != TabBadge::LinkOff;
+        // 색(nexa-sql 09-19): **S 공유 = 초록**(연결됨 · 평상시 상태 · Switch 켜짐과 같은 뜻) · **P 전용 = 강조색(파랑)**(예외적·격리된
+        // 연결 = "이 탭만 다르다"는 신호 · 탭 강조선과 같은 계열) · 끊김/미연결 = 흐림 · 끊김 확인은 호스트가 빨강으로 따로 알린다.
+        let color = match kind {
+            TabBadge::Shared => super::switch::ON_GREEN,
+            TabBadge::Link => self.tab_accent(theme),
+            TabBadge::LinkOff | TabBadge::None => theme.text_dim,
         };
-        ctx.fill_round_rect_alpha(r, radius, color, tint);
+        ctx.fill_round_rect_alpha(r, radius, color, if on { 0.16 } else { 0.10 });
         if st.overlay_alpha() > 0.0 {
             ctx.fill_round_rect_alpha(r, radius, theme.text, st.overlay_alpha());
+        }
+        if on {
+            let letter = if kind == TabBadge::Link { "P" } else { "S" };
+            ctx.select_font(FontSlot::Base, true);
+            let tw = ctx.text_width(letter);
+            let ty = ctx.text_center_y(r.y, r.h);
+            ctx.text(r.x + (r.w - tw) / 2, ty, r, letter, color);
+            ctx.select_font(FontSlot::Base, false);
+            return;
         }
         let w = (r.w as f32 / 11.0).max(1.2);
         let cx = r.x + r.w / 2;
@@ -602,14 +610,12 @@ impl TabBar {
             color,
             w,
         );
-        if !on {
-            let m = (r.w / 5).max(2);
-            ctx.polyline(
-                &[(r.x + m, r.bottom() - m), (r.right() - m, r.y + m)],
-                theme.text_dim,
-                w,
-            );
-        }
+        let m = (r.w / 5).max(2);
+        ctx.polyline(
+            &[(r.x + m, r.bottom() - m), (r.right() - m, r.y + m)],
+            theme.text_dim,
+            w,
+        );
     }
 
     fn draw_plus_glyph(&self, ctx: &mut dyn DrawCtx, r: Rect, color: Color) {
