@@ -61,6 +61,8 @@ pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};
+pub mod merge3;
+pub use merge3::{merge3, Merge3};
 pub use theme::{
     color_contrast, color_from_hex, color_to_hex, contrast_order, is_warm, Color, FontPrefs,
     IconImage, SlotFont, Theme,

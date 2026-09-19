@@ -55,10 +55,78 @@ pub struct EditState {
     preedit: String,
 }
 
+/// 히스토리 스냅샷의 본문 — **전체 복사는 맨 위 하나뿐**(nexa-sql 09-19 메모리 점검: 종전에는 묶음마다 `Vec<char>` 전체를
+/// 복사해, 3.6 MB 스크립트면 단어 하나에 14.6 MB · 상한 1,000개면 수백 MB~GB까지 쌓였다).
+///
+/// 규약: 되돌리기 스택의 k번째 항목은 "그다음 상태에 적용하면 k번째 상태가 되는 **차이**"다. 다음 상태를 아직 모르는 맨 위
+/// 항목만 `Full`이고, 새 묶음을 기록하는 순간(그때의 버퍼 = 다음 상태) 차이로 접는다. 다시 실행 스택은 늘 차이다.
+#[derive(Clone, Debug)]
+enum SnapBuf {
+    Full(Vec<char>),
+    /// 적용 대상의 `[pre, pre + del_len)`을 `ins`로 바꾼다.
+    Delta {
+        pre: usize,
+        del_len: usize,
+        ins: Vec<char>,
+    },
+}
+
+impl SnapBuf {
+    /// `from`에 적용하면 `to`가 되는 차이(공통 앞·뒤를 뺀 가운데).
+    fn delta(from: &[char], to: &[char]) -> SnapBuf {
+        let mut pre = 0;
+        while pre < from.len() && pre < to.len() && from[pre] == to[pre] {
+            pre += 1;
+        }
+        let mut suf = 0;
+        while suf < from.len() - pre
+            && suf < to.len() - pre
+            && from[from.len() - 1 - suf] == to[to.len() - 1 - suf]
+        {
+            suf += 1;
+        }
+        SnapBuf::Delta {
+            pre,
+            del_len: from.len() - suf - pre,
+            ins: to[pre..to.len() - suf].to_vec(),
+        }
+    }
+
+    /// `buf`에 적용하고, **되돌리는 차이**(적용 뒤의 버퍼에 적용하면 적용 전이 된다)를 돌려준다.
+    fn apply(self, buf: &mut Vec<char>) -> SnapBuf {
+        match self {
+            SnapBuf::Full(prev) => {
+                let inverse = SnapBuf::delta(&prev, buf);
+                *buf = prev;
+                inverse
+            }
+            SnapBuf::Delta { pre, del_len, ins } => {
+                let pre = pre.min(buf.len());
+                let end = (pre + del_len).min(buf.len());
+                let ins_len = ins.len();
+                let removed: Vec<char> = buf.splice(pre..end, ins).collect();
+                SnapBuf::Delta {
+                    pre,
+                    del_len: ins_len,
+                    ins: removed,
+                }
+            }
+        }
+    }
+
+    /// 이 항목이 쥐고 있는 글자 수(진단·테스트 — 메모리 = × 4바이트).
+    fn held_chars(&self) -> usize {
+        match self {
+            SnapBuf::Full(v) => v.len(),
+            SnapBuf::Delta { ins, .. } => ins.len(),
+        }
+    }
+}
+
 /// 히스토리 스냅샷.
 #[derive(Clone, Debug)]
 struct Snap {
-    buf: Vec<char>,
+    buf: SnapBuf,
     caret: usize,
     anchor: Option<usize>,
     extra: Vec<(usize, usize)>,
@@ -119,9 +187,26 @@ impl EditState {
         self.undo.len()
     }
 
-    fn snap(&self) -> Snap {
+    /// 히스토리가 쥐고 있는 글자 수(되돌리기 + 다시 실행 · 진단·테스트 — 메모리 ≈ × 4바이트).
+    #[must_use]
+    pub fn history_chars(&self) -> usize {
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .map(|s| s.buf.held_chars())
+            .sum()
+    }
+
+    /// 히스토리를 비운다(호스트의 메모리 회수 — 보이지 않는 큰 탭 · 닫기 직전).
+    pub fn clear_history(&mut self) {
+        self.undo = Vec::new();
+        self.redo = Vec::new();
+        self.last_op = None;
+    }
+
+    fn snap_with(&self, buf: SnapBuf) -> Snap {
         Snap {
-            buf: self.buf.clone(),
+            buf,
             caret: self.caret,
             anchor: self.anchor,
             extra: self.extra.clone(),
@@ -133,7 +218,13 @@ impl EditState {
         if self.last_op == Some(op) && !boundary {
             return;
         }
-        let s = self.snap();
+        // 지금 버퍼 = 앞선 묶음의 "다음 상태" → 맨 위의 전체 복사를 차이로 접는다(전체 복사는 늘 하나 이하).
+        if let Some(top) = self.undo.last_mut() {
+            if let SnapBuf::Full(prev) = &top.buf {
+                top.buf = SnapBuf::delta(&self.buf, prev);
+            }
+        }
+        let s = self.snap_with(SnapBuf::Full(self.buf.clone()));
         self.undo.push(s);
         if self.undo.len() > self.history_max {
             self.undo.remove(0);
@@ -142,9 +233,11 @@ impl EditState {
         self.last_op = Some(op);
     }
 
-    fn restore(&mut self, s: Snap) {
+    /// 스냅샷을 적용하고, 반대 방향 스냅샷(적용 직전의 캐럿·선택 + 되돌리는 차이)을 돌려준다.
+    fn restore(&mut self, s: Snap) -> Snap {
+        let mut back = self.snap_with(SnapBuf::Full(Vec::new()));
         self.rev = self.rev.wrapping_add(1);
-        self.buf = s.buf;
+        back.buf = s.buf.apply(&mut self.buf);
         self.caret = s.caret.min(self.buf.len());
         self.anchor = s.anchor.map(|a| a.min(self.buf.len()));
         let n = self.buf.len();
@@ -153,6 +246,7 @@ impl EditState {
             .into_iter()
             .map(|(a, c)| (a.min(n), c.min(n)))
             .collect();
+        back
     }
 
     /// 실행 취소 — 되돌렸으면 `true`.
@@ -160,9 +254,8 @@ impl EditState {
         let Some(prev) = self.undo.pop() else {
             return false;
         };
-        let cur = self.snap();
-        self.redo.push(cur);
-        self.restore(prev);
+        let back = self.restore(prev);
+        self.redo.push(back);
         self.last_op = None;
         true
     }
@@ -172,9 +265,8 @@ impl EditState {
         let Some(next) = self.redo.pop() else {
             return false;
         };
-        let cur = self.snap();
-        self.undo.push(cur);
-        self.restore(next);
+        let back = self.restore(next);
+        self.undo.push(back);
         self.last_op = None;
         true
     }
@@ -792,6 +884,51 @@ pub fn subword_boundary(buf: &[char], from: usize, right: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 되돌리기 = 차이 저장(nexa-sql 09-19): 큰 본문에서 여러 묶음을 쳐도 히스토리가 쥔 글자는 **전체 복사 하나 + 친 만큼** ·
+    /// 되돌리기/다시 실행을 끝까지 오가도 본문·캐럿이 정확히 돌아온다.
+    #[test]
+    fn undo_history_stores_deltas_not_full_copies() {
+        let base: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        let n = base.chars().count();
+        let mut e = EditState::with_text(&base, false);
+        e.set_caret(5, false);
+        let mut states = vec![e.text()];
+        for w in ["alpha", "beta", "gamma", "delta"] {
+            for c in w.chars() {
+                e.insert(c);
+            }
+            e.insert(' '); // 공백 뒤 첫 글자 = 새 묶음
+            states.push(e.text());
+        }
+        assert!(e.undo_len() >= 4);
+        // 전체 복사는 맨 위 하나뿐 — 묶음 수 × 전체가 아니다.
+        assert!(
+            e.history_chars() < n + 200,
+            "history holds {} chars for a {n}-char buffer",
+            e.history_chars()
+        );
+        // 끝까지 되돌렸다가 끝까지 다시 실행.
+        let mut back = 0;
+        while e.undo() {
+            back += 1;
+        }
+        assert_eq!(e.text(), base);
+        assert!(e.history_chars() < 200, "되돌린 뒤에는 차이만 남는다");
+        for _ in 0..back {
+            assert!(e.redo());
+        }
+        assert_eq!(e.text(), *states.last().unwrap_or(&String::new()));
+        // 중간에서 새로 치면 다시 실행은 버려지고, 되돌리면 직전 상태로.
+        assert!(e.undo());
+        let mid = e.text();
+        e.insert('Z');
+        assert!(!e.can_redo());
+        assert!(e.undo());
+        assert_eq!(e.text(), mid);
+        e.clear_history();
+        assert_eq!((e.undo_len(), e.history_chars()), (0, 0));
+    }
 
     /// Sublime 단어/서브워드 경계 · Ctrl+클릭 캐럿 토글(nexa-sql 사용자 09-17).
     #[test]

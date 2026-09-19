@@ -14,8 +14,8 @@ use nexa_ctl::controls::{glyph, ContextMenu, CtxItem, GlyphKind, LabelSide, Menu
 use nexa_ctl::IconImage;
 use nexa_ctl::{
     Button, Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, DrawCtx, FontSlot,
-    GridColumn, InputEvent, Invalidations, Key, Point, Rect, TextBox, Theme, TreeControl, TreeGrid,
-    TreeModel, TreeNode, TreeView, Widget,
+    GridColumn, InputEvent, Invalidations, Key, Point, Rect, TextBox, Theme, TimeoutButton,
+    TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, Widget,
 };
 use nexa_fs::shell::{IconKey, IconService, Lookup};
 use nexa_fs::{Entry, History, ListHandle, ListMsg, ListOpts, Place, PlaceKind, SortKey};
@@ -207,6 +207,13 @@ pub struct FilePicker {
     overwrite_ask: Option<PathBuf>,
     overwrite_yes_btn: Button,
     overwrite_no_btn: Button,
+    /// ★ 덮어쓰기 **무장**(nexa-sql 사용자 09-19 "타임아웃 버튼으로 · 두 번 눌러야 저장"): [덮어쓰기]를 처음 누르면 그 자리에
+    /// 빨간 타이머 버튼이 뜨고, 시간 안에 **한 번 더** 눌러야 확정된다. 시간이 다 되면 원래 버튼으로 돌아간다(확정 아님).
+    overwrite_arm: Option<TimeoutButton>,
+    /// 무장 시간(ms · 호스트 설정 · 0 = 무장 없이 한 번에).
+    overwrite_confirm_ms: u64,
+    /// 마지막 틱 시각(무장 시작 시각으로 쓴다).
+    now_ms: u64,
     last_row_click: Option<(usize, Instant)>,
     last_place_row: usize,
     action: PickerAction,
@@ -340,6 +347,9 @@ impl FilePicker {
             overwrite_ask: None,
             overwrite_yes_btn: Button::new(labels.overwrite_yes.clone()),
             overwrite_no_btn: Button::new(labels.cancel.clone()),
+            overwrite_arm: None,
+            overwrite_confirm_ms: 5000,
+            now_ms: 0,
             last_row_click: None,
             last_place_row: usize::MAX,
             action: PickerAction::None,
@@ -445,8 +455,48 @@ impl FilePicker {
     }
 
     /// 프레임 틱 — 다시 그려야 하면 true(아이콘/종류 이름 도착 포함).
+    /// 덮어쓰기 무장 시간(ms · 0 = 한 번에 확정 — 종전 동작).
+    pub fn set_overwrite_confirm_ms(&mut self, ms: u64) {
+        self.overwrite_confirm_ms = ms;
+    }
+
+    /// 덮어쓰기 버튼을 눌렀다(클릭 · Enter) — 무장 전이면 무장하고 false · 무장 중이면(또는 무장 없음 설정) true = 확정.
+    fn overwrite_press(&mut self) -> bool {
+        if self.overwrite_confirm_ms == 0 || self.overwrite_arm.is_some() {
+            self.overwrite_arm = None;
+            return true;
+        }
+        let mut tb =
+            TimeoutButton::new(self.labels.overwrite_yes.clone(), self.overwrite_confirm_ms)
+                .with_warn(true)
+                .with_show_remaining(false);
+        let mut inv = Invalidations::default();
+        tb.set_bounds(self.overwrite_yes_btn.bounds(), &mut inv);
+        tb.set_scale(self.base.scale);
+        tb.start(self.now_ms);
+        // 가려지는 원래 버튼의 일시 상태(hover·눌림)를 비운다(포커스 규칙 ⑤).
+        self.overwrite_yes_btn.clear_transient();
+        self.overwrite_arm = Some(tb);
+        false
+    }
+
+    fn overwrite_disarm(&mut self) {
+        self.overwrite_arm = None;
+    }
+
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        self.poll_loaders()
+        self.now_ms = now_ms;
+        // 무장 버튼 — 게이지를 돌리고, 시간이 다 되면 원래 버튼으로(확정하지 않는다).
+        let mut armed_redraw = false;
+        if let Some(tb) = self.overwrite_arm.as_mut() {
+            armed_redraw = tb.tick(now_ms);
+            if tb.expired() {
+                self.overwrite_arm = None;
+                armed_redraw = true;
+            }
+        }
+        armed_redraw
+            | self.poll_loaders()
             | self.apply_icon_updates()
             | self.up_btn.tick(now_ms)
             | self.home_btn.tick(now_ms)
@@ -475,7 +525,8 @@ impl FilePicker {
     /// 애니메이션 진행 중(호스트가 타이머를 유지할 근거) — 아이콘 조회 중도 포함.
     #[must_use]
     pub fn animating(&self) -> bool {
-        self.loading()
+        self.overwrite_arm.is_some()
+            || self.loading()
             || self.icons_pending()
             || self.up_btn.is_animating()
             || self.home_btn.is_animating()
@@ -1717,6 +1768,10 @@ impl FilePicker {
         );
         self.overwrite_yes_btn.set_scale(self.base.scale);
         self.overwrite_no_btn.set_scale(self.base.scale);
+        if let Some(tb) = self.overwrite_arm.as_mut() {
+            tb.set_bounds(self.overwrite_yes_btn.bounds(), &mut inv);
+            tb.set_scale(self.base.scale);
+        }
     }
 
     fn layout(&mut self) {
@@ -1971,12 +2026,16 @@ impl Widget for FilePicker {
                 InputEvent::Key {
                     key: Key::Enter, ..
                 } => {
-                    self.overwrite_ask = None;
-                    self.action = PickerAction::Confirm(path);
+                    // Enter도 같은 규칙: 첫 번째 = 무장 · 두 번째 = 확정.
+                    if self.overwrite_press() {
+                        self.overwrite_ask = None;
+                        self.action = PickerAction::Confirm(path);
+                    }
                 }
                 InputEvent::Key {
                     key: Key::Escape, ..
                 } => {
+                    self.overwrite_disarm();
                     self.overwrite_ask = None;
                     self.pending_overwrite = None;
                 }
@@ -1985,16 +2044,26 @@ impl Widget for FilePicker {
                 | InputEvent::MouseMove { .. } => {
                     // 마우스 라우팅 규칙 — 커서 아래 버튼에만(놓기는 둘 다).
                     let up = matches!(*ev, InputEvent::MouseUp { .. });
-                    if up || self.overwrite_yes_btn.bounds().contains(p) {
+                    // 무장 중이면 그 자리는 타이머 버튼의 것(원래 버튼은 가려져 사건을 받지 않는다).
+                    let mut armed_click = false;
+                    if let Some(tb) = self.overwrite_arm.as_mut() {
+                        if up || tb.bounds().contains(p) {
+                            tb.on_event(ev, inv);
+                        }
+                        armed_click = tb.take_fired() == Some(nexa_ctl::controls::FiredBy::Click);
+                    } else if up || self.overwrite_yes_btn.bounds().contains(p) {
                         self.overwrite_yes_btn.on_event(ev, inv);
                     }
                     if up || self.overwrite_no_btn.bounds().contains(p) {
                         self.overwrite_no_btn.on_event(ev, inv);
                     }
-                    if self.overwrite_yes_btn.take_clicked() {
-                        self.overwrite_ask = None;
-                        self.action = PickerAction::Confirm(path);
+                    if armed_click || self.overwrite_yes_btn.take_clicked() {
+                        if self.overwrite_press() {
+                            self.overwrite_ask = None;
+                            self.action = PickerAction::Confirm(path);
+                        }
                     } else if self.overwrite_no_btn.take_clicked() {
+                        self.overwrite_disarm();
                         self.overwrite_ask = None;
                         self.pending_overwrite = None;
                     }
@@ -2414,7 +2483,10 @@ impl Widget for FilePicker {
             let clip = Rect::new(card.x + pad, card.y, card.w - pad * 2, card.h);
             ctx.text(card.x + pad, card.y + pad, clip, &text, theme.text);
             self.overwrite_no_btn.paint(ctx, theme);
-            self.overwrite_yes_btn.paint(ctx, theme);
+            match &self.overwrite_arm {
+                Some(tb) => tb.paint(ctx, theme),
+                None => self.overwrite_yes_btn.paint(ctx, theme),
+            }
         }
     }
 }
@@ -2564,15 +2636,25 @@ mod tests {
         assert!(p.pending_overwrite.is_some());
         assert!(p.overwrite_ask.is_some(), "확인 카드가 열린다");
         let mut inv = Invalidations::default();
-        p.on_event(
-            &InputEvent::Key {
-                key: Key::Enter,
-                shift: false,
-                primary: false,
-            },
-            &mut inv,
+        let enter = InputEvent::Key {
+            key: Key::Enter,
+            shift: false,
+            primary: false,
+        };
+        // ★ 타임아웃 버튼(두 번 눌러야 저장): 첫 Enter = 무장만 · 시간이 지나면 풀린다 · 다시 두 번 = 확정.
+        p.tick(1_000);
+        p.on_event(&enter, &mut inv);
+        assert!(p.overwrite_arm.is_some() && p.overwrite_ask.is_some());
+        assert_eq!(
+            p.take_action(),
+            PickerAction::None,
+            "한 번으로는 저장되지 않는다"
         );
-        p.confirm();
+        p.tick(1_000 + 6_000);
+        assert!(p.overwrite_arm.is_none(), "만료 = 무장 해제(확정 아님)");
+        assert_eq!(p.take_action(), PickerAction::None);
+        p.on_event(&enter, &mut inv);
+        p.on_event(&enter, &mut inv);
         assert_eq!(p.take_action(), PickerAction::Confirm(d.join("a.sql")));
         // 새 이름은 바로 확정 + 확장자 부여.
         p.set_default_name("new");

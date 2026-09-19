@@ -2,6 +2,9 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-19 (45차 · win)** — `textbox.rs` `MlTextCache`·행 해시·`RowWidthCache`·`HlStateCache` · `auto_close`/`outdent_on_close`/`room` 본문 복사 제거 · `edit.rs` `SnapBuf::{Full, Delta}` · `bench_editor` 기능 선택·입력 비용 · nexa-dlg `overwrite_arm` → [journal](journal/2026-09-18.md)
+- **2026-09-19 (44차 · win)** — nexa-ctl `merge3.rs` · `replace_all_undoable` · nexa-fs `watch.rs`(nexa-sql docs/58 외부 파일 변경 처리의 부품) → [journal](journal/2026-09-18.md)
+- **2026-09-19 (43차 · win)** — `highlight.rs` `SyntaxSpec.numbers`(기본 켬 · `plain()` = 끔 · 규격 키 `numbers`) — nexa-sql 안내 탭의 버전 번호가 초록으로 칠해지던 것 → [journal](journal/2026-09-18.md)
 - **2026-09-19 (42차 · win)** — `theme.rs` `contrast_order`/`color_contrast`/`is_warm` + `Theme.rainbow` 이웃 대비 순서(nexa-sql 사용자 09-19 "1·2, 2·3, 3·4가 식별되게") → [journal](journal/2026-09-18.md)
 - **2026-09-19 (41차 · win)** — Toolbar `ToolIcon::Glyph` 비활성 = `text_dim` · 색조 존중(nexa-sql 결과 도구줄 + − ⧉ ✓ ✕ Σ가 늘 켜져 보이던 결함) · TreeControl ← = 접기/상위로 · **타입어헤드 부품** `typeahead.rs`+`hangul.rs`(nexa-beep 이식 · 테스트 17) · Switch/Checkbox 빈 bounds = 안 그림((0,0) 조각 결함) · `PositionDropdown`(선택 타일 머리 + 3×3 팝업)
 - **2026-09-19 (40차 · mac)** — TextBox 성능: `EditState::rev`/`chars()` · 내용 폭 캐시 · 슬라이스 줄 분해(2 MB 페인트 195→13 ms · ↓ 7.5→0 ms · `examples/bench_editor`) · 목표 열(`goal_x`) · `set_warning`. → [journal](journal/2026-09-18.md)

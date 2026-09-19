@@ -70,6 +70,9 @@ pub struct SyntaxSpec {
     pub escape_backslash: bool,
     /// 식별자에 허용되는 추가 문자.
     pub ident_extra: String,
+    /// 숫자 리터럴을 칠하는가(`.nexa-syntax`의 `numbers = off`로 끔 · Plain Text = 끔 — 읽을거리의 버전 번호·날짜가
+    /// 초록으로 칠해지던 것 · nexa-sql 사용자 09-19).
+    pub numbers: bool,
 }
 
 impl SyntaxSpec {
@@ -86,6 +89,7 @@ impl SyntaxSpec {
             strings: Vec::new(),
             escape_backslash: false,
             ident_extra: "_".into(),
+            numbers: false,
         }
     }
 
@@ -107,6 +111,7 @@ impl SyntaxSpec {
             strings: Vec::new(),
             escape_backslash: false,
             ident_extra: "_".into(),
+            numbers: true,
         };
         let mut raw_keywords: Vec<String> = Vec::new();
         for (ln, line) in text.lines().enumerate() {
@@ -141,6 +146,7 @@ impl SyntaxSpec {
                     .strings
                     .extend(v.split_whitespace().filter_map(|t| t.chars().next())),
                 "ident_extra" => s.ident_extra = v.to_string(),
+                "numbers" => s.numbers = matches!(v, "true" | "on" | "yes" | "1"),
                 "keywords" => raw_keywords.extend(
                     v.split(|c: char| c == ',' || c.is_whitespace())
                         .filter(|e| !e.is_empty())
@@ -299,8 +305,9 @@ impl Highlighter for SyntaxSpec {
                 continue;
             }
             // 숫자
-            if c.is_ascii_digit()
-                || (c == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit))
+            if self.numbers
+                && (c.is_ascii_digit()
+                    || (c == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit)))
             {
                 let mut j = i + 1;
                 while j < n
@@ -430,6 +437,17 @@ mod tests {
         let mut out = Vec::new();
         spec.line_spans(line, state, &mut out);
         out
+    }
+
+    /// Plain Text = 숫자도 칠하지 않는다 · 규격 파일은 `numbers = off`로 끈다(기본 켬).
+    #[test]
+    fn plain_text_has_no_number_tokens() {
+        let mut st = 0;
+        let s = spans(&SyntaxSpec::plain(), "Rainbow Pairs 1.0.0 and 42", &mut st);
+        assert!(s.iter().all(|(_, k)| *k == TokenKind::Plain), "{s:?}");
+        let off = SyntaxSpec::parse("name = X\nnumbers = off").unwrap();
+        let on = SyntaxSpec::parse("name = Y").unwrap();
+        assert!(!off.numbers && on.numbers);
     }
 
     #[test]

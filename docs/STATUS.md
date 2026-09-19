@@ -2,6 +2,12 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-19 (45차 · win) — ★ **TextBox 큰 파일 성능**(세대+줄 해시 캐시 넷 · 키 경로의 본문 복사 제거 — 4만 줄 유휴 그리기 78 → 3.3 ms · 입력 209 → 16 ms) · **되돌리기 = 차이 저장**(`SnapBuf`) · `release_caches`/`clear_history`/`approx_bytes` · nexa-dlg **덮어쓰기 = 타임아웃 버튼** → [journal](journal/2026-09-18.md)
+
+## 2026-09-19 (44차 · win) — ★ **`merge3`**(줄 단위 3-way 병합 · Myers 정합 · 의존 0) · **`TextBox::replace_all_undoable`**(전체 교체 = 되돌리기 한 단계 · 캐럿 유지) · **nexa-fs `watch`**(`FileSig`·`content_hash`·`StatWatch` — OS 와처 없는 외부 변경 감지) → [journal](journal/2026-09-18.md)
+
+## 2026-09-19 (43차 · win) — `SyntaxSpec.numbers`(Plain Text = 숫자 리터럴도 안 칠함 · `.nexa-syntax` `numbers = off`) → [journal](journal/2026-09-18.md)
+
 ## 2026-09-19 (42차 · win) — **색 대비 순서** `contrast_order`/`color_contrast`/`is_warm`(순환 팔레트를 이웃끼리 가장 잘 구별되게 · 보색·색 온도·밝기) · `Theme.rainbow` 순서를 그 결과로(어두움·밝음) · 테스트 2 → [journal](journal/2026-09-18.md)
 
 ## 2026-09-19 (41차 · win) — 🔧 Toolbar 글리프 항목 비활성 흐림(`enabled`·`tone` 존중 · nexa-sql 결과 도구줄) · **TreeControl ← 키**(펼쳐진 행 = 접기 · 아니면 상위로) · ★ **타입어헤드 부품**(`typeahead`/`hangul` · nexa-beep 이식) · Switch/Checkbox 빈 bounds 가드 · **`PositionDropdown`**(위치 이미지 드롭다운) → [journal](journal/2026-09-18.md)

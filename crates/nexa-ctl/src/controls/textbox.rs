@@ -405,8 +405,6 @@ pub struct TextBox {
     /// ★ 세로 이동의 **목표 x**(Sublime `xpos` · nexa-sql 사용자 09-19): ↑/↓를 연달아 누르는 동안 처음 출발한 시각 열을
     /// 기억해, 빈 줄·짧은 줄을 지나도 긴 줄에서 다시 그 열로 돌아온다. 다른 캐럿 이동·편집이면 비운다.
     goal_x: Option<i32>,
-    /// 내용 폭 캐시 (본문 세대, 글꼴 키, wrap, 폭) — 페인트가 채운다.
-    ml_width_cache: std::cell::Cell<(u64, i32, bool, i32)>,
     /// 목표 열(글자 수) — 배치가 없을 때(아직 안 그렸음 · 테스트)의 대체 기준.
     goal_col: Option<usize>,
     /// ★ 단일 행 hover 페이드(회색 계열 · `Slow` 1초 · nexa-sql 사용자 09-14) — 멀티라인(편집기)은 제외.
@@ -437,6 +435,17 @@ pub struct TextBox {
     minimap_w: i32,
     /// 미니맵 픽셀 캐시 — 창(띠에 보이는 행 범위)·텍스트 해시·폭·배율·테마 색이 키. 매 프레임은 블릿만.
     minimap_cache: std::cell::RefCell<Option<MinimapCache>>,
+    /// **본문 문자열 + 논리 줄 표 캐시**(세대 `edit.rev` 열쇠 · nexa-sql 09-19 메모리 점검: 3.6 MB·4만 줄에서 매 프레임
+    /// 본문 전체를 `String`으로 다시 모으고 줄을 다시 나누던 것 → 편집이 없으면 그대로 쓴다). 조합(preedit) 중에는 쓰지 않는다.
+    ml_text_cache: std::cell::RefCell<Option<MlTextCache>>,
+    /// **구문 강조의 줄 시작 상태 캐시**(블록 주석 이어짐) — 종전에는 매 프레임 0번 줄부터 화면 첫 줄까지 다시 토큰화했다
+    /// (캐럿이 4만 줄째면 프레임당 87 ms). 줄 해시로 "앞에서부터 같은 줄 수"를 알아내 **바뀐 줄부터만** 다시 계산한다.
+    hl_state_cache: std::cell::RefCell<HlStateCache>,
+    /// **표시 행별 폭 캐시** — 종전에는 글자 하나를 칠 때마다 전 줄을 폰트 엔진으로 다시 쟀다(4만 줄 = 키당 200 ms).
+    /// 줄 해시로 앞·뒤의 같은 행을 살리고 **바뀐 가운데 행만** 다시 잰다.
+    row_width_cache: std::cell::RefCell<RowWidthCache>,
+    /// 표시 행 해시(세대·접기 열쇠별 1회 계산 · 폭 캐시와 구문 상태 캐시가 같이 쓴다).
+    row_hash_cache: std::cell::RefCell<RowHashSlot>,
     /// 캐시 재생성 횟수(테스트·진단 — 텍스트 변경 없이는 늘지 않아야 한다).
     minimap_builds: std::cell::Cell<u32>,
     /// 미니맵 띠 위치(마지막 페인트 실측 · 히트 테스트 근거 · 꺼져 있으면 빈 Rect).
@@ -466,6 +475,64 @@ pub const MINIMAP_DEFAULT_WIDTH: i32 = 160;
 pub const MINIMAP_MAX_LINES: usize = 4000;
 /// 미니맵 글자 불투명도(공백 제외).
 const MINIMAP_ALPHA: f32 = 0.62;
+
+/// (본문 세대 · (wrap, 접는 폭) · 표시 행 해시).
+type RowHashSlot = (u64, (bool, i32), Rc<Vec<u64>>);
+/// (본문 문자열 · 논리 줄 표 = (첫 글자 char 인덱스, 바이트 시작, 바이트 끝)).
+type TextSnapshot = (Rc<String>, Rc<Vec<(usize, usize, usize)>>);
+
+/// 본문 문자열 + 논리 줄 표(세대별 · [`TextBox::ml_text_cache`]).
+#[derive(Debug)]
+struct MlTextCache {
+    rev: u64,
+    text: Rc<String>,
+    /// 논리 줄마다 (첫 글자의 char 인덱스, 바이트 시작, 바이트 끝 — 개행 제외).
+    starts: Rc<Vec<(usize, usize, usize)>>,
+}
+
+/// 구문 강조 줄 시작 상태 캐시([`TextBox::hl_state_cache`]).
+#[derive(Debug, Default)]
+struct HlStateCache {
+    /// 열쇠: (본문 세대 · 강조기 주소 · wrap · 접는 폭) — 세대만 다르면 줄 해시로 앞부분을 살린다.
+    rev: u64,
+    hl_id: usize,
+    wrap_key: (bool, i32),
+    /// 표시 행마다의 내용 해시(세대가 바뀌었을 때 "앞에서부터 같은 행 수"를 재는 데 쓴다).
+    hashes: Vec<u64>,
+    /// `states[i]` = i번째 표시 행을 시작할 때의 상태. `states.len()`까지만 계산돼 있다(필요한 만큼 늘린다).
+    states: Vec<u32>,
+    /// 진단·테스트: 지금까지 토큰화한 행 수(캐시가 듣는지 본다).
+    scanned: u64,
+}
+
+/// 표시 행별 폭 캐시([`TextBox::row_width_cache`]).
+#[derive(Debug, Default)]
+struct RowWidthCache {
+    rev: u64,
+    /// (글꼴 열쇠 = "0"의 폭 · wrap · 접는 폭).
+    key: (i32, bool, i32),
+    hashes: Rc<Vec<u64>>,
+    widths: Vec<i32>,
+    max: i32,
+    /// 진단·테스트: 지금까지 폰트 엔진으로 잰 행 수.
+    measured: u64,
+}
+
+fn row_hash(s: &str) -> u64 {
+    const K: u64 = 0x517c_c1b7_2722_0a95;
+    let b = s.as_bytes();
+    let mut h: u64 = b.len() as u64;
+    let mut chunks = b.chunks_exact(8);
+    for c in &mut chunks {
+        let mut w = [0u8; 8];
+        w.copy_from_slice(c);
+        h = (h.rotate_left(5) ^ u64::from_le_bytes(w)).wrapping_mul(K);
+    }
+    for &x in chunks.remainder() {
+        h = (h.rotate_left(5) ^ u64::from(x)).wrapping_mul(K);
+    }
+    h
+}
 
 /// 미니맵 캐시 비트맵 — `key`가 같으면 재사용(블릿만).
 #[derive(Debug)]
@@ -579,7 +646,6 @@ impl TextBox {
             sl_range: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
             goal_x: None,
-            ml_width_cache: std::cell::Cell::new((u64::MAX, 0, false, 0)),
             goal_col: None,
             hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Slow),
             highlighter: None,
@@ -597,6 +663,10 @@ impl TextBox {
             minimap: false,
             minimap_w: MINIMAP_DEFAULT_WIDTH,
             minimap_cache: std::cell::RefCell::new(None),
+            ml_text_cache: std::cell::RefCell::new(None),
+            hl_state_cache: std::cell::RefCell::new(HlStateCache::default()),
+            row_width_cache: std::cell::RefCell::new(RowWidthCache::default()),
+            row_hash_cache: std::cell::RefCell::new((u64::MAX, (false, 0), Rc::new(Vec::new()))),
             minimap_builds: std::cell::Cell::new(0),
             minimap_rect: std::cell::Cell::new(Rect::default()),
             minimap_lay: std::cell::Cell::new((0, 1, 0, 1)),
@@ -876,7 +946,7 @@ impl TextBox {
             self.edit.insert('\n');
             return;
         }
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        let chars: Vec<char> = self.edit.chars().to_vec();
         let caret = self.edit.caret().min(chars.len());
         let ls = Self::line_start_of(&chars, caret);
         let le = ls
@@ -971,9 +1041,10 @@ impl TextBox {
         if !(self.auto_indent.enabled && self.auto_indent.smart) || self.edit.has_multi() {
             return;
         }
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        // 키 하나마다 도는 경로 — 본문 복사 없이 이 줄만 떠 온다.
+        let chars: &[char] = self.edit.chars();
         let caret = self.edit.caret().min(chars.len());
-        let ls = Self::line_start_of(&chars, caret);
+        let ls = Self::line_start_of(chars, caret);
         if self.outdented_line == Some(ls) {
             return;
         }
@@ -1027,7 +1098,7 @@ impl TextBox {
             self.auto_ws_line = None;
             return;
         }
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        let chars: Vec<char> = self.edit.chars().to_vec();
         let caret = self.edit.caret().min(chars.len());
         if ls > chars.len() {
             self.auto_ws_line = None;
@@ -1327,7 +1398,10 @@ impl TextBox {
             self.diff_marks.borrow_mut().clear();
             return;
         };
-        let text = self.edit.text();
+        let text: Rc<String> = match self.ml_text_snapshot() {
+            Some((t, _)) => t,
+            None => Rc::new(self.edit.text()),
+        };
         let cur: Vec<&str> = text.lines().collect();
         *self.diff_marks.borrow_mut() = diff_lines(base, &cur);
     }
@@ -1456,7 +1530,8 @@ impl TextBox {
         if is_quote && !opts.quotes {
             return false;
         }
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        // ★ 키 하나마다 도는 경로 — 본문을 복사하지 않는다(종전 = 전체를 String으로 모았다가 다시 Vec<char>로 · 4만 줄에서 키당 15 ms).
+        let chars: &[char] = self.edit.chars();
         let caret = self.edit.caret().min(chars.len());
         let next = chars.get(caret).copied();
         let prev = caret.checked_sub(1).and_then(|i| chars.get(i)).copied();
@@ -1475,7 +1550,7 @@ impl TextBox {
         let close = k.close_char();
         // 선택 감싸기.
         if let Some((a, b)) = self.edit.selection() {
-            let inner: String = chars[a..b].iter().collect();
+            let inner: String = self.edit.chars()[a..b].iter().collect();
             self.edit.set_selection(a, b);
             self.edit.insert_str(&format!("{c}{inner}{close}"));
             self.edit.set_selection(a + 1, b + 1);
@@ -1511,11 +1586,11 @@ impl TextBox {
             return false;
         }
         use super::pairs::PairKind;
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        let chars: &[char] = self.edit.chars();
         let caret = self.edit.caret().min(chars.len());
-        let (Some(&p), Some(&n)) = (
-            caret.checked_sub(1).and_then(|i| chars.get(i)),
-            chars.get(caret),
+        let (Some(p), Some(n)) = (
+            caret.checked_sub(1).and_then(|i| chars.get(i)).copied(),
+            chars.get(caret).copied(),
         ) else {
             return false;
         };
@@ -1566,8 +1641,7 @@ impl TextBox {
         if self.max_chars == 0 {
             usize::MAX
         } else {
-            self.max_chars
-                .saturating_sub(self.edit.text().chars().count())
+            self.max_chars.saturating_sub(self.edit.chars().len())
         }
     }
 
@@ -1606,6 +1680,123 @@ impl TextBox {
     /// 다음 줄의 start를 그 뒤로 민다. 빈 텍스트도 한 줄(빈 줄)로 본다.
     /// 논리 줄 = (첫 글자 char 인덱스, 슬라이스) — **줄마다 String을 만들지 않는다**(09-19 성능: 2 MB 본문에서 페인트마다
     /// 2만 줄 할당이 두 번 있었다 · 지금은 슬라이스 하나씩).
+    /// 본문 문자열 + 논리 줄 표(세대별 캐시) — 조합 중·접기(wrap) 없는 단일행은 `None`(종전 경로).
+    fn ml_text_snapshot(&self) -> Option<TextSnapshot> {
+        if !self.edit.preedit().is_empty() {
+            return None;
+        }
+        let rev = self.edit.rev();
+        let mut slot = self.ml_text_cache.borrow_mut();
+        if let Some(c) = slot.as_ref().filter(|c| c.rev == rev) {
+            return Some((c.text.clone(), c.starts.clone()));
+        }
+        let chars = self.edit.chars();
+        let mut text = String::with_capacity(chars.len() + chars.len() / 8);
+        let mut starts: Vec<(usize, usize, usize)> = Vec::with_capacity(chars.len() / 32 + 1);
+        let (mut line_cs, mut line_bs) = (0usize, 0usize);
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                starts.push((line_cs, line_bs, text.len()));
+                text.push('\n');
+                line_cs = i + 1;
+                line_bs = text.len();
+            } else {
+                text.push(ch);
+            }
+        }
+        starts.push((line_cs, line_bs, text.len()));
+        let (text, starts) = (Rc::new(text), Rc::new(starts));
+        *slot = Some(MlTextCache {
+            rev,
+            text: text.clone(),
+            starts: starts.clone(),
+        });
+        Some((text, starts))
+    }
+
+    /// 표시 행 해시(세대·접기 열쇠별 1회) — 조합 중에는 캐시하지 않는다(행 내용이 세대와 무관하게 바뀐다).
+    fn row_hashes(&self, lines: &[(usize, &str)], wrap_key: (bool, i32)) -> Rc<Vec<u64>> {
+        let rev = self.edit.rev();
+        let composing = !self.edit.preedit().is_empty();
+        let mut slot = self.row_hash_cache.borrow_mut();
+        if !composing && slot.0 == rev && slot.1 == wrap_key && slot.2.len() == lines.len() {
+            return slot.2.clone();
+        }
+        let v = Rc::new(lines.iter().map(|(_, l)| row_hash(l)).collect::<Vec<u64>>());
+        if !composing {
+            *slot = (rev, wrap_key, v.clone());
+        }
+        v
+    }
+
+    /// 표시 행 `top`과 `mm_start`를 시작할 때의 구문 상태(캐시 · 필요한 행까지만 계산 · 편집 뒤에는 바뀐 행부터).
+    fn hl_states_at(
+        &self,
+        h: &Rc<dyn crate::highlight::Highlighter>,
+        lines: &[(usize, &str)],
+        row_hashes: &Rc<Vec<u64>>,
+        top: usize,
+        mm_start: usize,
+        avail: i32,
+    ) -> (u32, u32) {
+        let mut c = self.hl_state_cache.borrow_mut();
+        let rev = self.edit.rev();
+        let hl_id = Rc::as_ptr(h).cast::<()>() as usize;
+        let wrap_key = (self.wrap, if self.wrap { avail } else { 0 });
+        // 조합 중에는 행 내용이 세대와 무관하게 바뀐다 → 세대 열쇠로는 못 믿으니 해시를 다시 잰다.
+        let composing = !self.edit.preedit().is_empty();
+        if c.rev != rev
+            || c.hl_id != hl_id
+            || c.wrap_key != wrap_key
+            || composing
+            || c.states.is_empty()
+        {
+            let same_kind = c.hl_id == hl_id && c.wrap_key == wrap_key && !c.states.is_empty();
+            let hashes: &[u64] = row_hashes;
+            let keep = if same_kind {
+                let same = c
+                    .hashes
+                    .iter()
+                    .zip(hashes)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                // 앞의 `same`개 행이 같다 = 그 행들을 지난 뒤의 상태(`states[same]`)까지 유효.
+                (same + 1).min(c.states.len())
+            } else {
+                0
+            };
+            c.states.truncate(keep);
+            if c.states.is_empty() {
+                c.states.push(0);
+            }
+            c.hashes = hashes.to_vec();
+            c.rev = rev;
+            c.hl_id = hl_id;
+            c.wrap_key = wrap_key;
+        }
+        let need = top.max(mm_start.min(top)).min(lines.len());
+        if c.states.len() <= need {
+            let mut spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
+            let mut state = c.states.last().copied().unwrap_or(0);
+            for (_, l) in &lines[c.states.len() - 1..need] {
+                spans.clear();
+                h.line_spans(l, &mut state, &mut spans);
+                c.states.push(state);
+                c.scanned += 1;
+            }
+        }
+        let at = |row: usize| {
+            c.states
+                .get(row.min(c.states.len() - 1))
+                .copied()
+                .unwrap_or(0)
+        };
+        let at_top = at(top);
+        // 종전 규칙 그대로: 미니맵 시작 행이 화면 첫 행 이후면 화면 첫 행의 상태를 준다.
+        let at_mm = if mm_start < top { at(mm_start) } else { at_top };
+        (at_top, at_mm)
+    }
+
     fn logical_lines(text: &str) -> Vec<(usize, &str)> {
         let mut out = Vec::with_capacity(text.len() / 32 + 1);
         let mut line_start = 0usize; // 이 줄 첫 글자의 char 인덱스
@@ -1804,7 +1995,7 @@ impl TextBox {
 
     /// 단어 경계로 선택(더블클릭).
     fn select_word_at(&mut self, idx: usize) {
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        let chars: Vec<char> = self.edit.chars().to_vec();
         if chars.is_empty() {
             return;
         }
@@ -1935,7 +2126,7 @@ impl TextBox {
 
     /// Ctrl+M(Sublime `move_to: brackets`): 캐럿 옆 괄호의 짝으로 이동 · 괄호 옆이 아니면 감싸는 쌍의 닫힘으로. 움직였으면 true.
     pub fn goto_bracket(&mut self, shift: bool) -> bool {
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        let chars: Vec<char> = self.edit.chars().to_vec();
         let caret = self.edit.caret().min(chars.len());
         let target = if let Some((o, c)) = Self::bracket_pair_at(&chars, caret) {
             if caret == o || caret == o + 1 {
@@ -1955,7 +2146,7 @@ impl TextBox {
 
     /// Ctrl+Shift+M(Sublime `expand_selection: brackets`): 감싸는 괄호 **안**을 선택 · 이미 그 안이 전부 선택돼 있으면 괄호까지 포함.
     pub fn expand_to_brackets(&mut self) -> bool {
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        let chars: Vec<char> = self.edit.chars().to_vec();
         let (a, b) = self
             .edit
             .selection()
@@ -1975,7 +2166,7 @@ impl TextBox {
     }
 
     pub fn select_next_occurrence(&mut self) -> bool {
-        let chars: Vec<char> = self.edit.text().chars().collect();
+        let chars: Vec<char> = self.edit.chars().to_vec();
         if chars.is_empty() {
             return false;
         }
@@ -2151,6 +2342,87 @@ impl TextBox {
         inv.push(self.base.bounds);
     }
 
+    /// **본문 전체를 새 글로** — 다만 통째로 갈지 않고 **달라진 가운데만** 한 번의 교체로 넣는다(nexa-sql docs/58 · Zed 방식):
+    /// 되돌리기 한 단계로 남고(Ctrl+Z = 교체 전) · 캐럿은 같은 글자에 남으며(교체 구간 뒤면 길이 차이만큼 이동 · 구간 안이면 구간 앞)
+    /// · 구문 상태·줄 캐시는 평소의 편집 경로를 탄다. 달라진 것이 없으면 false(아무것도 안 함).
+    pub fn replace_all_undoable(&mut self, new_text: &str, inv: &mut Invalidations) -> bool {
+        let old: Vec<char> = self.edit.chars().to_vec();
+        let new: Vec<char> = new_text.chars().collect();
+        let mut pre = 0;
+        while pre < old.len() && pre < new.len() && old[pre] == new[pre] {
+            pre += 1;
+        }
+        let mut suf = 0;
+        while suf < old.len() - pre
+            && suf < new.len() - pre
+            && old[old.len() - 1 - suf] == new[new.len() - 1 - suf]
+        {
+            suf += 1;
+        }
+        let (from, to) = (pre, old.len() - suf);
+        let mid: String = new[pre..new.len() - suf].iter().collect();
+        if from == to && mid.is_empty() {
+            return false;
+        }
+        let caret = self.edit.caret();
+        let user_scrolled = self.ml_user_scrolled;
+        self.replace_range(from, to, &mid, inv);
+        let added = new.len() - suf - pre;
+        let caret = if caret <= from {
+            caret
+        } else if caret >= to {
+            caret - (to - from) + added
+        } else {
+            from
+        };
+        self.edit.set_selection(caret, caret);
+        // 사용자가 보던 자리를 지킨다(캐럿이 화면 밖이어도 끌려가지 않게).
+        self.ml_user_scrolled = user_scrolled;
+        true
+    }
+
+    /// **메모리 회수**(nexa-sql 09-19): 그리기용 캐시(본문 문자열·줄 표·행 해시·행 폭·구문 상태·미니맵 픽셀·줄 배치)를 놓는다.
+    /// 다음에 그릴 때 다시 만들어지므로 **보이지 않는 탭**에만 부른다(보이는 탭에 부르면 다음 프레임이 한 번 느려질 뿐 결과는 같다).
+    pub fn release_caches(&self) {
+        *self.ml_text_cache.borrow_mut() = None;
+        *self.row_hash_cache.borrow_mut() = (u64::MAX, (false, 0), Rc::new(Vec::new()));
+        *self.hl_state_cache.borrow_mut() = HlStateCache::default();
+        *self.row_width_cache.borrow_mut() = RowWidthCache::default();
+        *self.minimap_cache.borrow_mut() = None;
+        *self.line_lay.borrow_mut() = Vec::new();
+        *self.caret_xs.borrow_mut() = Vec::new();
+    }
+
+    /// 되돌리기 히스토리를 비운다(호스트의 메모리 회수 · 닫기 직전).
+    pub fn clear_history(&mut self) {
+        self.edit.clear_history();
+    }
+
+    /// 이 컨트롤이 쥔 메모리의 어림(바이트): 본문(4 B/글자) + 히스토리 + 그리기 캐시 — 진단·메모리 점검용.
+    #[must_use]
+    pub fn approx_bytes(&self) -> usize {
+        let text = self.edit.chars().len() * 4;
+        let hist = self.edit.history_chars() * 4;
+        let cache = self
+            .ml_text_cache
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.text.len() + c.starts.len() * 24)
+            + self.row_hash_cache.borrow().2.len() * 8
+            + self.row_width_cache.borrow().widths.len() * 12
+            + self.hl_state_cache.borrow().states.len() * 12;
+        text + hist + cache
+    }
+
+    /// 진단·테스트: (구문 상태를 계산한 행 수, 폰트 엔진으로 폭을 잰 행 수) 누계 — 캐시가 듣는지 본다.
+    #[must_use]
+    pub fn paint_work(&self) -> (u64, u64) {
+        (
+            self.hl_state_cache.borrow().scanned,
+            self.row_width_cache.borrow().measured,
+        )
+    }
+
     /// 범위 교체(바꾸기) — 되돌리기 히스토리에 남는다(`set_text`와 달리).
     pub fn replace_range(&mut self, from: usize, to: usize, text: &str, inv: &mut Invalidations) {
         self.edit.set_selection(from, to);
@@ -2299,7 +2571,11 @@ impl TextBox {
         // 본문(String)은 preedit가 있을 때만 새로 만든다 — 없으면 EditState의 char 슬라이스로 바로(09-19 성능).
         let buf: &[char] = self.edit.chars();
         // 줄번호 거터 폭 — 논리 줄 수의 자릿수 × 숫자 폭 + 여백(줄 수가 변해도 자릿수가 같으면 폭 불변).
-        let logical_count = (buf.iter().filter(|&&c| c == '\n').count() + 1).max(1);
+        let text_cache = self.ml_text_snapshot();
+        let logical_count = match &text_cache {
+            Some((_, starts)) => starts.len().max(1),
+            None => (buf.iter().filter(|&&c| c == '\n').count() + 1).max(1),
+        };
         // 표시 띠(4px) + 첫 글자 앞 여백(2px) = 거터에 6px 더(줄번호는 그만큼 왼쪽에 머문다).
         let mark_extra = if self.gutter_marks && self.line_numbers && self.multiline {
             self.s(6)
@@ -2334,12 +2610,14 @@ impl TextBox {
         // 표시 텍스트 — 조합 중이면 캐럿 자리에 preedit를 끼워 그린다(편집 불변).
         let caret_i = self.edit.caret().min(buf.len());
         let preedit_n = self.edit.preedit().chars().count();
-        let display: String = if preedit_n == 0 {
-            buf.iter().collect()
+        let display: Rc<String> = if let Some((text, _)) = &text_cache {
+            text.clone()
+        } else if preedit_n == 0 {
+            Rc::new(buf.iter().collect())
         } else {
             let before: String = buf[..caret_i].iter().collect();
             let after: String = buf[caret_i..].iter().collect();
-            format!("{before}{}{after}", self.edit.preedit())
+            Rc::new(format!("{before}{}{after}", self.edit.preedit()))
         };
         let disp_caret = caret_i + preedit_n;
         // ★ wrap = 논리 줄을 폭(avail)에 맞춰 소프트 행으로 접는다(공백 경계 선호).
@@ -2383,6 +2661,12 @@ impl TextBox {
                 }
             }
             rows
+        } else if let Some((_, starts)) = &text_cache {
+            // 캐시된 줄 표에서 슬라이스만 만든다(본문을 다시 훑지 않는다).
+            starts
+                .iter()
+                .map(|&(cs, bs, be)| (cs, &display[bs..be]))
+                .collect()
         } else {
             Self::logical_lines(&display)
         };
@@ -2393,11 +2677,10 @@ impl TextBox {
                 .rposition(|(st, _)| *st <= disp_caret)
                 .unwrap_or(0)
         } else {
-            display
-                .chars()
-                .take(disp_caret)
-                .filter(|&c| c == '\n')
-                .count()
+            // 줄 시작 표에서 이분 탐색(종전 = 캐럿까지 글자를 세며 개행을 셌다 · 끝쪽 캐럿이면 본문 전체).
+            lines
+                .partition_point(|(st, _)| *st <= disp_caret)
+                .saturating_sub(1)
         };
 
         // 보이는 줄 수 + 세로 스크롤. 08-18: 사용자가 휠로 스크롤 중이면 vscroll을
@@ -2427,19 +2710,53 @@ impl TextBox {
         // ★ 본문 세대(`edit.rev`)·글꼴·wrap이 같으면 **다시 재지 않는다**(09-19 성능: 2 MB 본문에서 페인트마다 전 줄을
         //   폰트 엔진으로 재던 것이 195ms 중 대부분이었다). preedit는 폭에 넣지 않는다(조합 중 몇 글자).
         let font_key = ctx.text_width("0");
-        let cache = self.ml_width_cache.get();
-        let content_w = if cache.0 == self.edit.rev() && cache.1 == font_key && cache.2 == self.wrap
-        {
-            cache.3
-        } else {
-            let w = lines
-                .iter()
-                .map(|(_, s)| ctx.text_width(s))
-                .max()
-                .unwrap_or(0);
-            self.ml_width_cache
-                .set((self.edit.rev(), font_key, self.wrap, w));
-            w
+        let wrap_key = (self.wrap, if self.wrap { avail } else { 0 });
+        let row_hashes = self.row_hashes(&lines, wrap_key);
+        let content_w = {
+            let mut c = self.row_width_cache.borrow_mut();
+            let key = (font_key, wrap_key.0, wrap_key.1);
+            if c.rev != self.edit.rev()
+                || c.key != key
+                || preedit_n > 0
+                || c.widths.len() != lines.len()
+            {
+                // 같은 글꼴·접기면 앞·뒤의 같은 행은 옛 폭을 그대로 — 바뀐 가운데만 다시 잰다.
+                let (pre, suf) = if c.key == key {
+                    let pre = c
+                        .hashes
+                        .iter()
+                        .zip(row_hashes.iter())
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    let room = c.hashes.len().min(row_hashes.len()) - pre;
+                    let suf = c
+                        .hashes
+                        .iter()
+                        .rev()
+                        .zip(row_hashes.iter().rev())
+                        .take(room)
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    (pre, suf)
+                } else {
+                    (0, 0)
+                };
+                let n = lines.len();
+                let mut widths = Vec::with_capacity(n);
+                widths.extend_from_slice(&c.widths[..pre.min(c.widths.len())]);
+                for (_, row) in &lines[pre..n - suf] {
+                    widths.push(ctx.text_width(row));
+                }
+                c.measured += (n - suf - pre) as u64;
+                let old_n = c.widths.len();
+                widths.extend_from_slice(&c.widths[old_n - suf.min(old_n)..]);
+                c.max = widths.iter().copied().max().unwrap_or(0);
+                c.widths = widths;
+                c.hashes = row_hashes.clone();
+                c.key = key;
+                c.rev = self.edit.rev();
+            }
+            c.max
         };
         let content_h = lines.len() as i32 * lh + self.s(16);
         self.ml_content.set((content_w, content_h));
@@ -2552,12 +2869,15 @@ impl TextBox {
         ctx.set_tab_origin(Some(dx));
         let (vx0, vx1) = (tx, tx + avail); // 뷰포트(선택 반전 클립 범위)
                                            // 줄끝 표시용 전체 글자(eol 표시가 켜진 때만 수집 — 꺼진 기본은 비용 0).
-        let eol_chars: Vec<char> =
-            if self.whitespace.eol != '\0' && self.whitespace.mode != WhitespaceMode::None {
-                display.chars().collect()
-            } else {
-                Vec::new()
-            };
+                                           //   ★ 조합 중이 아니면 편집 버퍼를 그대로 빌린다(종전 = 매 프레임 본문 전체를 `Vec<char>`로 복사 — 3.6 MB 본문에서 프레임당 ≈ 12 ms).
+        let eol_on = self.whitespace.eol != '\0' && self.whitespace.mode != WhitespaceMode::None;
+        let eol_chars: std::borrow::Cow<[char]> = if !eol_on {
+            std::borrow::Cow::Borrowed(&[][..])
+        } else if preedit_n == 0 {
+            std::borrow::Cow::Borrowed(buf)
+        } else {
+            std::borrow::Cow::Owned(display.chars().collect())
+        };
         // 세로 안내선(열 × 'M' 폭 · 뷰포트 안에서만).
         if self.rulers_show && !self.rulers.is_empty() {
             let cw = ctx.text_width("M").max(1);
@@ -2609,16 +2929,9 @@ impl TextBox {
         let mut mm_hl_state = 0u32;
         let mut hl_spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
         if let Some(h) = &self.highlighter {
-            for (i, (_, l)) in lines.iter().enumerate().take(top) {
-                if i == mm_start {
-                    mm_hl_state = hl_state;
-                }
-                hl_spans.clear();
-                h.line_spans(l, &mut hl_state, &mut hl_spans);
-            }
-            if mm_start >= top {
-                mm_hl_state = hl_state;
-            }
+            let (at_top, at_mm) = self.hl_states_at(h, &lines, &row_hashes, top, mm_start, avail);
+            hl_state = at_top;
+            mm_hl_state = at_mm;
         }
         // 캐럿이 속한 표시 행(다중 캐럿 포함) — 시작이 캐럿 이하인 마지막 행.
         let caret_rows: Vec<(usize, usize)> = carets
@@ -3151,7 +3464,7 @@ impl TextBox {
                 self.base.focused = true; // 우클릭도 포커스(메뉴 행동의 대상이 된다)
                 let caps = super::EditMenuCaps {
                     has_sel: self.edit.selected_text().is_some(),
-                    has_text: !self.edit.text().is_empty(),
+                    has_text: !self.edit.chars().is_empty(),
                     clip_has_text: self.clip_has_text,
                 };
                 // 팝업이 박스 밖(아래)으로 펼쳐질 공간 — 박스 사각형만 주면 안에 구겨진다.
@@ -3271,7 +3584,7 @@ impl TextBox {
                 }
                 // ×(지우기) — 값이 있을 때만. 클릭 = 초기화 + 변경 보고.
                 if self.clearable
-                    && !self.edit.text().is_empty()
+                    && !self.edit.chars().is_empty()
                     && self.clear_rect().contains(Point { x, y })
                 {
                     self.edit.set_text("");
@@ -3920,6 +4233,34 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    /// 전체 교체(외부 변경 반영 · nexa-sql docs/58): 달라진 가운데만 · 되돌리기 한 단계 · 캐럿은 같은 글자에.
+    #[test]
+    fn replace_all_undoable_keeps_caret_and_one_undo_step() {
+        let mut t = TextBox::new("sql").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 300, 120), &mut inv);
+        t.set_focused(true);
+        let before = "select a\nfrom t\nwhere x = 1\n";
+        let after = "select a, b\nfrom t\nwhere x = 1\n";
+        t.set_text(before);
+        // 캐럿을 "where" 앞(교체 구간 뒤쪽)에 둔다.
+        let at = "select a\nfrom t\n".chars().count();
+        t.select_range(at, at, &mut inv);
+        assert!(t.replace_all_undoable(after, &mut inv));
+        assert_eq!(t.text(), after);
+        assert_eq!(
+            t.caret(),
+            at + 3,
+            "구간 뒤의 캐럿 = 길이 차이만큼 이동(같은 글자)"
+        );
+        assert!(
+            !t.replace_all_undoable(after, &mut inv),
+            "같으면 아무것도 안 함"
+        );
+        t.on_event(&InputEvent::Undo, &mut inv);
+        assert_eq!(t.text(), before, "Ctrl+Z 한 번 = 교체 전");
     }
 
     /// 멀티라인(08-17) — Enter가 개행, 세로 이동이 같은 열을 목표로 한다.

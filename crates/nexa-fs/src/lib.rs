@@ -11,6 +11,7 @@
 
 pub mod lister;
 pub mod shell;
+pub mod watch;
 
 pub use lister::{ListHandle, ListMsg, ListOpts};
 
