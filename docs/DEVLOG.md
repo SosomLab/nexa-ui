@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-19 (41차 · win)** — Toolbar `ToolIcon::Glyph` 비활성 = `text_dim` · 색조 존중(nexa-sql 결과 도구줄 + − ⧉ ✓ ✕ Σ가 늘 켜져 보이던 결함) · TreeControl ← = 접기/상위로 · **타입어헤드 부품** `typeahead.rs`+`hangul.rs`(nexa-beep 이식 · 테스트 17) · Switch/Checkbox 빈 bounds = 안 그림((0,0) 조각 결함) · `PositionDropdown`(선택 타일 머리 + 3×3 팝업)
 - **2026-09-19 (40차 · mac)** — TextBox 성능: `EditState::rev`/`chars()` · 내용 폭 캐시 · 슬라이스 줄 분해(2 MB 페인트 195→13 ms · ↓ 7.5→0 ms · `examples/bench_editor`) · 목표 열(`goal_x`) · `set_warning`. → [journal](journal/2026-09-18.md)
 - **2026-09-19 (39차 · mac)** — ToolDock 드래그 고스트·다중 행(`;`)·Esc 취소 · TextBox 첫/마지막 줄 ↑/↓ = 줄 끝 · `polyline_clipped`/셰브론 클립 · CtxMenu 토글 = 체크박스. → [journal](journal/2026-09-18.md)
 - **2026-09-19 (38차 · mac)** — `TextBox::set_modified`(왼쪽 강조 띠) · `ButtonTone::Accent` — nexa-sql 접속 폼 바뀜 표시(T-131). → [journal](journal/2026-09-18.md)

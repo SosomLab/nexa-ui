@@ -137,6 +137,10 @@ impl Widget for Checkbox {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        // 빈 bounds = 보이지 않음(상자는 고정 크기라 (0,0)에 그려질 수 있다 · Switch와 같은 규칙 · 09-19).
+        if self.base.bounds.is_empty() {
+            return;
+        }
         let box_r = self.box_rect();
         self.draw_focus_ring(ctx, theme, box_r);
         draw_checkbox_glyph(ctx, theme, box_r, self.checked, self.base.active);

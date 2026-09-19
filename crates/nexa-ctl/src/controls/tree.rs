@@ -274,15 +274,31 @@ pub trait TreeControl: Control {
         }
     }
 
-    /// →(펼침) / ←(접힘) — 선택 행 기준.
+    /// →(펼침) / ←(접힘) — 선택 행 기준. ←는 **펼쳐진 폴더면 접고, 아니면(잎·접힌 폴더) 상위 폴더로 이동**(파일 탐색기 관례 ·
+    /// Windows 탐색기·VS Code · nexa-sql 사용자 09-19 "좌측 이동이 미동작").
     fn expand_selected(&mut self, on: bool, inv: &mut Invalidations) {
         let i = self.selected_row();
-        if let Some(row) = self.rows().get(i) {
-            if row.has_children {
+        let rows = self.rows();
+        let Some(row) = rows.get(i) else { return };
+        if on {
+            if row.has_children && !row.expanded {
                 let path = row.path.clone();
-                self.model_mut().set_expanded(&path, on);
+                self.model_mut().set_expanded(&path, true);
                 inv.push(self.bounds());
             }
+            return;
+        }
+        if row.has_children && row.expanded {
+            let path = row.path.clone();
+            self.model_mut().set_expanded(&path, false);
+            inv.push(self.bounds());
+            return;
+        }
+        // 상위 = 위쪽에서 처음 만나는 얕은 행.
+        let depth = row.depth;
+        if let Some(parent) = (0..i).rev().find(|&j| rows[j].depth < depth) {
+            self.set_selected_row(parent);
+            inv.push(self.bounds());
         }
     }
 
@@ -955,6 +971,16 @@ mod tests {
         assert_eq!(v.rows().len(), 2, "← 접힘");
         v.on_event(&key(Key::Right), &mut inv);
         assert_eq!(v.rows().len(), 5, "→ 펼침");
+        // ← 규칙(09-19): 잎/접힌 행에서는 상위로 · 펼쳐진 행에서는 접기.
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.selected_row(), 1, "자식 잎 행");
+        v.on_event(&key(Key::Left), &mut inv);
+        assert_eq!(v.selected_row(), 0, "← 잎에서 = 상위 폴더로");
+        assert_eq!(v.rows().len(), 5, "상위로 갈 때는 접지 않는다");
+        v.on_event(&key(Key::Left), &mut inv);
+        assert_eq!(v.rows().len(), 2, "← 펼쳐진 상위에서 = 접기");
+        v.on_event(&key(Key::Left), &mut inv);
+        assert_eq!(v.selected_row(), 0, "루트에서 ← = 그대로");
     }
 
     #[test]

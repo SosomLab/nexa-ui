@@ -33,10 +33,12 @@ pub mod draw;
 pub mod edit;
 pub mod event;
 pub mod geom;
+pub mod hangul;
 pub mod highlight;
 pub mod raster;
 pub mod theme;
 pub mod tokens;
+pub mod typeahead;
 pub mod view_mode;
 pub mod widget;
 
@@ -49,9 +51,9 @@ pub use controls::{
     AutoIndent, BorderSpec, BracketOpts, Button, ButtonMode, Checkbox, Choose, ChoosePicker,
     ColorPanel, ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg,
     DiffKind, EditCtxAction, FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon,
-    OccurrenceStyle, Pair, PairKind, PairOpts, PairTable, PopupHit, RadioGroup, RadioOption,
-    ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode,
-    WhitespaceStyle,
+    OccurrenceStyle, Pair, PairKind, PairOpts, PairTable, PopupHit, PositionDropdown,
+    PositionPicker, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel,
+    TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
@@ -63,4 +65,5 @@ pub use theme::{color_from_hex, color_to_hex, Color, FontPrefs, IconImage, SlotF
 pub use widget::{Invalidations, Widget};
 
 pub use tokens::{motion, radius, space, type_scale, Elevation, State};
+pub use typeahead::{HudPos, TypeAhead, TypeAheadFilter, TYPEAHEAD_TIMEOUT_MS};
 pub use view_mode::ViewMode;

@@ -628,10 +628,20 @@ impl Toolbar {
             }
             match &it.icon {
                 ToolIcon::Glyph(g) => {
-                    let color = if is_hover || is_pressed {
+                    // 글리프 항목도 마스크 항목과 같은 색 규칙: 비활성 = 흐림 · hover/pressed = accent · 아니면 색조.
+                    // (종전엔 늘 본문색이라 `.disabled()` 항목이 켜진 것처럼 보였다 — nexa-sql 결과 도구줄 + − ⧉ ✓ ✕ Σ · 09-19)
+                    let color = if !it.enabled {
+                        theme.text_dim
+                    } else if is_hover || is_pressed {
                         theme.accent
                     } else {
-                        theme.text
+                        match it.tone {
+                            ToolTone::Default => theme.text,
+                            ToolTone::Ok => super::switch::ON_GREEN,
+                            ToolTone::Accent => theme.accent,
+                            ToolTone::Danger => theme.danger,
+                            ToolTone::Custom(c) => c,
+                        }
                     };
                     ctx.select_font(FontSlot::Base, false);
                     let gw = ctx.text_width(g);

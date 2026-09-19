@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-19 (41차 · win) — 🔧 Toolbar 글리프 항목 비활성 흐림(`enabled`·`tone` 존중 · nexa-sql 결과 도구줄) · **TreeControl ← 키**(펼쳐진 행 = 접기 · 아니면 상위로) · ★ **타입어헤드 부품**(`typeahead`/`hangul` · nexa-beep 이식) · Switch/Checkbox 빈 bounds 가드 · **`PositionDropdown`**(위치 이미지 드롭다운) → [journal](journal/2026-09-18.md)
+
 ## 2026-09-17 (26차 · win) — ★ `ToolDock` 툴바 그룹 도크 ✅ · Toolbar 구분자/권장 폭/게터 ✅ · Toolbar 배지/툴팁/Custom 색조 ✅ · 풀다운 Disabled ✅ · TextBox 글자 세로 중앙 · `OccurrenceStyle`(1px 상자 · 인접 행 선 공유) · 미니맵 선택/출현 색 구분 ✅ · nexa-fs `reveal_in_file_manager` ✅ · Sublime 커서 규칙(단어/서브워드/스마트 Home/Ctrl+클릭/열 선택) ✅ · Auto Indent ✅ · **레인보우 괄호 코어**(`PairTable` · `BracketOpts` · 형제/상위/하위 이동 · 자동 닫기/감싸기 · 깊이 색 · `Theme.rainbow`) ✅
 
 목적별 그룹(아이콘·구분자) · 그립 드래그 순서 이동 · 세로 드래그 = `DockAction::Float`(창은 호스트) · `DockLayout` 문자열 저장/복원 · 테스트 3. nexa-sql 52차가 상단 툴바에 배선(플로팅 창 `toolfloat.rs`). → [journal](journal/2026-09-17.md)

@@ -24,6 +24,7 @@ mod editmenu;
 pub mod glyphs;
 pub mod icondrop;
 pub mod listedit;
+pub mod posdrop;
 pub mod posgrid;
 pub mod pulldown;
 pub mod radio;
@@ -48,6 +49,7 @@ pub use editmenu::{set_edit_menu_decor, EditMenu, EditMenuAction, EditMenuCaps, 
 pub use glyphs::{glyph, GlyphKind};
 pub use icondrop::{IconDropItem, IconDropdown};
 pub use listedit::ListEditor;
+pub use posdrop::PositionDropdown;
 pub use posgrid::PositionPicker;
 pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};

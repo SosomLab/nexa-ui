@@ -164,6 +164,11 @@ impl Widget for Switch {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        // 빈 bounds = "보이지 않음"(호스트가 화면 밖 컨트롤을 빈 rect로 둔다 · nexa-sql 설정 창) — 트랙은 고정 크기라
+        //   x·y만 보고 (0,0)에 그려졌다(사용자 09-19 "설정 검색 밑에 스위치가 겹쳐 보인다").
+        if self.base.bounds.is_empty() {
+            return;
+        }
         let tr = self.track_rect();
         let radius = tr.h / 2;
         self.draw_focus_ring(ctx, theme, tr);

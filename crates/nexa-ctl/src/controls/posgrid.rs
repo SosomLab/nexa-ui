@@ -13,17 +13,17 @@ use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 
 /// 행우선(상단→하단) 위치 코드 — `HudPos::from_code`와 동일 체계.
-const CODES: [&str; 9] = ["tl", "tc", "tr", "ml", "c", "mr", "bl", "bc", "br"];
+pub const CODES: [&str; 9] = ["tl", "tc", "tr", "ml", "c", "mr", "bl", "bc", "br"];
 
-/// 셀(미니 화면) 크기 — 4:3 가로(논리 px).
-const CELL_W: i32 = 36;
-const CELL_H: i32 = 27;
+/// 셀(미니 화면) 크기 — 4:3 가로(논리 px) · 종전 36×27의 80%(nexa-sql 사용자 09-19 "위치 이미지를 80%로").
+const CELL_W: i32 = 28;
+const CELL_H: i32 = 21;
 /// 셀 간격(논리 px).
-const GAP: i32 = 6;
-/// 미니 화면 안 박스 크기·여백(논리 px).
-const BOX_W: i32 = 9;
-const BOX_H: i32 = 7;
-const BOX_M: i32 = 4;
+const GAP: i32 = 5;
+/// 미니 화면 안 박스 크기·여백(논리 px · 셀에 비례).
+const BOX_W: i32 = 7;
+const BOX_H: i32 = 5;
+const BOX_M: i32 = 3;
 
 /// 3×3 위치 선택 컨트롤.
 #[derive(Debug)]
@@ -49,6 +49,11 @@ impl PositionPicker {
             selected: 6, // "bl"
             changed: false,
         }
+    }
+
+    /// 배율 지정(팝업 안에서 쓰일 때 호스트가 준다).
+    pub fn set_scale(&mut self, scale: f32) {
+        self.base.scale = scale.max(0.5);
     }
 
     /// 그리드 권장 크기(물리 px) — 호스트 레이아웃용.
@@ -103,21 +108,53 @@ impl PositionPicker {
     }
 
     /// 미니 화면 안 박스 rect — 셀 i의 위치(좌상단 셀 = 좌상단 박스).
+    #[cfg(test)]
     fn box_rect(&self, cell: Rect, i: usize) -> Rect {
-        let (bw, bh, m) = (self.s(BOX_W), self.s(BOX_H), self.s(BOX_M));
-        let (row, col) = (i / 3, i % 3);
-        let x = match col {
-            0 => cell.x + m,
-            1 => cell.x + (cell.w - bw) / 2,
-            _ => cell.right() - m - bw,
-        };
-        let y = match row {
-            0 => cell.y + m,
-            1 => cell.y + (cell.h - bh) / 2,
-            _ => cell.bottom() - m - bh,
-        };
-        Rect::new(x, y, bw, bh)
+        box_rect_in(cell, i, self.base.scale)
     }
+}
+
+/// 미니 화면(`cell`) 안 박스 rect — 위치 인덱스 `i`(행우선) · 배율 `scale`. 셀 크기에 비례해 박스를 잡는다.
+#[must_use]
+pub fn box_rect_in(cell: Rect, i: usize, scale: f32) -> Rect {
+    let s = |v: i32| (v as f32 * scale).round() as i32;
+    // 기본 셀(28×21)에서 7×5·여백 3 — 다른 크기 셀은 비례.
+    let bw = (s(BOX_W) * cell.w / s(CELL_W).max(1)).max(3);
+    let bh = (s(BOX_H) * cell.h / s(CELL_H).max(1)).max(2);
+    let m = (s(BOX_M) * cell.w / s(CELL_W).max(1)).max(1);
+    let (row, col) = (i / 3, i % 3);
+    let x = match col {
+        0 => cell.x + m,
+        1 => cell.x + (cell.w - bw) / 2,
+        _ => cell.right() - m - bw,
+    };
+    let y = match row {
+        0 => cell.y + m,
+        1 => cell.y + (cell.h - bh) / 2,
+        _ => cell.bottom() - m - bh,
+    };
+    Rect::new(x, y, bw, bh)
+}
+
+/// 미니 화면 타일 하나 그리기(드롭다운 머리·그리드 공용): 필드 배경 + 테두리(선택 = accent 2px) + 위치 박스.
+pub fn paint_cell(
+    ctx: &mut dyn DrawCtx,
+    cell: Rect,
+    i: usize,
+    selected: bool,
+    accent: crate::theme::Color,
+    theme: &Theme,
+    scale: f32,
+) {
+    let s = |v: i32| (v as f32 * scale).round() as i32;
+    ctx.fill_round_rect(cell, s(3), theme.field_bg);
+    if selected {
+        ctx.stroke_round_rect(cell, s(3), accent, s(2).max(2) as f32);
+    } else {
+        ctx.stroke_round_rect(cell, s(3), theme.border, 1.0);
+    }
+    let bx = box_rect_in(cell, i, scale);
+    ctx.fill_round_rect(bx, s(1), if selected { accent } else { theme.text_dim });
 }
 
 impl Control for PositionPicker {
@@ -167,16 +204,15 @@ impl Widget for PositionPicker {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let accent = self.accent_now(theme);
         for i in 0..9 {
-            let cell = self.cell_rect(i);
-            let sel = i == self.selected;
-            ctx.fill_round_rect(cell, self.s(3), theme.field_bg);
-            if sel {
-                ctx.stroke_round_rect(cell, self.s(3), accent, self.s(2).max(2) as f32);
-            } else {
-                ctx.stroke_round_rect(cell, self.s(3), theme.border, 1.0);
-            }
-            let bx = self.box_rect(cell, i);
-            ctx.fill_round_rect(bx, self.s(1), if sel { accent } else { theme.text_dim });
+            paint_cell(
+                ctx,
+                self.cell_rect(i),
+                i,
+                i == self.selected,
+                accent,
+                theme,
+                self.base.scale,
+            );
         }
     }
 }
