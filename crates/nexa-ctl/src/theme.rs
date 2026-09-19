@@ -43,6 +43,8 @@ pub struct Theme {
     pub syn_comment: Color,
     pub syn_number: Color,
     /// 레인보우 괄호 깊이 색 6(nexa-sql docs/51 · D-95 테마 기본).
+    /// ★ 순서 = [`contrast_order`] 결과(이웃 깊이가 따뜻함↔차가움으로 번갈아 · 보색에 가깝게) — 색을 바꾸면 테스트
+    /// `theme_rainbow_is_already_contrast_ordered`가 새 순서를 알려 준다.
     pub rainbow: [Color; 6],
     /// 위험 행위(파일 실체화 승인·차단 등).
     pub danger: Color,
@@ -78,8 +80,8 @@ impl Theme {
             syn_number: Color(0x00B5_CEA8),
             rainbow: [
                 Color(0x00F2_C94C),
-                Color(0x00DA_70D6),
                 Color(0x004F_C1FF),
+                Color(0x00DA_70D6),
                 Color(0x007E_E787),
                 Color(0x00FF_9F43),
                 Color(0x00B3_92F0),
@@ -114,8 +116,8 @@ impl Theme {
             syn_number: Color(0x0009_8658),
             rainbow: [
                 Color(0x00B5_8900),
-                Color(0x00D3_3682),
                 Color(0x0026_8BD2),
+                Color(0x00D3_3682),
                 Color(0x002A_A198),
                 Color(0x00CB_4B16),
                 Color(0x006C_71C4),
@@ -150,9 +152,160 @@ pub fn color_to_hex(c: Color) -> String {
     format!("#{:06X}", c.0 & 0x00FF_FFFF)
 }
 
+/// 색의 (색상각 0~360 · 채도 0~1 · 상대 휘도 0~1).
+fn hue_sat_lum(c: Color) -> (f32, f32, f32) {
+    let (r, g, b) = c.rgb();
+    let (r, g, b) = (
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+    );
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let d = max - min;
+    let hue = if d <= f32::EPSILON {
+        0.0
+    } else if (max - r).abs() <= f32::EPSILON {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if (max - g).abs() <= f32::EPSILON {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    let sat = if max <= f32::EPSILON { 0.0 } else { d / max };
+    (hue, sat, 0.2126 * r + 0.7152 * g + 0.0722 * b)
+}
+
+/// 따뜻한 색인가 — 빨강·주황·노랑·자홍(색상각 < 90° 또는 ≥ 300°). 나머지(초록·청록·파랑·보라) = 차가운 색.
+#[must_use]
+pub fn is_warm(c: Color) -> bool {
+    let (h, _, _) = hue_sat_lum(c);
+    !(90.0..300.0).contains(&h)
+}
+
+/// 두 색이 **나란히 놓였을 때 구별되는 정도**(0~1): 색상각 차이(보색 = 180° = 최대 · 채도가 낮으면 덜 믿는다) 0.6 +
+/// 색 온도가 다름(따뜻함↔차가움) 0.2 + 밝기 차이 0.2.
+#[must_use]
+pub fn color_contrast(a: Color, b: Color) -> f32 {
+    let (ha, sa, la) = hue_sat_lum(a);
+    let (hb, sb, lb) = hue_sat_lum(b);
+    let dh = (ha - hb).abs();
+    let dh = dh.min(360.0 - dh) / 180.0;
+    let temp = if is_warm(a) == is_warm(b) { 0.0 } else { 1.0 };
+    0.6 * dh * sa.min(sb) + 0.2 * temp + 0.2 * (la - lb).abs().min(1.0)
+}
+
+/// 순환 팔레트(깊이 1, 2, 3 … 이 차례로 쓰는 색)를 **이웃끼리 가장 잘 구별되게** 다시 배열한다(nexa-sql 사용자 09-19
+/// "1·2, 2·3, 3·4가 보색·색 온도로 식별되게"). 첫 색은 그대로 두고, 이웃 쌍(끝→처음 포함)의 [`color_contrast`] **최솟값**이
+/// 가장 큰 순서를 고른다(동률 = 합이 큰 쪽 · 그다음 = 원래 순서에 가까운 쪽). 8색 이하는 전수(≤ 5040가지) · 그보다 많으면
+/// "직전 색과 가장 다른 색"을 차례로 고르는 탐욕. 색이 3개 이하이면 순서를 바꿀 여지가 없어 그대로 돌려준다.
+#[must_use]
+pub fn contrast_order(colors: &[Color]) -> Vec<Color> {
+    let n = colors.len();
+    if n <= 3 {
+        return colors.to_vec();
+    }
+    if n > 8 {
+        let mut rest: Vec<Color> = colors[1..].to_vec();
+        let mut out = vec![colors[0]];
+        while !rest.is_empty() {
+            let last = out[out.len() - 1];
+            let mut best = 0;
+            for i in 1..rest.len() {
+                if color_contrast(last, rest[i]) > color_contrast(last, rest[best]) {
+                    best = i;
+                }
+            }
+            out.push(rest.remove(best));
+        }
+        return out;
+    }
+    let mut score = vec![vec![0.0f32; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            score[i][j] = color_contrast(colors[i], colors[j]);
+        }
+    }
+    // 순열 전수(첫 색 고정) — 사전순이라 동률이면 원래 순서에 가까운 것이 먼저 나와 남는다.
+    fn walk(
+        order: &mut Vec<usize>,
+        used: &mut [bool],
+        score: &[Vec<f32>],
+        best: &mut (f32, f32, Vec<usize>),
+    ) {
+        let n = used.len();
+        if order.len() == n {
+            let (mut min, mut sum) = (f32::MAX, 0.0);
+            for k in 0..n {
+                let v = score[order[k]][order[(k + 1) % n]];
+                min = min.min(v);
+                sum += v;
+            }
+            if min > best.0 + 1e-6 || ((min - best.0).abs() <= 1e-6 && sum > best.1 + 1e-6) {
+                *best = (min, sum, order.clone());
+            }
+            return;
+        }
+        for i in 1..n {
+            if !used[i] {
+                used[i] = true;
+                order.push(i);
+                walk(order, used, score, best);
+                order.pop();
+                used[i] = false;
+            }
+        }
+    }
+    let mut used = vec![false; n];
+    used[0] = true;
+    let mut best = (-1.0f32, -1.0f32, (0..n).collect::<Vec<usize>>());
+    walk(&mut vec![0], &mut used, &score, &mut best);
+    best.2.into_iter().map(|i| colors[i]).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 이웃 단계(끝→처음 포함)의 최소 대비.
+    fn min_adjacent(c: &[Color]) -> f32 {
+        (0..c.len())
+            .map(|i| color_contrast(c[i], c[(i + 1) % c.len()]))
+            .fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn contrast_order_separates_neighbours() {
+        // 무지개 순서(이웃이 비슷한 색) → 이웃 대비가 뚜렷이 커지고 · 첫 색·색 집합은 그대로.
+        let rainbow: Vec<Color> = ["FF0000", "FF8000", "FFD000", "00C000", "0080FF", "8000FF"]
+            .iter()
+            .filter_map(|h| color_from_hex(h))
+            .collect();
+        let out = contrast_order(&rainbow);
+        assert_eq!(out[0], rainbow[0]);
+        let mut a: Vec<u32> = rainbow.iter().map(|c| c.0).collect();
+        let mut b: Vec<u32> = out.iter().map(|c| c.0).collect();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b);
+        assert!(min_adjacent(&out) > min_adjacent(&rainbow) + 0.15);
+        // 3색 이하 = 그대로 · 많은 색 = 탐욕(집합 보존).
+        assert_eq!(contrast_order(&rainbow[..3]), rainbow[..3].to_vec());
+        let many: Vec<Color> = (0..12).map(|i| Color(0x0010_2030 * (i + 1))).collect();
+        assert_eq!(contrast_order(&many).len(), 12);
+        assert!(is_warm(Color(0x00FF_8000)) && !is_warm(Color(0x0000_80FF)));
+    }
+
+    #[test]
+    fn theme_rainbow_is_already_contrast_ordered() {
+        // 기본 팔레트는 설계 시점에 정렬해 둔다(런타임 비용 0) — 이웃은 따뜻함↔차가움이 번갈아 온다.
+        for th in [Theme::dark(), Theme::light()] {
+            assert_eq!(contrast_order(&th.rainbow), th.rainbow.to_vec());
+            for i in 0..th.rainbow.len() {
+                let (a, b) = (th.rainbow[i], th.rainbow[(i + 1) % th.rainbow.len()]);
+                assert_ne!(is_warm(a), is_warm(b), "{i}");
+            }
+        }
+    }
 
     #[test]
     fn default_is_dark() {

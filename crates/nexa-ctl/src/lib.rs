@@ -61,7 +61,10 @@ pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};
-pub use theme::{color_from_hex, color_to_hex, Color, FontPrefs, IconImage, SlotFont, Theme};
+pub use theme::{
+    color_contrast, color_from_hex, color_to_hex, contrast_order, is_warm, Color, FontPrefs,
+    IconImage, SlotFont, Theme,
+};
 pub use widget::{Invalidations, Widget};
 
 pub use tokens::{motion, radius, space, type_scale, Elevation, State};
