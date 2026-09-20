@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-21 (50차 · mac) — ★ nexa-sys **`layer_present`** = macOS IOSurface 화면 내보내기(표면 풀 · sRGB 태그 · 의존 0 · present 36 → 2.9 ms · nexa-sql `gfx.mac_present`로 선택 · 남은 것 = `Surface` stride) → [journal](journal/2026-09-18.md)
+
+## 2026-09-20 (49차 · mac) — TextBox 한글 **앱 조합**(전역 스위치 · macOS winit IME 결함 회피) · nexa-sys `input_source`(한글 입력 소스 감지 + 바뀜 알림) → [journal](journal/2026-09-18.md)
+
 ## 2026-09-20 (48차 · win) — 📘 CLAUDE.md §3-1 세션 공통 규칙 · 편집기 코어 불변식(다른 PC에서 그대로 · nexa-sql docs/61) → [journal](journal/2026-09-18.md)
 
 ## 2026-09-20 (47차 · win) — ★ **`TextBuf`**(UTF-8 갭 버퍼 + 줄 표 + 줄 변경 기록 · 좌표 = 글자 인덱스) = `EditState`의 저장소 · 그리기 = 보이는 줄만 + 줄별 캐시를 변경 기록으로(70만 줄 입력 157 → 3 ms · 메모리 348 → 86 MB) · `chars()` → `buf()` · `merge3::line_edits` · 쉬었다 치면 새 묶음 · 거대 편집 확인 · 되돌리기 기록 내보내기/들이기 → [journal](journal/2026-09-18.md)
