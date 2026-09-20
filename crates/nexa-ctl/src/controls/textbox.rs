@@ -405,6 +405,9 @@ pub struct TextBox {
     /// ★ 세로 이동의 **목표 x**(Sublime `xpos` · nexa-sql 사용자 09-19): ↑/↓를 연달아 누르는 동안 처음 출발한 시각 열을
     /// 기억해, 빈 줄·짧은 줄을 지나도 긴 줄에서 다시 그 열로 돌아온다. 다른 캐럿 이동·편집이면 비운다.
     goal_x: Option<i32>,
+    /// ★ 한글 **앱 조합기**([`set_hangul_app_compose`] · nexa-sql T-139): 호스트가 IME를 끄고 raw 자모를 보내는 환경(macOS 한글
+    /// 입력 소스)에서 상자가 직접 음절을 조합한다 — 조합 중 글자는 기존 preedit 표시를 그대로 쓴다.
+    hangul: crate::hangul::Composer,
     /// 목표 열(글자 수) — 배치가 없을 때(아직 안 그렸음 · 테스트)의 대체 기준.
     goal_col: Option<usize>,
     /// ★ 단일 행 hover 페이드(회색 계열 · `Slow` 1초 · nexa-sql 사용자 09-14) — 멀티라인(편집기)은 제외.
@@ -772,6 +775,7 @@ impl TextBox {
             sl_range: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
             goal_x: None,
+            hangul: crate::hangul::Composer::new(),
             goal_col: None,
             hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Slow),
             highlighter: None,
@@ -3745,12 +3749,136 @@ impl TextBox {
     }
 }
 
+impl TextBox {
+    /// 조합 중 음절을 확정(본문에 넣고 preedit을 비운다).
+    fn hangul_flush(&mut self, inv: &mut Invalidations) {
+        if let Some(c) = self.hangul.flush() {
+            self.set_preedit("", inv);
+            self.on_event_core(&InputEvent::Char { c, now_ms: 0 }, inv);
+        }
+    }
+
+    /// 조합기의 미리보기를 preedit 표시에 맞춘다.
+    fn hangul_sync_preedit(&mut self, inv: &mut Invalidations) {
+        let pre = self.hangul.preview().map(String::from).unwrap_or_default();
+        self.set_preedit(&pre, inv);
+        inv.push(self.base.bounds);
+    }
+
+    /// 앱 조합 경로 — `true` = 이 사건을 조합기가 먹었다(평소 경로로 보내지 않는다).
+    /// 규칙(nexa-beep docs/27 · 탐색기 타입어헤드와 같은 조합기): 자모 = 조합 · 조합 중 Backspace = 자모 단위 ·
+    /// 자모가 아닌 글자·이동·Enter·클릭·붙여넣기·되돌리기 등 = **먼저 확정**한 뒤 평소대로 · 마우스 이동·휠·빈 preedit은 조합 유지.
+    fn hangul_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) -> bool {
+        match *ev {
+            InputEvent::Char { c, now_ms } if crate::hangul::is_jamo(c) && self.base.focused => {
+                let out = self.hangul.feed(c);
+                if !out.is_empty() {
+                    // 확정 글자가 나왔다 — preedit을 먼저 비우고(표시 순서) 본문에 넣는다.
+                    self.set_preedit("", inv);
+                    for ch in out.chars() {
+                        self.on_event_core(&InputEvent::Char { c: ch, now_ms }, inv);
+                    }
+                }
+                self.hangul_sync_preedit(inv);
+                true
+            }
+            // Backspace는 `Char('\u{8}')`로 온다 — 조합 중이면 자모 단위로 뗀다.
+            InputEvent::Char { c: '\u{8}', .. } if self.hangul.is_composing() => {
+                self.hangul.backspace();
+                self.hangul_sync_preedit(inv);
+                true
+            }
+            InputEvent::MouseMove { .. } | InputEvent::Wheel { .. } | InputEvent::HWheel { .. } => {
+                false
+            }
+            _ => {
+                if self.hangul.is_composing() {
+                    self.hangul_flush(inv);
+                }
+                false
+            }
+        }
+    }
+
+    fn on_event_core(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        let before = self.edit.undo_len();
+        // ↑/↓(수식키 없이 · Shift 확장 포함)만 목표 x를 이어 쓴다 — 그 밖의 입력(←/→·Home/End·클릭·타이핑·휠은 제외)은 목표를 비운다.
+        let vertical = matches!(
+            ev,
+            InputEvent::Key {
+                key: Key::Up | Key::Down,
+                primary: false,
+                ..
+            }
+        );
+        let scrolling = matches!(
+            ev,
+            InputEvent::Wheel { .. } | InputEvent::HWheel { .. } | InputEvent::MouseMove { .. }
+        );
+        if !vertical && !scrolling {
+            self.goal_x = None;
+            self.goal_col = None;
+        }
+        self.on_event_inner(ev, inv);
+        // 편집이 있었으면(되돌리기 스택 변화 · 붙여넣기/삭제/타이핑 전부) 줄 변경 표시를 다시 계산(페인트에서).
+        if self.changed || self.edit.undo_len() != before {
+            if self.baseline.is_some() {
+                self.diff_dirty.set(true);
+            }
+            self.pairs_dirty.set(true);
+        }
+        // 캐럿이 자동 들여쓰기 줄을 떠났으면 비운다(docs/49 §3 · Char/Enter는 자기 자리에서 처리).
+        if self.multiline
+            && self.auto_ws_line.is_some()
+            && matches!(ev, InputEvent::Key { .. } | InputEvent::MouseDown { .. })
+        {
+            self.trim_auto_ws();
+        }
+    }
+}
+
+/// ★ 한글 앱 조합 스위치(프로세스 전역 · 기본 끔): 호스트가 IME를 끄고 raw 자모를 보내는 환경에서 켠다 —
+/// macOS 한글 입력 소스에서 winit이 ① 첫 키를 IME 활성화 전에 자모로 흘리고 ② 조합 확정 직후 첫 1바이트 글자를 삼키는
+/// 문제(nexa-beep H-14·H-26 · nexa-sql T-139)를 IME를 거치지 않는 것으로 피한다. Windows/Linux는 켜지 않는다.
+static HANGUL_APP_COMPOSE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+thread_local! {
+    /// 테스트에서는 스레드별 스위치(병렬 테스트가 서로의 전역 값을 보지 않게).
+    static HANGUL_APP_COMPOSE_T: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`HANGUL_APP_COMPOSE`] 설정(호스트가 입력 소스에 따라 바꾼다 · 상자마다 배선하지 않는다 — nexa-dlg의 상자도 같이).
+pub fn set_hangul_app_compose(on: bool) {
+    #[cfg(test)]
+    HANGUL_APP_COMPOSE_T.with(|c| c.set(on));
+    HANGUL_APP_COMPOSE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 지금 앱 조합이 켜져 있는가.
+#[must_use]
+pub fn hangul_app_compose() -> bool {
+    #[cfg(test)]
+    return HANGUL_APP_COMPOSE_T.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    HANGUL_APP_COMPOSE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Control for TextBox {
     fn base(&self) -> &ControlBase {
         &self.base
     }
     fn base_mut(&mut self) -> &mut ControlBase {
         &mut self.base
+    }
+    /// 포커스를 잃으면 조합 중 음절을 확정한다(앱 조합 · 조합이 다른 상자로 새지 않게).
+    fn set_focused(&mut self, on: bool) {
+        if !on && self.hangul.is_composing() {
+            let mut inv = Invalidations::default();
+            self.hangul_flush(&mut inv);
+        }
+        self.base.focused = on;
     }
 }
 
@@ -4299,39 +4427,11 @@ impl Widget for TextBox {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        let before = self.edit.undo_len();
-        // ↑/↓(수식키 없이 · Shift 확장 포함)만 목표 x를 이어 쓴다 — 그 밖의 입력(←/→·Home/End·클릭·타이핑·휠은 제외)은 목표를 비운다.
-        let vertical = matches!(
-            ev,
-            InputEvent::Key {
-                key: Key::Up | Key::Down,
-                primary: false,
-                ..
-            }
-        );
-        let scrolling = matches!(
-            ev,
-            InputEvent::Wheel { .. } | InputEvent::HWheel { .. } | InputEvent::MouseMove { .. }
-        );
-        if !vertical && !scrolling {
-            self.goal_x = None;
-            self.goal_col = None;
+        // 한글 앱 조합(켜져 있을 때만 · 자모/Backspace는 조합기가 먹고, 그 밖의 입력은 조합을 확정한 뒤 평소대로).
+        if hangul_app_compose() && !self.masked && self.hangul_event(ev, inv) {
+            return;
         }
-        self.on_event_inner(ev, inv);
-        // 편집이 있었으면(되돌리기 스택 변화 · 붙여넣기/삭제/타이핑 전부) 줄 변경 표시를 다시 계산(페인트에서).
-        if self.changed || self.edit.undo_len() != before {
-            if self.baseline.is_some() {
-                self.diff_dirty.set(true);
-            }
-            self.pairs_dirty.set(true);
-        }
-        // 캐럿이 자동 들여쓰기 줄을 떠났으면 비운다(docs/49 §3 · Char/Enter는 자기 자리에서 처리).
-        if self.multiline
-            && self.auto_ws_line.is_some()
-            && matches!(ev, InputEvent::Key { .. } | InputEvent::MouseDown { .. })
-        {
-            self.trim_auto_ws();
-        }
+        self.on_event_core(ev, inv);
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
@@ -5967,5 +6067,77 @@ mod scroll_sim_tests {
         t.on_event(&InputEvent::Wheel { delta: 0 }, &mut inv);
         t.paint(&mut probe, &theme);
         assert_eq!(pos(&t), 45);
+    }
+}
+
+#[cfg(test)]
+mod hangul_compose_tests {
+    use super::*;
+    fn ch(c: char) -> InputEvent {
+        InputEvent::Char { c, now_ms: 0 }
+    }
+    fn tb() -> (TextBox, Invalidations) {
+        let mut t = TextBox::new("x");
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 300, 30), &mut inv);
+        t.set_focused(true);
+        (t, inv)
+    }
+    fn feed(t: &mut TextBox, inv: &mut Invalidations, s: &str) {
+        for c in s.chars() {
+            t.on_event(&ch(c), inv);
+        }
+    }
+
+    /// nexa-sql T-139 재현 입력: `가나다1234` · `가나다!@#$` — 자모가 풀리지 않고 · 한글 뒤 첫 ASCII가 남는다.
+    #[test]
+    fn jamo_compose_then_ascii_keeps_every_char() {
+        set_hangul_app_compose(true);
+        let (mut t, mut inv) = tb();
+        feed(&mut t, &mut inv, "ㄱㅏㄴㅏㄷㅏ1234");
+        assert_eq!(t.text(), "가나다1234");
+        feed(&mut t, &mut inv, " ㄱㅏㄴㅏㄷㅏ!@#$");
+        assert_eq!(t.text(), "가나다1234 가나다!@#$");
+        set_hangul_app_compose(false);
+    }
+
+    /// 조합 중 = preedit 표시(본문엔 아직 없음) · Backspace = 자모 단위 · 포커스 이탈 = 확정 · 도깨비불(받침 → 다음 초성).
+    #[test]
+    fn preedit_backspace_blur_and_dokkaebi() {
+        set_hangul_app_compose(true);
+        let (mut t, mut inv) = tb();
+        feed(&mut t, &mut inv, "ㄱㅏㄴ");
+        assert_eq!(t.text(), "", "조합 중 글자는 본문에 없다");
+        assert_eq!(t.display_text(), "간");
+        t.on_event(&ch('\u{8}'), &mut inv);
+        assert_eq!(t.display_text(), "가", "자모 단위 Backspace");
+        feed(&mut t, &mut inv, "ㄴㅏ"); // 간 + ㅏ → 가 + 나(도깨비불)
+        assert_eq!(t.text(), "가");
+        assert_eq!(t.display_text(), "가나");
+        t.set_focused(false);
+        assert_eq!(t.text(), "가나", "포커스 이탈 = 확정");
+        assert_eq!(t.display_text(), "가나");
+        // 이동 키도 먼저 확정한다.
+        t.set_focused(true);
+        feed(&mut t, &mut inv, "ㄷㅏ");
+        t.on_event(
+            &InputEvent::Key {
+                key: Key::Home,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.text(), "가나다");
+        set_hangul_app_compose(false);
+    }
+
+    /// 스위치가 꺼져 있으면(Windows/Linux · 시스템 IME) 자모는 그대로 들어간다 — 종전 동작 불변.
+    #[test]
+    fn switch_off_is_untouched() {
+        set_hangul_app_compose(false);
+        let (mut t, mut inv) = tb();
+        feed(&mut t, &mut inv, "ㄱㅏ1");
+        assert_eq!(t.text(), "ㄱㅏ1");
     }
 }

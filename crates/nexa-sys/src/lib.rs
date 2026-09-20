@@ -15,6 +15,8 @@
 //! - 값은 싸지만 공짜는 아니다(macOS는 CF 객체를 만들었다 놓는다) — 호출자가 **기동 1회 + 60초마다** 정도로 읽고 캐시한다(전원 이벤트 구독 없음).
 //! - 지원하지 않는 OS는 no-op 폴백(`None`).
 
+pub mod input_source;
+
 /// 네 신호를 한 번에 읽은 스냅샷(호출자가 캐시한다).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Signals {
