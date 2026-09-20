@@ -41,6 +41,18 @@
 - ★ **공개 API 변경은 소비자 영향 표기** — 커밋 본문에 `영향: nexa-sql | clip | beep`.
 - `.claude/settings.json`은 덮어쓰기 금지, 병합만.
 
+### 3-1. 세션 공통 규칙 · 편집기 코어 불변식(09-20 · 다른 PC에서도 그대로 — 원문 = nexa-sql [docs/61](../nexa-sql/docs/61-core-design-and-working-rules.md))
+
+- **답은 한글로.** "commit · main 병합 · push" = 작업 브랜치 → 커밋 → `main`에 `--ff-only` → 브랜치 삭제 → `docs/BRANCHES.md` → push(**nexa-ui가 nexa-sql보다 먼저** — path 의존) · 커밋 끝에 그 세션이 안내하는 `Co-Authored-By:` 줄.
+- **`TextBuf`**(`nexa-ctl/src/edit/textbuf.rs`) = `EditState`의 저장소: UTF-8 갭 버퍼 + 줄 시작 표 + 줄 변경 기록. **좌표는 글자(char) 인덱스** — 바이트 오프셋은 이 파일 밖으로 나가지 않는다. 불변식: 갭 양 끝 = 글자 경계 · `lines[k]` = k번째 개행 바로 뒤 · 온전한 UTF-8 · `unsafe` 0. 통째 교체는 `set_string`/`adopt`만(세대가 이어서 오른다).
+- **본문을 바꾸는 길은 셋뿐**: `splice_rec(_str)` · `replace_many_inner` · `apply_ops`. 새 편집 기능은 이 위에 — `buf.splice`를 직접 부르면 세대(`rev`) · 되돌리기 기록 · 읽기 전용 · 거대 편집 확인이 빠진다. 새 공개 편집 진입점은 `giant_refused` → 본체 → `giant_done`.
+- **본문 전체를 `Vec<char>`/`String`으로 뜨는 코드를 자주 도는 길(키 · 그리기 · 틱)에 넣지 않는다** — `buf()`의 줄·구간 조회를 쓴다. `chars_vec()`은 드문 명령·테스트 전용.
+- **줄별 캐시 = 변경 기록의 소비자**: `(epoch, seq)` + `changes_since` · 기록이 버려졌거나 세대가 다르면 전부 다시(본보기 `RowWidthCache` · `LineHlCache`). 접기(wrap) 모드만 종전의 본문 문자열 + 행 해시 경로.
+- 되돌리기: 저장 = 지운 글자만 · 묶음 안 연산은 뒤에서 앞으로 · 저장 지점 = 상태 id · 기록 파일 형식의 좌표 뜻이 바뀌면 `HISTORY_VERSION`을 올린다.
+- 자료 구조를 바꾸면 **단순 모델과 난수 대조 테스트**(자체 xorshift · 한글·이모지·개행 포함)를 같이 넣는다. 수치는 `--release` 벤치로(`examples/bench_editor` · `bench_undo`).
+- 공개 API를 바꿨으면 같은 작업 안에서 nexa-sql(`crates/nexa-sql`)과 `nexa-dlg`를 빌드·테스트한다(지금 nexa-ctl의 소비자는 이 둘).
+
+
 ## 4. 새 세션 오리엔테이션
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 → 3. [docs/TODO.md](docs/TODO.md).
