@@ -17,7 +17,18 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(20_000);
     let mut text = String::new();
+    // `BENCH_ASCII=1` = 한글 없는 본문(덤프·마이그레이션 SQL의 보통 모습 — 고정폭 지름길이 듣는 경우).
+    let ascii = std::env::var_os("BENCH_ASCII").is_some();
     for i in 0..lines {
+        if ascii {
+            text.push_str(&format!(
+                "SELECT COL_{} AS C{i}, 'plain ascii text {i}' AS K, SYSDATE FROM DUAL WHERE ROWNUM <= {} AND 1=1;
+",
+                i % 97,
+                i % 50
+            ));
+            continue;
+        }
         text.push_str(&format!(
             "SELECT COL_{} AS C{i}, '한글 문자열 {i}' AS K, SYSDATE FROM DUAL WHERE ROWNUM <= {} AND 1=1;\n",
             i % 97,
@@ -36,7 +47,25 @@ fn main() {
     let mut inv = Invalidations::default();
     tb.set_bounds(Rect::new(0, 0, w as i32, h as i32), &mut inv);
     tb.set_focused(true);
-    tb.set_text(&text);
+    // `BENCH_PREPARED=1` = 작업 스레드가 미리 준비한 본문을 옮겨 넣는 길(nexa-sql 큰 파일 적재) — UI 스레드 몫만 잰다.
+    if std::env::var_os("BENCH_PREPARED").is_some() {
+        let t_prep = Instant::now();
+        let prep = nexa_ctl::PreparedText::new(text.clone());
+        println!(
+            "PreparedText::new (worker thread): {:.1} ms",
+            t_prep.elapsed().as_secs_f64() * 1000.0
+        );
+        let t_set = Instant::now();
+        tb.set_prepared(prep);
+        println!(
+            "set_prepared (UI thread): {:.3} ms",
+            t_set.elapsed().as_secs_f64() * 1000.0
+        );
+    } else {
+        let t_set = Instant::now();
+        tb.set_text(&text);
+        println!("set_text: {:.1} ms", t_set.elapsed().as_secs_f64() * 1000.0);
+    }
     let prefs = FontPrefs {
         base: SlotFont {
             size: 14.0,
@@ -77,8 +106,13 @@ fn main() {
         "features: {}",
         if feats.is_empty() { "(none)" } else { &feats }
     );
-    // 워밍업(글리프 캐시).
+    // 워밍업(글리프 캐시) = **첫 페인트**(본문 스냅샷 · 행 해시 · 행 폭을 처음 만든다 — 큰 파일 열기 시간의 대부분).
+    let t_first = Instant::now();
     paint(&tb, &mut buf);
+    println!(
+        "first paint: {:.1} ms",
+        t_first.elapsed().as_secs_f64() * 1000.0
+    );
     let t = Instant::now();
     for _ in 0..30 {
         paint(&tb, &mut buf);

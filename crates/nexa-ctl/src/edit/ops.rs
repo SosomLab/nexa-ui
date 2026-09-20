@@ -4,7 +4,7 @@
 //! (겹치거나 같은 줄이면 하나) 뒤에서 앞으로 처리해 앞 인덱스가 밀리지 않게 한다. 캐럿·앵커·추가 구간은 조각
 //! 편집([`Piece`])의 길이 변화로 다시 매핑한다.
 
-use super::{EditOp, EditState};
+use super::{CharSeq, EditOp, EditState, TextBuf};
 
 /// 편집 명령(키맵·메뉴·팔레트가 같은 어휘를 쓴다).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,26 +54,18 @@ impl EditState {
 
     /// `i`가 속한 줄의 시작.
     fn line_start_of(&self, i: usize) -> usize {
-        let i = i.min(self.buf.len());
-        self.buf[..i]
-            .iter()
-            .rposition(|&c| c == '\n')
-            .map_or(0, |p| p + 1)
+        self.buf.line_start_of(i)
     }
 
     /// `i`가 속한 줄의 끝(`'\n'` 위치 또는 버퍼 길이).
     fn line_end_of(&self, i: usize) -> usize {
-        let i = i.min(self.buf.len());
-        self.buf[i..]
-            .iter()
-            .position(|&c| c == '\n')
-            .map_or(self.buf.len(), |p| i + p)
+        self.buf.line_end_of(i)
     }
 
     /// 구간이 걸친 줄 블록. 선택이 다음 줄 첫 칸에서 끝나면 그 줄은 넣지 않는다(Sublime).
     fn block_of(&self, a: usize, b: usize) -> Block {
         let (a, b) = (a.min(b), a.max(b));
-        let end_ref = if b > a && b > 0 && self.buf.get(b - 1) == Some(&'\n') {
+        let end_ref = if b > a && b > 0 && self.buf.get(b - 1) == Some('\n') {
             b - 1
         } else {
             b
@@ -143,11 +135,7 @@ impl EditState {
         let extra: Vec<(usize, usize)> =
             self.extra.iter().map(|&(a, c)| (map(a), map(c))).collect();
         self.record(EditOp::Other, true);
-        for p in pieces.iter().rev() {
-            let end = (p.pos + p.del).min(self.buf.len());
-            let pos = p.pos.min(end);
-            self.buf.splice(pos..end, p.ins.iter().copied());
-        }
+        self.splice_pieces(&pieces);
         let n = self.buf.len();
         self.caret = caret.min(n);
         self.anchor = anchor.map(|a| a.min(n)).filter(|&a| a != self.caret);
@@ -163,6 +151,32 @@ impl EditState {
     /// `indent_unit` = 한 단계 들여쓰기 문자열(`"\t"` 또는 공백들) · `tab_size` = 내어쓰기 때 지울 공백 상한 ·
     /// `comment` = 줄 주석 접두(없으면 주석 토글은 아무것도 안 한다).
     pub fn command(
+        &mut self,
+        cmd: EditCommand,
+        indent_unit: &str,
+        tab_size: usize,
+        comment: Option<&str>,
+    ) -> bool {
+        // 본문을 바꾸는 명령이 거대 선택 위에서 돌면 그만큼을 기록해야 한다 — 두 번 눌러야 한다(D-130).
+        let mutates = !matches!(
+            cmd,
+            EditCommand::SelectLines
+                | EditCommand::SplitIntoLines
+                | EditCommand::AddCaretUp
+                | EditCommand::AddCaretDown
+        );
+        if mutates {
+            let n = self.selected_bytes();
+            if self.giant_refused(n, true) {
+                return false;
+            }
+        }
+        let changed = self.command_checked(cmd, indent_unit, tab_size, comment);
+        self.giant_done();
+        changed
+    }
+
+    fn command_checked(
         &mut self,
         cmd: EditCommand,
         indent_unit: &str,
@@ -191,27 +205,29 @@ impl EditState {
     #[must_use]
     pub fn selection_spans_lines(&self) -> bool {
         self.selection()
-            .is_some_and(|(a, b)| self.buf[a..b].contains(&'\n'))
+            .is_some_and(|(a, b)| self.buf.contains_in(a, b, '\n'))
     }
 
     /// `n`번째 줄(1 기준)의 시작 인덱스(넘치면 마지막 줄).
     #[must_use]
     pub fn line_start_index(&self, n: usize) -> usize {
-        let mut line = 1usize;
-        let mut start = 0usize;
-        for (i, &c) in self.buf.iter().enumerate() {
-            if line >= n.max(1) {
-                break;
-            }
-            if c == '\n' {
-                line += 1;
-                start = i + 1;
-            }
-        }
-        start
+        let last = self.buf.line_count().saturating_sub(1);
+        self.buf.line_start((n.max(1) - 1).min(last))
     }
 
     // ───────────────────────── 명령 ─────────────────────────
+
+    /// 조각 목록(원래 좌표 · 오름차순 · 비겹침)을 **한 번 훑어** 적용한다 — 본문 변경의 단일 통로(`replace_many_inner`)를
+    /// 타므로 되돌리기 기록·세대(`rev`) 갱신이 함께 된다(종전 = 조각마다 `splice` · 세대를 올리지 않았다).
+    fn splice_pieces(&mut self, pieces: &[Piece]) {
+        let texts: Vec<String> = pieces.iter().map(|p| p.ins.iter().collect()).collect();
+        let edits: Vec<(usize, usize, &str)> = pieces
+            .iter()
+            .zip(&texts)
+            .map(|(p, t)| (p.pos, p.pos + p.del, t.as_str()))
+            .collect();
+        self.replace_many_inner(&edits);
+    }
 
     fn duplicate_lines(&mut self) -> bool {
         let regions = self.regions();
@@ -221,7 +237,7 @@ impl EditState {
             let mut pieces = Vec::new();
             let mut shifts: Vec<(usize, usize, usize)> = Vec::new();
             for (s, e) in blocks {
-                let mut ins: Vec<char> = self.buf[s..e].to_vec();
+                let mut ins: Vec<char> = self.buf.slice_vec(s, e);
                 ins.push('\n');
                 shifts.push((s, e, ins.len()));
                 pieces.push(Piece {
@@ -250,9 +266,7 @@ impl EditState {
                 .map(|&(a, c)| (shift(a), shift(c)))
                 .collect();
             self.record(EditOp::Other, true);
-            for p in pieces.iter().rev() {
-                self.buf.splice(p.pos..p.pos, p.ins.iter().copied());
-            }
+            self.splice_pieces(&pieces);
             self.caret = caret;
             self.anchor = None;
             self.extra = extra;
@@ -266,7 +280,7 @@ impl EditState {
                 pieces.push(Piece {
                     pos: b,
                     del: 0,
-                    ins: self.buf[a..b].to_vec(),
+                    ins: self.buf.slice_vec(a, b),
                 });
             }
         }
@@ -283,9 +297,7 @@ impl EditState {
             new_regions.push((ins_at, ins_at + len));
             delta += len;
         }
-        for p in pieces.iter().rev() {
-            self.buf.splice(p.pos..p.pos, p.ins.iter().copied());
-        }
+        self.splice_pieces(&pieces);
         self.set_regions(&new_regions);
         true
     }
@@ -324,10 +336,12 @@ impl EditState {
         for (a, b) in self.regions() {
             let (s, e) = self.block_of(a, b);
             // 한 줄(또는 캐럿)이면 다음 줄과 · 여러 줄이면 그 안의 줄바꿈 전부.
-            let mut nls: Vec<usize> = self.buf[s..e]
-                .iter()
+            let mut nls: Vec<usize> = self
+                .buf
+                .iter_from(s)
+                .take(e - s)
                 .enumerate()
-                .filter(|(_, &c)| c == '\n')
+                .filter(|(_, c)| *c == '\n')
                 .map(|(i, _)| s + i)
                 .collect();
             if nls.is_empty() && e < self.buf.len() {
@@ -338,13 +352,14 @@ impl EditState {
                     continue;
                 }
                 seen.push(nl);
-                let ws = self.buf[nl + 1..]
-                    .iter()
-                    .take_while(|c| **c == ' ' || **c == '\t')
+                let ws = self
+                    .buf
+                    .iter_from(nl + 1)
+                    .take_while(|c| *c == ' ' || *c == '\t')
                     .count();
                 // 앞 줄 끝이 이미 공백이면 공백을 더하지 않는다.
-                let prev_ws = nl > 0 && matches!(self.buf[nl - 1], ' ' | '\t');
-                let next_empty = nl + 1 + ws >= self.buf.len() || self.buf[nl + 1 + ws] == '\n';
+                let prev_ws = nl > 0 && matches!(self.buf.at(nl - 1), ' ' | '\t');
+                let next_empty = nl + 1 + ws >= self.buf.len() || self.buf.at(nl + 1 + ws) == '\n';
                 let ins = if prev_ws || next_empty {
                     Vec::new()
                 } else {
@@ -377,23 +392,23 @@ impl EditState {
         }
         self.record(EditOp::Other, true);
         for (s, e) in blocks {
-            let block: Vec<char> = self.buf[s..e].to_vec();
+            let block: Vec<char> = self.buf.slice_vec(s, e);
             if up {
                 let ps = self.line_start_of(s - 1);
-                let prev: Vec<char> = self.buf[ps..s - 1].to_vec();
+                let prev: Vec<char> = self.buf.slice_vec(ps, s - 1);
                 let mut ins = block.clone();
                 ins.push('\n');
                 ins.extend_from_slice(&prev);
-                self.buf.splice(ps..e, ins);
+                self.splice_rec(ps, e - ps, &ins);
                 let d = prev.len() + 1;
                 self.shift_points(s, e, -(d as isize));
             } else {
                 let ne = self.line_end_of(e + 1);
-                let next: Vec<char> = self.buf[e + 1..ne].to_vec();
+                let next: Vec<char> = self.buf.slice_vec(e + 1, ne);
                 let mut ins = next.clone();
                 ins.push('\n');
                 ins.extend_from_slice(&block);
-                self.buf.splice(s..ne, ins);
+                self.splice_rec(s, ne - s, &ins);
                 let d = next.len() + 1;
                 self.shift_points(s, e, d as isize);
             }
@@ -426,10 +441,10 @@ impl EditState {
             .into_iter()
             .flat_map(|b| self.lines_in(b))
             .collect();
-        let indent_of = |buf: &[char], s: usize, e: usize| -> usize {
-            buf[s..e]
-                .iter()
-                .take_while(|c| **c == ' ' || **c == '\t')
+        let indent_of = |buf: &TextBuf, s: usize, e: usize| -> usize {
+            buf.iter_from(s)
+                .take(e - s)
+                .take_while(|c| *c == ' ' || *c == '\t')
                 .count()
         };
         let non_blank: Vec<(usize, usize)> = lines
@@ -442,14 +457,14 @@ impl EditState {
         }
         let all_commented = non_blank.iter().all(|&(s, e)| {
             let i = s + indent_of(&self.buf, s, e);
-            self.buf[i..e].starts_with(&pre)
+            i + pre.len() <= e && self.buf.starts_with_at(i, &pre)
         });
         let mut pieces = Vec::new();
         if all_commented {
             for &(s, e) in &non_blank {
                 let i = s + indent_of(&self.buf, s, e);
                 let mut del = pre.len();
-                if self.buf.get(i + del) == Some(&' ') {
+                if self.buf.get(i + del) == Some(' ') {
                     del += 1;
                 }
                 pieces.push(Piece {
@@ -532,12 +547,13 @@ impl EditState {
             .into_iter()
             .flat_map(|b| self.lines_in(b))
             .filter_map(|(s, e)| {
-                let del = if self.buf.get(s) == Some(&'\t') {
+                let del = if self.buf.get(s) == Some('\t') {
                     1
                 } else {
-                    self.buf[s..e]
-                        .iter()
-                        .take_while(|c| **c == ' ')
+                    self.buf
+                        .iter_from(s)
+                        .take(e - s)
+                        .take_while(|c| *c == ' ')
                         .count()
                         .min(ts)
                 };
@@ -639,7 +655,7 @@ impl EditState {
             if b <= a {
                 continue;
             }
-            let src: String = self.buf[a..b].iter().collect();
+            let src: String = self.buf.slice_string(a, b);
             let dst = if upper {
                 src.to_uppercase()
             } else {
@@ -662,11 +678,11 @@ impl EditState {
         let n = self.buf.len();
         let i = i.min(n);
         let mut a = i;
-        while a > 0 && is_word(self.buf[a - 1]) {
+        while a > 0 && is_word(self.buf.at(a - 1)) {
             a -= 1;
         }
         let mut b = i;
-        while b < n && is_word(self.buf[b]) {
+        while b < n && is_word(self.buf.at(b)) {
             b += 1;
         }
         (a, b)

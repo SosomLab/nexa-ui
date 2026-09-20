@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-20 (47차 · win) — ★ **`TextBuf`**(UTF-8 갭 버퍼 + 줄 표 + 줄 변경 기록 · 좌표 = 글자 인덱스) = `EditState`의 저장소 · 그리기 = 보이는 줄만 + 줄별 캐시를 변경 기록으로(70만 줄 입력 157 → 3 ms · 메모리 348 → 86 MB) · `chars()` → `buf()` · `merge3::line_edits` · 쉬었다 치면 새 묶음 · 거대 편집 확인 · 되돌리기 기록 내보내기/들이기 → [journal](journal/2026-09-18.md)
+
+## 2026-09-20 (46차 · win) — ★ **되돌리기 = 연산 기록**(저장 = 지운 글자만 · 단일 변경 통로 · 저장 지점 O(1) · 바이트 예산 · 읽기 전용 — 붙여넣기 100 KB 34초 → 1 ms · 모두 바꾸기 2,000건 15초 → 3.4 ms) · **`PreparedText`/`set_prepared`**(큰 본문을 스레드에서 준비 → UI 0 ms) · **행 폭 고정폭 지름길**(70만 줄 첫 페인트 3.8 → 0.2초) → [journal](journal/2026-09-18.md)
+
 ## 2026-09-19 (45차 · win) — ★ **TextBox 큰 파일 성능**(세대+줄 해시 캐시 넷 · 키 경로의 본문 복사 제거 — 4만 줄 유휴 그리기 78 → 3.3 ms · 입력 209 → 16 ms) · **되돌리기 = 차이 저장**(`SnapBuf`) · `release_caches`/`clear_history`/`approx_bytes` · nexa-dlg **덮어쓰기 = 타임아웃 버튼** → [journal](journal/2026-09-18.md)
 
 ## 2026-09-19 (44차 · win) — ★ **`merge3`**(줄 단위 3-way 병합 · Myers 정합 · 의존 0) · **`TextBox::replace_all_undoable`**(전체 교체 = 되돌리기 한 단계 · 캐럿 유지) · **nexa-fs `watch`**(`FileSig`·`content_hash`·`StatWatch` — OS 와처 없는 외부 변경 감지) → [journal](journal/2026-09-18.md)

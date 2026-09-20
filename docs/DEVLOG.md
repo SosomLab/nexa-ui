@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-20 (47차 · win)** — `edit/textbuf.rs` 신설(`TextBuf`·`CharSeq`·`LineChange`·`Hash64`) · `edit.rs`/`edit/ops.rs` 저장소 교체·이관 · `textbox.rs` `Rows`·`RowWidthCache`·`LineHlCache`·`PreparedText`(= `TextBuf`)·`buf()` · `merge3::line_edits` · `set_group_pause_ms` · 거대 편집 문지기 · `export_history`/`import_history`(nexa-sql docs/59 §6 · 60 §7) → [journal](journal/2026-09-18.md)
+- **2026-09-20 (46차 · win)** — `edit.rs` `Op`/`Txn` 연산 기록 · `splice_rec`/`replace_many_inner` · 묶음·저장 지점·예산·`read_only` · `edit/ops.rs` splice 5곳 이관 · `textbox.rs` `PreparedText`/`set_prepared` · 고정폭 행 폭 지름길 · `examples/bench_undo` 신설 · `bench_editor` 확장(nexa-sql docs/59 §5 · 60) → [journal](journal/2026-09-18.md)
 - **2026-09-19 (45차 · win)** — `textbox.rs` `MlTextCache`·행 해시·`RowWidthCache`·`HlStateCache` · `auto_close`/`outdent_on_close`/`room` 본문 복사 제거 · `edit.rs` `SnapBuf::{Full, Delta}` · `bench_editor` 기능 선택·입력 비용 · nexa-dlg `overwrite_arm` → [journal](journal/2026-09-18.md)
 - **2026-09-19 (44차 · win)** — nexa-ctl `merge3.rs` · `replace_all_undoable` · nexa-fs `watch.rs`(nexa-sql docs/58 외부 파일 변경 처리의 부품) → [journal](journal/2026-09-18.md)
 - **2026-09-19 (43차 · win)** — `highlight.rs` `SyntaxSpec.numbers`(기본 켬 · `plain()` = 끔 · 규격 키 `numbers`) — nexa-sql 안내 탭의 버전 번호가 초록으로 칠해지던 것 → [journal](journal/2026-09-18.md)

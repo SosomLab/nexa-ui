@@ -52,8 +52,8 @@ pub use controls::{
     ColorPanel, ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg,
     DiffKind, EditCtxAction, FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon,
     OccurrenceStyle, Pair, PairKind, PairOpts, PairTable, PopupHit, PositionDropdown,
-    PositionPicker, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel,
-    TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
+    PositionPicker, PreparedText, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl,
+    TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
@@ -62,7 +62,7 @@ pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};
 pub mod merge3;
-pub use merge3::{merge3, Merge3};
+pub use merge3::{line_edits, merge3, Merge3};
 pub use theme::{
     color_contrast, color_from_hex, color_to_hex, contrast_order, is_warm, Color, FontPrefs,
     IconImage, SlotFont, Theme,

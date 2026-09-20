@@ -101,6 +101,62 @@ fn match_lines(a: &[&str], b: &[&str]) -> Option<Vec<Option<usize>>> {
     Some(out)
 }
 
+/// **최소 줄 편집**(nexa-sql docs/60 D-132 · VS Code `_computeEdits`와 같은 생각): `old`를 `new`로 만드는 편집 목록 —
+/// `old`의 **글자 인덱스** `(from, to, 넣을 글)` · 오름차순 · 비겹침. 같은 줄은 건드리지 않으므로 외부 변경을 받아들여도
+/// 되돌리기 기록이 "바뀐 줄들"만 든다(종전 = 첫 차이부터 끝 차이까지 한 덩이 — 위아래 한 줄씩만 달라도 본문 전체).
+/// 차이가 너무 커서 정합을 포기했으면 `None`(호출자는 한 덩이 교체로 물러난다). 같으면 빈 목록.
+#[must_use]
+pub fn line_edits(old: &str, new: &str) -> Option<Vec<(usize, usize, String)>> {
+    let a: Vec<&str> = old.split('\n').collect();
+    let b: Vec<&str> = new.split('\n').collect();
+    let map = match_lines(&a, &b)?;
+    // 줄 i의 시작 글자 인덱스(끝에 본문 길이 + 1을 하나 더 — "마지막 줄 다음 줄의 시작").
+    let mut starts: Vec<usize> = Vec::with_capacity(a.len() + 1);
+    let mut at = 0usize;
+    for l in &a {
+        starts.push(at);
+        at += l.chars().count() + 1;
+    }
+    let total = at - 1;
+    let (n, nb) = (a.len(), b.len());
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n || j < nb {
+        if i < n && map[i] == Some(j) {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        // 어긋난 덩이: old[i0..i1) → new[j0..j1) — 다음 정합(또는 끝)까지.
+        let (i0, j0) = (i, j);
+        while i < n && map[i].is_none() {
+            i += 1;
+        }
+        let j1 = if i < n { map[i].unwrap_or(nb) } else { nb };
+        j = j1;
+        let (i1, at_end) = (i, i == n);
+        if !at_end {
+            // 가운데 덩이: 줄들을 개행째로 바꾼다.
+            let mut ins = String::new();
+            for l in &b[j0..j1] {
+                ins.push_str(l);
+                ins.push('\n');
+            }
+            out.push((starts[i0], starts[i1], ins));
+        } else if i0 < i1 && j0 < j1 {
+            // 끝 덩이(양쪽에 줄이 있다): 마지막 줄에는 개행이 없다.
+            out.push((starts[i0], total, b[j0..j1].join("\n")));
+        } else if j0 < j1 {
+            // 끝에 덧붙임: 앞 줄의 끝에 개행부터.
+            out.push((total, total, format!("\n{}", b[j0..j1].join("\n"))));
+        } else if i0 < i1 {
+            // 끝의 줄들을 지움: 앞 줄의 개행까지 함께(앞 줄이 없으면 본문 전체가 빈 글이 된다).
+            out.push((starts[i0].saturating_sub(1), total, String::new()));
+        }
+    }
+    Some(out)
+}
+
 /// 3-way 병합. 정합을 포기했으면(차이가 너무 큼) `None` — 호출자는 병합하지 말고 물어야 한다.
 #[must_use]
 pub fn merge3(base: &str, ours: &str, theirs: &str) -> Option<Merge3> {
@@ -169,6 +225,52 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Option<Merge3> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// 최소 줄 편집: 뒤에서부터 적용하면 `new`가 된다(빈 글 · 끝 개행 유무 · 끝에 덧붙임/지움 · 가운데 · 여러 덩이 · 한글) ·
+    /// 같은 줄은 편집에 들지 않는다.
+    #[test]
+    fn line_edits_rebuild_new_text() {
+        fn apply(old: &str, edits: &[(usize, usize, String)]) -> String {
+            let mut c: Vec<char> = old.chars().collect();
+            for (a, b, s) in edits.iter().rev() {
+                c.splice(*a..*b, s.chars());
+            }
+            c.into_iter().collect()
+        }
+        let texts = [
+            "",
+            "a",
+            "a\n",
+            "\n",
+            "a\nb\nc",
+            "a\nb\nc\n",
+            "a\nB\nc",
+            "x\na\nb\nc",
+            "a\nb\nc\nd\ne",
+            "a\nc",
+            "한글\n줄\n셋",
+            "한글\n줄 바뀜\n셋\n넷\n",
+            "top\na\nb\nc\nbottom",
+            "TOP\na\nb\nc\nBOTTOM",
+        ];
+        for old in texts {
+            for new in texts {
+                let edits = line_edits(old, new).expect("small diff");
+                assert_eq!(apply(old, &edits), new, "{old:?} → {new:?} via {edits:?}");
+                assert!(
+                    edits.windows(2).all(|w| w[0].1 <= w[1].0),
+                    "오름차순·비겹침"
+                );
+                if old == new {
+                    assert!(edits.is_empty());
+                }
+            }
+        }
+        // 위아래 한 줄씩만 다르면 가운데 줄들은 편집에 없다(덩이 둘 · 넣는 글이 짧다).
+        let e = line_edits("top\na\nb\nc\nbottom", "TOP\na\nb\nc\nBOTTOM").expect("diff");
+        assert_eq!(e.len(), 2);
+        assert!(e.iter().all(|x| x.2.len() <= 7));
+    }
 
     const BASE: &str = "select a,\n       b,\n       c\n  from t\n where x = 1\n order by a;\n";
 
