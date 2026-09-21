@@ -260,15 +260,13 @@ fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         // `file_type()` = `getdents`가 준 d_type(추가 시스템 호출 0) — `path.is_dir()`은 항목마다 `statx`를 부른다
         // (Linux 09-22 실측: 폰트 976개 × 가족 12회 = `statx` 11,786회 · 기동 100~700 ms 구간이 전부 이것이었다).
         // 심볼릭 링크(Windows 정션 포함)는 d_type이 "링크"라 그때만 `is_dir()`로 따라간다(종전 동작 유지).
-        #[cfg(not(windows))]
+        // Windows도 같다(`FindNextFile`이 속성을 같이 준다) — 09-22에 Windows만 종전으로 되돌렸던 것은 CI `test` 실패 때문이었는데,
+        // 원인은 이 경로가 아니라 시험끼리의 `set_text_gdi` 경주였다(`tests::GdiOn`) → 3-OS 한 길로 되돌린다.
         let is_dir = match e.file_type() {
             Ok(t) if t.is_symlink() => path.is_dir(),
             Ok(t) => t.is_dir(),
             Err(_) => path.is_dir(),
         };
-        // Windows는 종전 그대로(09-22: CI windows-latest `test`가 세 번 실패 — 여기까지 되돌려 Windows 동작을 754bfb4와 같게 · 원인 판별용).
-        #[cfg(windows)]
-        let is_dir = path.is_dir();
         if is_dir {
             if depth < SCAN_DEPTH {
                 collect_font_files(&path, depth + 1, out);
@@ -282,7 +280,6 @@ fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 /// 폰트 폴더 목록을 **프로세스에서 한 번만** 걷는다(`FONT_DIRS` 순서 · 폴더 안은 정렬). 가족 탐색은 UI 본 · 고정폭 · 기호 폴백까지
 /// 프로세스마다 10여 회 불리므로 걷기를 호출마다 되풀이하면 그 횟수만큼 곱해진다(Linux 09-22 · 기동 병목).
 /// 앱이 도는 동안 새로 설치된 폰트는 다음 기동에서 보인다(설정 창의 글꼴 변경도 이 목록에서 고른다 — 재시작 안내가 있다).
-#[cfg(not(windows))]
 fn font_files() -> &'static [PathBuf] {
     static FILES: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
     FILES.get_or_init(walk_font_dirs)
@@ -309,31 +306,21 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
     if want.is_empty() {
         return None;
     }
-    // Windows는 종전대로 호출마다 걷는다(09-22: 캐시 커밋 뒤 CI windows-latest `test`가 두 번 실패 — 로그 인증 불가로 원인 미확인 ·
-    // Linux·macOS는 통과) — Windows는 후보가 고정 경로라 걷기가 기동 비용의 주역이 아니다. 원인을 Windows 세션에서 본 뒤 3-OS로.
-    #[cfg(windows)]
-    let walked = walk_font_dirs();
-    #[cfg(windows)]
-    let files: &[PathBuf] = &walked;
-    #[cfg(not(windows))]
-    let files: &[PathBuf] = font_files();
-    {
-        for path in files {
-            let ext_ok = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc"));
-            if !ext_ok {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let got = norm(stem);
-            if got == want || got.starts_with(&want) {
-                if let Some(bytes) = map_font(path) {
-                    return Some((bytes, 0));
-                }
+    for path in font_files() {
+        let ext_ok = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc"));
+        if !ext_ok {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let got = norm(stem);
+        if got == want || got.starts_with(&want) {
+            if let Some(bytes) = map_font(path) {
+                return Some((bytes, 0));
             }
         }
     }
@@ -527,6 +514,41 @@ pub fn mono_font(family: Option<&str>) -> Option<Loaded> {
 mod tests {
     use super::*;
 
+    /// OS 래스터라이저 스위치(`set_text_gdi`)는 **프로세스 전역**이다 — 시험은 병렬로 도므로 켜고 끄는 시험끼리 직렬화한다.
+    /// (09-22 CI windows-latest: `gdi_path_gives_integer_advances`가 끝나며 끈 순간 `gdi_cleartype_stems_bold_and_advances`가
+    /// ab_glyph 경로로 떨어져 볼드가 무시됐다 = "볼드 잉크 27.7 ≤ 보통 27.7" · 글꼴 걷기가 빨라지며 타이밍이 드러난 것.)
+    /// 쥐는 동안 켜 두고, 놓을 때(패닉 포함) 끈다.
+    #[cfg(any(windows, target_os = "macos"))]
+    struct GdiOn {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    impl GdiOn {
+        fn hold() -> Self {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            // 앞선 시험이 패닉으로 끝났어도(독) 다음 시험은 돈다 — 플래그는 Drop이 이미 껐다.
+            let g = LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            nexa_gfx::text::set_text_gdi(true);
+            GdiOn { _lock: g }
+        }
+
+        /// 쥔 채로 스위치만 바꾼다(켬/끔 비교 덤프용).
+        #[cfg(windows)]
+        fn set(&self, on: bool) {
+            nexa_gfx::text::set_text_gdi(on);
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for GdiOn {
+        fn drop(&mut self) {
+            nexa_gfx::text::set_text_gdi(false);
+        }
+    }
+
     #[test]
     fn ui_font_exists_on_supported_targets() {
         let f = system_ui_font().expect("지원 OS에 UI 폰트 후보 없음");
@@ -585,7 +607,7 @@ mod tests {
     #[test]
     fn coretext_path_renders_like_finder() {
         let u = ui_font(None).expect("UI 본");
-        nexa_gfx::text::set_text_gdi(true);
+        let gdi = GdiOn::hold();
         let text = "Login List Nexa SQL 한글 결과 0123 Hg";
         // em 13(파인더 13pt) = SF height/upm 1.1777 × 13.
         let size = 15.31;
@@ -602,7 +624,7 @@ mod tests {
                 .draw_text(&mut s, 4.0, 20.0, size, nexa_gfx::Color(0x0000_00FF), text);
             // y = 베이스라인
         }
-        nexa_gfx::text::set_text_gdi(false);
+        drop(gdi);
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../nexa-sql/target/textref");
         if dir.is_dir() {
@@ -626,9 +648,9 @@ mod tests {
     #[test]
     fn gdi_path_gives_integer_advances() {
         let u = ui_font(None).expect("UI 본");
-        nexa_gfx::text::set_text_gdi(true);
+        let gdi = GdiOn::hold();
         let w = u.font.measure("Hello 한글", 15.0);
-        nexa_gfx::text::set_text_gdi(false);
+        drop(gdi);
         assert!(w > 0.0);
         assert!((w - w.round()).abs() < 1e-3, "정수 전진 폭이어야: {w}");
         let w2 = u.font.measure("Hello 한글", 15.0);
@@ -643,7 +665,7 @@ mod tests {
     fn gdi_cleartype_stems_bold_and_advances() {
         let u = ui_font(None).expect("UI 본");
         let m = mono_font(None).expect("고정폭 본");
-        nexa_gfx::text::set_text_gdi(true);
+        let _gdi = GdiOn::hold();
         let mut report = String::new();
         for (font, name, size) in [
             (&u.font, "ui", 15.0),
@@ -679,7 +701,6 @@ mod tests {
                 "{name} 볼드 정수 전진 폭이어야: {wb}"
             );
         }
-        nexa_gfx::text::set_text_gdi(false);
         println!("{report}");
     }
 
@@ -689,8 +710,9 @@ mod tests {
     #[ignore]
     fn dump_gdi_glyphs() {
         let u = ui_font(None).expect("UI 본");
+        let gdi = GdiOn::hold();
         for on in [false, true] {
-            nexa_gfx::text::set_text_gdi(on);
+            gdi.set(on);
             for (ch, size) in [
                 ('닫', 15.0),
                 ('닫', 13.0),
@@ -706,7 +728,25 @@ mod tests {
                 );
             }
         }
-        nexa_gfx::text::set_text_gdi(false);
+    }
+
+    /// 진단: 폰트 폴더 걷기 비용(`cargo test -p nexa-font --release time_font_walk -- --nocapture --ignored`) —
+    /// `file_type()` 걷기 한 번 ↔ 같은 항목에 `is_dir()`(항목마다 stat)을 부르는 종전 방식. 가족 탐색은 프로세스마다 10여 회다.
+    #[test]
+    #[ignore]
+    fn time_font_walk() {
+        let t = std::time::Instant::now();
+        let files = walk_font_dirs();
+        let walk = t.elapsed();
+        let t = std::time::Instant::now();
+        let dirs = files.iter().filter(|p| p.is_dir()).count();
+        let stat = t.elapsed();
+        println!(
+            "files {} · walk(file_type) {:.2} ms · +is_dir per entry {:.2} ms (dirs {dirs})",
+            files.len(),
+            walk.as_secs_f64() * 1000.0,
+            stat.as_secs_f64() * 1000.0
+        );
     }
 
     #[test]

@@ -58,6 +58,7 @@
 - **줄별 캐시 = 변경 기록의 소비자**: `(epoch, seq)` + `changes_since` · 기록이 버려졌거나 세대가 다르면 전부 다시(본보기 `RowWidthCache` · `LineHlCache`). 접기(wrap) 모드만 종전의 본문 문자열 + 행 해시 경로.
 - 되돌리기: 저장 = 지운 글자만 · 묶음 안 연산은 뒤에서 앞으로 · 저장 지점 = 상태 id · 기록 파일 형식의 좌표 뜻이 바뀌면 `HISTORY_VERSION`을 올린다.
 - 자료 구조를 바꾸면 **단순 모델과 난수 대조 테스트**(자체 xorshift · 한글·이모지·개행 포함)를 같이 넣는다. 수치는 `--release` 벤치로(`examples/bench_editor` · `bench_undo`).
+- **프로세스 전역 스위치를 만지는 시험은 가드로 직렬화한다**(시험은 병렬로 돈다) — 본보기 nexa-font `tests::GdiOn`(`set_text_gdi` · 정적 뮤텍스를 쥔 동안 켬 · Drop에서 끔 · 독 무시). 09-22: 가드 없이 켜고 끄던 두 시험이 CI windows-latest에서만 겹쳐 네 번 실패했고, "되돌리니 통과"가 엉뚱한 원인(`file_type()`)을 가리켰다 — **CI 실패는 로그를 본 뒤에 고친다**(`gh run view <id> --log-failed`).
 - 공개 API를 바꿨으면 같은 작업 안에서 nexa-sql(`crates/nexa-sql`)과 `nexa-dlg`를 빌드·테스트한다(지금 nexa-ctl의 소비자는 이 둘).
 
 
