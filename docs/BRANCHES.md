@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| perf/font-walk-symlink · fix/font-walk-windows · fix/font-walk-cfg · fix/font-walk-win-identical | 2026-09-22 | 2026-09-22 → main(삭제) | 4 | 53차 보완 1~4 — 링크 폴더 안전 · 캐시 Linux·mac 한정 · cfg dead_code · Windows `is_dir()` 종전대로 → CI 3-OS 초록(b3d8e8b) |
 | perf/font-walk-cache | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 53차(linux) — nexa-font 가족 탐색 걷기 1회 캐시 + `file_type()`(Linux 기동 병목 · nexa-sql 91차) |
 | feat/drag-autoscroll-tick | 2026-09-21 | 2026-09-21 → main(삭제) | 1 | 52차(win) — `TextBox` 드래그 자동 스크롤 = 틱 기반(`drag_autoscroll_active` · 포인터가 밖에 멈춰 있어도 이어진다 · 새 타이머 0) · `nexa-fs` 감시 시험 = 조건 대기(`settle`) (nexa-sql 89차 추가 24) |
 | feat/popup-placement-secret-box | 2026-09-21 | 2026-09-21 → main(삭제) | 1 | 51차(win) — `geom` 팝업 배치 규칙(+ `place_popup_beside` · `ContextMenu::open_beside`) · `TabBar` 끌기 고스트 · `TextBox` 영역 밖 끌기 줄 단위 · `nexa-dlg` 폴더 고르기 · 가린 입력란 복사 금지 + `wipe`(nexa-sql 89차) |
