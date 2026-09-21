@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| docs/ci-result-54 | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 54차 push CI 결과(e5433cb = macOS · Ubuntu · Windows ✓ — `file_type()` + 걷기 캐시가 Windows에 돌아온 상태에서 통과) (nexa-sql 92차) |
 | fix/font-gdi-test-race | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 54차(win) — 53차 Windows CI `test` 실패의 원인 = nexa-font 시험끼리의 `set_text_gdi` 경주(`file_type()` 아님 · `gh` 로그) → 시험 가드 `tests::GdiOn` · 걷기 캐시 + `file_type()` 3-OS 복귀(Windows 걷기 12.6 → 1.2 ms · 한 번만) · 진단 `time_font_walk` (nexa-sql 92차) |
 | perf/font-walk-symlink · fix/font-walk-windows · fix/font-walk-cfg · fix/font-walk-win-identical | 2026-09-22 | 2026-09-22 → main(삭제) | 4 | 53차 보완 1~4 — 링크 폴더 안전 · 캐시 Linux·mac 한정 · cfg dead_code · Windows `is_dir()` 종전대로 → CI 3-OS 초록(b3d8e8b) |
 | perf/font-walk-cache | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 53차(linux) — nexa-font 가족 탐색 걷기 1회 캐시 + `file_type()`(Linux 기동 병목 · nexa-sql 91차) |
