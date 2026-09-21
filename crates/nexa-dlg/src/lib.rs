@@ -31,6 +31,9 @@ pub enum PickerMode {
     Open,
     /// 파일 저장(이름 입력 · 덮어쓰기 확인).
     Save,
+    /// ★ **폴더 고르기**(nexa-sql 사용자 09-21 — Oracle 클라이언트 폴더): 목록에 **폴더만** 보인다(파일은 보일 필요가 없다) ·
+    /// 확정 버튼 = 고른 폴더(없으면 지금 폴더) · 더블클릭/Enter = 그 폴더로 들어가기(열기 모드와 같다).
+    Folder,
 }
 
 /// 확장자 필터 한 줄(`exts`는 점 없는 소문자 · 비면 전체).
@@ -64,6 +67,10 @@ pub struct PickerLabels {
     pub ok_open: String,
     /// 확정 버튼(저장).
     pub ok_save: String,
+    /// 확정 버튼(폴더 고르기).
+    pub ok_folder: String,
+    /// "Folder:"(폴더 고르기의 이름 상자 라벨).
+    pub folder_name: String,
     /// 취소.
     pub cancel: String,
     /// 새 폴더 버튼.
@@ -303,6 +310,7 @@ impl FilePicker {
         let ok_label = match mode {
             PickerMode::Open => labels.ok_open.clone(),
             PickerMode::Save => labels.ok_save.clone(),
+            PickerMode::Folder => labels.ok_folder.clone(),
         };
         let mut p = FilePicker {
             base: ControlBase::default(),
@@ -944,7 +952,8 @@ impl FilePicker {
 
     /// 현재 폴더 열거를 백그라운드로 시작(이전 것은 Drop으로 취소).
     fn start_loader(&mut self) {
-        let opts = self.list_opts(false);
+        // 폴더 고르기 = 폴더만 열거한다(파일을 읽지도 그리지도 않는다 — 큰 폴더에서 더 빠르다).
+        let opts = self.list_opts(self.mode == PickerMode::Folder);
         self.loader = Some(ListHandle::start(self.dir.clone(), opts));
     }
 
@@ -1311,7 +1320,7 @@ impl FilePicker {
                     c.cells = vec![LOADING.into()];
                 }
             }
-            let opts = self.list_opts(false);
+            let opts = self.list_opts(self.mode == PickerMode::Folder);
             self.sub_loaders.push(SubLoad {
                 sidebar: false,
                 node: path,
@@ -1460,6 +1469,23 @@ impl FilePicker {
         }
     }
 
+    /// 폴더 고르기의 확정 버튼: 이름 상자의 폴더(적었거나 목록에서 클릭한 것) → **지금 폴더** 순. 가상 최상위("내 PC")는 고를 수 없다.
+    fn confirm_folder(&mut self) {
+        // 이름 상자(적었거나 클릭으로 들어온 폴더) → 없으면 **지금 폴더**. 목록의 선택만으로는 고르지 않는다 — 열자마자 첫 줄이
+        // 자동으로 잡혀 있어서, 그것을 따르면 "지금 폴더를 고르려고" 누른 확정이 첫 하위 폴더를 골라 버린다.
+        let typed = self.name_box.text().trim().to_string();
+        let target = if typed.is_empty() {
+            self.dir.clone()
+        } else {
+            nexa_fs::path::resolve(&typed, &self.dir)
+        };
+        if nexa_fs::is_virtual_root(&target) || !target.is_dir() {
+            self.message = Some((self.labels.err_not_found.clone(), true));
+            return;
+        }
+        self.action = PickerAction::Confirm(target);
+    }
+
     /// 확정 — 파일명 상자 → 경로. 저장은 덮어쓰기 2단 확인 · 확장자 자동 부여 · 이름 검증.
     fn confirm(&mut self) {
         let mut name = self.name_box.text().trim().to_string();
@@ -1524,6 +1550,10 @@ impl FilePicker {
                     return;
                 }
                 self.action = PickerAction::Confirm(p);
+            }
+            // 폴더 고르기에서 여기까지 왔다 = 적은 이름이 폴더가 아니다(폴더였으면 위에서 그리로 들어갔다).
+            PickerMode::Folder => {
+                self.message = Some((self.labels.err_not_found.clone(), true));
             }
         }
     }
@@ -1930,7 +1960,11 @@ impl FilePicker {
             self.action = PickerAction::Cancel;
         }
         if self.ok_btn.take_clicked() {
-            self.confirm();
+            if self.mode == PickerMode::Folder {
+                self.confirm_folder();
+            } else {
+                self.confirm();
+            }
         }
         if self.up_btn.take_clicked() {
             self.go_up();
@@ -2335,8 +2369,23 @@ impl Widget for FilePicker {
                             let dbl = matches!(self.last_row_click, Some((r, t)) if r == row && now.duration_since(t) <= DOUBLE_CLICK);
                             self.last_row_click = Some((row, now));
                             if let Some((path, is_dir)) = self.selected_item() {
-                                if !is_dir {
-                                    if let Some(n) = path.file_name() {
+                                // 폴더 고르기에서는 **클릭한 폴더**가 이름 상자에 들어간다(Windows의 "폴더:" 칸과 같다) — 확정 버튼은
+                                // 이름 상자 → 지금 폴더 순으로 보므로, 열자마자 자동으로 잡힌 첫 줄이 골라지는 일이 없다.
+                                let fill = !is_dir || self.mode == PickerMode::Folder;
+                                if fill {
+                                    // 펼친 하위 폴더 안의 항목이면 지금 폴더 기준 상대 경로로.
+                                    let text = path
+                                        .strip_prefix(&self.dir)
+                                        .ok()
+                                        .map(|r| r.to_string_lossy().into_owned())
+                                        .filter(|r| !r.is_empty())
+                                        .or_else(|| {
+                                            path.file_name()
+                                                .map(|n| n.to_string_lossy().into_owned())
+                                        });
+                                    if let Some(n) = text.filter(|_| is_dir) {
+                                        self.name_box.set_text(&n);
+                                    } else if let Some(n) = path.file_name() {
                                         self.name_box.set_text(&n.to_string_lossy());
                                     }
                                     self.pending_overwrite = None;
@@ -2387,7 +2436,12 @@ impl Widget for FilePicker {
         // 라벨
         let nb = self.name_box.bounds();
         let ty = ctx.text_center_y(nb.y, nb.h);
-        ctx.text(b.x + self.s(PAD), ty, b, &self.labels.file_name, theme.text);
+        let name_label = if self.mode == PickerMode::Folder {
+            &self.labels.folder_name
+        } else {
+            &self.labels.file_name
+        };
+        ctx.text(b.x + self.s(PAD), ty, b, name_label, theme.text);
         let fb = self.filter_combo.bounds();
         // 필터 라벨은 콤보 왼쪽에 작게(자리가 있을 때만).
         let ft_w = ctx.text_width(&self.labels.file_type);
@@ -2560,6 +2614,8 @@ mod tests {
             file_name: "File name:".into(),
             ok_open: "Open".into(),
             ok_save: "Save".into(),
+            ok_folder: "Select Folder".into(),
+            folder_name: "Folder:".into(),
             cancel: "Cancel".into(),
             new_folder: "New folder".into(),
             new_folder_name: "New folder".into(),
@@ -2660,6 +2716,40 @@ mod tests {
         p.set_default_name("new");
         p.confirm();
         assert_eq!(p.take_action(), PickerAction::Confirm(d.join("new.sql")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 폴더 고르기(nexa-sql 09-21): 목록에 **폴더만** · 확정 = 고른 것이 없으면 지금 폴더 · 이름 상자에 적은 폴더 · 파일 이름이나
+    /// 없는 경로는 거부 · Enter로 폴더 이름을 치면 그리로 들어간다(열기 모드와 같다).
+    #[test]
+    fn folder_mode_lists_only_folders_and_confirms_a_directory() {
+        let d = temp_dir("folder");
+        std::fs::create_dir_all(d.join("sub").join("deep")).unwrap_or(());
+        let mut p = FilePicker::new(PickerMode::Folder, Some(&d), Vec::new(), labels());
+        settle(&mut p);
+        let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
+        assert_eq!(names, vec!["sub"], "파일(a.sql · b.txt)은 보이지 않는다");
+        // 고른 것 없음 = 지금 폴더.
+        p.confirm_folder();
+        assert_eq!(p.take_action(), PickerAction::Confirm(d.clone()));
+        // 이름 상자에 적은 하위 폴더.
+        p.set_default_name("sub");
+        p.confirm_folder();
+        assert_eq!(p.take_action(), PickerAction::Confirm(d.join("sub")));
+        // 파일 · 없는 경로 = 거부(오류 글).
+        for bad in ["a.sql", "nope"] {
+            p.set_default_name(bad);
+            p.confirm_folder();
+            assert_eq!(p.take_action(), PickerAction::None, "{bad}");
+            assert!(matches!(p.message, Some((_, true))), "{bad}");
+        }
+        // Enter(confirm) = 폴더 이름이면 들어간다.
+        p.set_default_name("sub");
+        p.confirm();
+        assert_eq!(p.current_dir(), d.join("sub"));
+        settle(&mut p);
+        let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
+        assert_eq!(names, vec!["deep"]);
         let _ = std::fs::remove_dir_all(&d);
     }
 

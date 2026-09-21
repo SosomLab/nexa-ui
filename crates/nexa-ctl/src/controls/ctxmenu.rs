@@ -239,6 +239,10 @@ pub struct ContextMenu {
     rect: std::cell::Cell<Rect>,
     /// 팝업이 넘어가면 안 되는 영역(열 때 저장 — 실측 보정 후 경계 재접기용).
     host: Rect,
+    /// 가리면 안 되는 대상(행)과 누른 자리 — [`Self::open_beside`]로 열었을 때만. paint의 안전망도 이 규칙으로 다시 놓는다.
+    avoid: Option<(Point, Rect)>,
+    /// 마지막 paint가 본 그리기 표면 크기 — 호출자가 끝없는 `host`를 넘겨도 표면 안에 놓는다(하위 메뉴를 열 때도 쓴다).
+    surface: std::cell::Cell<Option<(i32, i32)>>,
     /// 라벨 최대 폭(px) — 열 때는 호스트 근사, paint가 실측으로 올려친다(08-14
     /// 실기: 자당 근사가 글꼴 크기에 뒤처져 "소유자만 초대로 전환"이 잘렸다).
     fit_w: std::cell::Cell<i32>,
@@ -319,20 +323,37 @@ impl ContextMenu {
         self.picked = None;
         self.child = None;
         self.child_of = None;
+        self.avoid = None;
         let (w, h) = self.size_px();
-        // 경계 접기 — 오른쪽/아래로 넘치면 커서 반대쪽으로 편다.
-        let px = if x + w > host.right() {
-            (x - w).max(host.x)
-        } else {
-            x
-        };
-        let py = if y + h > host.bottom() {
-            (y - h).max(host.y)
-        } else {
-            y
-        };
-        self.at.set(Some(Point { x: px, y: py }));
-        self.rect.set(Rect::new(px, py, w, h));
+        // 경계 접기 — 공용 배치 규칙([`crate::geom::place_popup`]: 정방향 → 반대쪽 → 밀어 넣기). 표면 크기를 이미 알면(앞선
+        // paint) 그 안에서 · 모르면 첫 paint의 안전망이 맞춘다.
+        let area = crate::geom::popup_host(host, self.surface.get());
+        let p = crate::geom::place_popup(Point { x, y }, (w, h), area);
+        self.at.set(Some(p));
+        self.rect.set(Rect::new(p.x, p.y, w, h));
+    }
+
+    /// **대상을 가리지 않게** 연다(트리·목록의 행 우클릭 — nexa-sql 사용자 09-21): 메뉴를 `avoid`(대상 행) 바로 아래에,
+    /// 자리가 없으면 바로 위에 둔다 → 누른 자리에 가깝고 대상 이름이 온전히 보인다([`crate::geom::place_popup_beside`]).
+    pub fn open_beside(
+        &mut self,
+        x: i32,
+        y: i32,
+        avoid: Rect,
+        items: Vec<CtxItem>,
+        host: Rect,
+        text_w: i32,
+    ) {
+        self.open_at(x, y, items, host, text_w);
+        if !self.is_open() {
+            return;
+        }
+        self.avoid = Some((Point { x, y }, avoid));
+        let (w, h) = self.size_px();
+        let area = crate::geom::popup_host(host, self.surface.get());
+        let p = crate::geom::place_popup_beside(Point { x, y }, avoid, (w, h), area);
+        self.at.set(Some(p));
+        self.rect.set(Rect::new(p.x, p.y, w, h));
     }
 
     fn row_h(&self) -> i32 {
@@ -479,11 +500,14 @@ impl ContextMenu {
             .unwrap_or(0);
         let x = row.right() - self.s(4);
         let y = row.y - self.s(PAD_V);
+        // 부모가 본 표면 크기를 물려준다 — 끝없는 `host`여도 하위 메뉴가 화면 안에서 접힌다.
+        c.surface.set(self.surface.get());
+        let area = crate::geom::popup_host(self.host, self.surface.get());
         c.open_at(x, y, children.clone(), self.host, self.s(approx));
         // 오른쪽에 자리가 없으면(open_at이 왼쪽으로 접었으면) 부모 왼쪽에 붙인다.
         let cw = c.rect.get().w;
-        if x + cw > self.host.right() {
-            let nx = (row.x - cw + self.s(4)).max(self.host.x);
+        if x + cw > area.right() {
+            let nx = (row.x - cw + self.s(4)).max(area.x);
             let cy = c.rect.get().y;
             c.at.set(Some(Point { x: nx, y: cy }));
             c.rect.set(Rect::new(nx, cy, cw, c.rect.get().h));
@@ -736,13 +760,28 @@ impl ContextMenu {
             self.fit_w.set(real.max(self.fit_w.get()));
             self.sc_w.set(sc_real.max(self.sc_w.get()));
             let (w, h) = self.size_px();
-            let mut x = at.x;
-            if x + w > self.host.right() {
-                x = (self.host.right() - w).max(self.host.x);
+            self.rect.set(Rect::new(at.x, at.y, w, h));
+        }
+        // ★ 안전망(nexa-sql 사용자 09-21 "우클릭 메뉴가 잘린다"): 실측 폭 보정 뒤에도 · 호출자가 끝없는 `host`를 넘겼어도
+        //   **그리기 표면 안**으로 옮긴다(히트 판정 rect·at 동기 갱신 · 크기는 그대로).
+        self.surface.set(ctx.surface_size());
+        let area = crate::geom::popup_host(self.host, self.surface.get());
+        let fitted = match self.avoid {
+            // 대상을 가리지 않게 연 메뉴 = 같은 규칙으로 다시(실측 폭·표면을 이제 안다).
+            Some((anchor, avoid)) => {
+                let r = self.rect.get();
+                let p = crate::geom::place_popup_beside(anchor, avoid, (r.w, r.h), area);
+                crate::geom::nudge_into(Rect::new(p.x, p.y, r.w, r.h), area)
             }
-            at = Point { x, y: at.y };
+            None => crate::geom::nudge_into(self.rect.get(), area),
+        };
+        if fitted != self.rect.get() {
+            self.rect.set(fitted);
+            at = Point {
+                x: fitted.x,
+                y: fitted.y,
+            };
             self.at.set(Some(at));
-            self.rect.set(Rect::new(x, at.y, w, h));
         }
         let r = self.rect.get();
         // 바탕 + 테두리(그림자 대신 테두리로 층을 만든다 — 렌더러에 블러가 없다).
@@ -1134,6 +1173,27 @@ mod tests {
             y: copy.y + 2,
         });
         assert!(m.child_for_test().is_none(), "멀어지면 닫힘");
+    }
+
+    /// 행 우클릭 메뉴 = 행 바로 아래(없으면 위) — 대상 행과 겹치지 않는다.
+    #[test]
+    fn open_beside_never_covers_the_target_row() {
+        let mut m = ContextMenu::new();
+        let row = Rect::new(0, 40, 300, 24);
+        m.open_beside(60, 50, row, nested(), host(), 100);
+        let r = m.bounds();
+        assert_eq!((r.x, r.y), (60, row.bottom()));
+        assert!(r.intersection(&row).is_empty());
+        // 아래에 자리가 없는 행 → 위로.
+        let h = host();
+        let low = Rect::new(0, h.bottom() - 30, 300, 24);
+        m.open_beside(60, low.y + 10, low, nested(), h, 100);
+        let r = m.bounds();
+        assert_eq!(r.bottom(), low.y);
+        assert!(r.intersection(&low).is_empty());
+        // 보통의 open_at은 규칙을 물려받지 않는다.
+        m.open_at(60, 50, nested(), h, 100);
+        assert_eq!((m.bounds().x, m.bounds().y), (60, 50));
     }
 
     #[test]

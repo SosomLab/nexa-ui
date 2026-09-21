@@ -221,6 +221,23 @@ impl EditState {
         self.last_op = None;
     }
 
+    /// **비밀 값 지우기**(nexa-sql 09-21): 본문 · 되돌리기/다시 실행 기록이 쥔 글 · 조합 중 글을 0으로 덮어쓰고 비운다.
+    pub fn wipe(&mut self) {
+        let zero = |s: &mut String| {
+            let mut v = std::mem::take(s).into_bytes();
+            v.fill(0);
+            std::hint::black_box(&v);
+        };
+        for txn in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            for op in &mut txn.ops {
+                zero(&mut op.insert);
+            }
+        }
+        zero(&mut self.preedit);
+        self.buf.wipe();
+        self.set_text("");
+    }
+
     /// 거대 편집 확인의 기준(바이트 · 0 = 끔).
     pub fn set_giant_limit(&mut self, bytes: usize) {
         self.giant_limit = bytes;

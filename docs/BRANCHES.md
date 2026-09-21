@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/popup-placement-secret-box | 2026-09-21 | 2026-09-21 → main(삭제) | 1 | 51차(win) — `geom` 팝업 배치 규칙(+ `place_popup_beside` · `ContextMenu::open_beside`) · `TabBar` 끌기 고스트 · `TextBox` 영역 밖 끌기 줄 단위 · `nexa-dlg` 폴더 고르기 · 가린 입력란 복사 금지 + `wipe`(nexa-sql 89차) |
 | fix/mac-hangul-app-compose | 2026-09-20 | 2026-09-21 → main(삭제) | 4 | 49~50차(mac) — TextBox 한글 앱 조합 · nexa-sys `input_source` · nexa-sys `layer_present`(IOSurface 화면 내보내기 · nexa-sql T-139 · T-147) |
 | docs/portable-rules | 2026-09-20 | 2026-09-20 → main(삭제) | 1 | 48차 — CLAUDE.md §3-1(편집기 코어 불변식 · 세션 공통 규칙 — 다른 PC에서 이어 가기 · nexa-sql docs/61) |
 | feat/textbuf-undo-followups | 2026-09-20 | 2026-09-20 → main(삭제) | 1 | ★ 46~47차 — 되돌리기 = 연산 기록 · **`TextBuf`(UTF-8 갭 버퍼 + 줄 표 + 변경 기록)** · 그리기 = 보이는 줄만 · `PreparedText` · `merge3::line_edits` · 거대 편집 확인 · 기록 파일 내보내기/들이기 · 고정폭 행 폭 지름길 · `bench_undo` |

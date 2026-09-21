@@ -2765,6 +2765,20 @@ impl TextBox {
         (self.edit.undo_len(), self.edit.history_chars())
     }
 
+    /// **비밀 값 지우기**(가린 입력란 — 비밀번호를 쓴 직후): 본문·되돌리기 기록·조합 글을 0으로 덮어쓰고 비운다.
+    /// 내용을 꺼낼 때는 [`Self::take_secret_text`]를 쓴다(꺼낸 글은 받은 쪽이 지운다).
+    pub fn wipe(&mut self) {
+        self.edit.wipe();
+    }
+
+    /// 본문을 꺼내고 **상자 쪽은 바로 지운다** — 비밀번호를 상자에 남겨 두지 않는다.
+    #[must_use]
+    pub fn take_secret_text(&mut self) -> String {
+        let s = self.text();
+        self.wipe();
+        s
+    }
+
     /// 되돌리기 히스토리를 비운다(호스트의 메모리 회수 · 닫기 직전).
     pub fn clear_history(&mut self) {
         self.edit.clear_history();
@@ -2808,12 +2822,16 @@ impl TextBox {
     /// 선택 텍스트(복사 — ① 08-13). 위젯은 OS 클립보드를 모른다 — 호스트가 잇는다.
     #[must_use]
     pub fn copy_selection(&self) -> Option<String> {
+        // ★ 가린 입력란(비밀번호)은 **복사·잘라내기를 하지 않는다**(OS 비밀번호 칸 관례 · nexa-sql 09-21 — 클립보드로 새는 길).
+        if self.masked {
+            return None;
+        }
         self.base.focused.then(|| self.edit.selected_text_multi())?
     }
 
     /// 선택 텍스트를 잘라낸다(① — 반환 텍스트를 호스트가 클립보드에 쓴다).
     pub fn cut_selection(&mut self, inv: &mut Invalidations) -> Option<String> {
-        if !self.base.focused {
+        if !self.base.focused || self.masked {
             return None;
         }
         let t = self.edit.cut()?;
@@ -4096,18 +4114,12 @@ impl TextBox {
                         match self.last_click.1 {
                             2 => self.select_word_at(idx),
                             3 => {
-                                let text = self.edit.text();
-                                let chars: Vec<char> = text.chars().collect();
-                                let i = idx.min(chars.len());
-                                let start = chars[..i]
-                                    .iter()
-                                    .rposition(|&c| c == '\n')
-                                    .map_or(0, |p| p + 1);
-                                let end = start
-                                    + chars[start..]
-                                        .iter()
-                                        .position(|&c| c == '\n')
-                                        .unwrap_or(chars.len() - start);
+                                // 줄 선택 — 버퍼의 줄 표로(종전 = 본문 전체를 문자열 + 글자 배열로 떴다 · 큰 파일에서 수백 MB).
+                                let (start, end) = {
+                                    let buf = self.edit.buf();
+                                    let line = buf.line_of(idx.min(buf.len()));
+                                    (buf.line_start(line), buf.line_end(line))
+                                };
                                 self.edit.set_caret(start, false);
                                 self.edit.set_caret(end, true);
                             }
@@ -4171,29 +4183,66 @@ impl TextBox {
                 let b = self.base.bounds;
                 // 첫/마지막 줄에서 위/아래로 끌면 **본문 처음/끝까지**(Sublime·VS Code 관례 · nexa-sql 09-15:
                 // 첫 줄 앞 글자 몇 개가 빠진 채 선택되던 문제 — 줄 이동만으로는 열이 유지됐다).
-                let text = self.edit.text();
+                // ★ 줄 판정은 버퍼의 줄 표로(O(log 줄 수)) — 종전에는 마우스 이동 사건마다 **본문 전체를 문자열로 만들어** 개행을
+                //   셌다(큰 문서에서 드래그가 느려진 원인 · nexa-sql 09-21 · 편집기 불변식 "본문 전체를 뜨지 않는다").
                 let caret = self.edit.caret();
-                let on_first = !text.chars().take(caret).any(|c| c == '\n');
-                let on_last = !text.chars().skip(caret).any(|c| c == '\n');
+                let (caret_line, last_line, n_chars) = {
+                    let buf = self.edit.buf();
+                    (
+                        buf.line_of(caret),
+                        buf.line_count().saturating_sub(1),
+                        buf.len(),
+                    )
+                };
+                // 위·아래 밖: **멀리 나갈수록 여러 줄**(거리 ÷ 줄 높이 · 1~12줄) — 종전에는 사건마다 한 줄이라 긴 구간을 고르기 느렸다.
+                let steps = |dist: i32, lh: i32| (1 + dist / lh.max(1)).clamp(1, 12) as usize;
                 if y < b.y {
-                    if on_first {
+                    if caret_line == 0 {
                         self.edit.set_caret(0, true);
                     } else {
-                        self.ml_move_vert(false, true);
+                        for _ in 0..steps(b.y - y, self.line_h()).min(caret_line) {
+                            self.ml_move_vert(false, true);
+                        }
                     }
                 } else if y > b.bottom() {
-                    if on_last {
-                        let n = text.chars().count();
-                        self.edit.set_caret(n, true);
+                    if caret_line >= last_line {
+                        self.edit.set_caret(n_chars, true);
                     } else {
-                        self.ml_move_vert(true, true);
+                        for _ in 0..steps(y - b.bottom(), self.line_h()).min(last_line - caret_line)
+                        {
+                            self.ml_move_vert(true, true);
+                        }
                     }
-                } else if x > b.right() - self.s(8) {
-                    self.edit.key(EditKey::Right, true);
-                } else if x < b.x + self.s(8) {
-                    self.edit.key(EditKey::Left, true);
                 } else {
-                    self.edit.set_caret(self.ml_caret_at(x, y), true);
+                    // ★ 옆(왼쪽·오른쪽)으로 나가도 **y의 줄을 따라간다**(nexa-sql 사용자 09-21: 왼쪽 탐색기 위에서 위/아래로 끌면
+                    //   한 글자씩만 움직였다 — 종전에는 x가 밖이면 y를 보지 않고 사건마다 한 글자 옆으로 갔다). 왼쪽 밖 = 그 줄의
+                    //   처음 · 오른쪽 밖 = 그 줄의 끝(다른 편집기와 같다). 한 글자씩 가는 가로 자동 스크롤은 **같은 줄에서 그쪽에
+                    //   가려진 글이 있을 때만**.
+                    let target = self.ml_caret_at(x, y);
+                    let (t_line, t_start, t_end) = {
+                        let buf = self.edit.buf();
+                        let l = buf.line_of(target);
+                        (l, buf.line_start(l), buf.line_end(l))
+                    };
+                    let same_row = t_line == caret_line;
+                    if x > b.right() - self.s(8) {
+                        if same_row && caret < t_end && caret >= target {
+                            self.edit.key(EditKey::Right, true);
+                        } else if same_row {
+                            self.edit.set_caret(target.max(caret.min(t_end)), true);
+                        } else {
+                            self.edit.set_caret(t_end, true);
+                        }
+                    } else if x < b.x + self.s(8) {
+                        if same_row && self.mhscroll.get() > 0 && caret > t_start && caret <= target
+                        {
+                            self.edit.key(EditKey::Left, true);
+                        } else {
+                            self.edit.set_caret(t_start, true);
+                        }
+                    } else {
+                        self.edit.set_caret(target, true);
+                    }
                 }
                 inv.push(b);
             }
@@ -5913,6 +5962,81 @@ mod minimap_tests {
         assert!(t.dragging, "본문 클릭 = 텍스트 드래그 시작");
     }
 
+    /// ★ 드래그 선택 중 마우스가 **편집기 옆(왼쪽·오른쪽) 밖**으로 나가도 세로 위치를 따라 **줄 단위**로 선택된다
+    /// (nexa-sql 사용자 09-21: 왼쪽 탐색기 위에서 위/아래로 끌면 한 글자씩만 움직였다 — x가 밖이면 y를 무시하고 사건마다
+    /// 한 글자 왼쪽으로 갔다). 왼쪽 밖 = 그 줄의 처음 · 오른쪽 밖 = 그 줄의 끝 · 같은 줄에서 가려진 글이 있을 때만 한 글자씩(가로 자동 스크롤).
+    #[test]
+    fn drag_outside_left_or_right_still_follows_rows() {
+        let mut t = editor(40);
+        let mut inv = Invalidations::default();
+        paint(&t);
+        let lh = t.line_h();
+        // 3번째 줄 가운데에서 드래그 시작.
+        t.on_event(&down(120, 2 * lh + lh / 2), &mut inv);
+        assert!(t.dragging);
+        let anchor = t.edit.caret();
+        assert_eq!(t.edit.buf().line_of(anchor), 2);
+        // 왼쪽 밖(x = -200)에서 아래로 8번째 줄 높이까지 — 사건 하나로 그 줄의 처음에 가 있어야 한다.
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: -200,
+                y: 7 * lh + lh / 2,
+            },
+            &mut inv,
+        );
+        let c = t.edit.caret();
+        assert_eq!(
+            t.edit.buf().line_of(c),
+            7,
+            "왼쪽 밖이어도 y의 줄을 따라간다"
+        );
+        assert_eq!(c, t.edit.buf().line_start(7), "왼쪽 밖 = 그 줄의 처음");
+        // 다시 위로(1번째 줄 높이) — 역시 사건 하나로.
+        t.on_event(&InputEvent::MouseMove { x: -200, y: lh / 2 }, &mut inv);
+        assert_eq!(t.edit.caret(), 0);
+        // 오른쪽 밖 = 그 줄의 끝.
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: 5000,
+                y: 5 * lh + lh / 2,
+            },
+            &mut inv,
+        );
+        let c = t.edit.caret();
+        assert_eq!(c, t.edit.buf().line_end(5), "오른쪽 밖 = 그 줄의 끝");
+        // 앵커는 그대로(선택이 이어진다).
+        assert_eq!(t.edit.selection().map(|(a, _)| a), Some(anchor.min(c)));
+        // 아래 밖: 가까이 = 한 줄 · 멀리 = 여러 줄(최대 12).
+        let bottom = t.base.bounds.bottom();
+        let before = t.edit.buf().line_of(t.edit.caret());
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: 100,
+                y: bottom + 2,
+            },
+            &mut inv,
+        );
+        let near = t.edit.buf().line_of(t.edit.caret());
+        assert_eq!(near, before + 1);
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: 100,
+                y: bottom + lh * 5,
+            },
+            &mut inv,
+        );
+        let far = t.edit.buf().line_of(t.edit.caret());
+        assert_eq!(far, near + 6, "거리 ÷ 줄 높이 + 1");
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: 100,
+                y: bottom + lh * 500,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.edit.buf().line_of(t.edit.caret()), far + 12, "상한 12줄");
+    }
+
     /// ③ 캐시는 텍스트·폭·테마가 안 바뀌면 재생성되지 않는다(캐럿 깜빡임·캐럿 이동·hover는 블릿만).
     #[test]
     fn minimap_cache_rebuilds_only_on_content_or_key_change() {
@@ -6139,5 +6263,24 @@ mod hangul_compose_tests {
         let (mut t, mut inv) = tb();
         feed(&mut t, &mut inv, "ㄱㅏ1");
         assert_eq!(t.text(), "ㄱㅏ1");
+    }
+    /// 가린 입력란 = 복사·잘라내기 없음 · `take_secret_text`는 내용을 주고 상자를 비운다(되돌리기로도 돌아오지 않는다).
+    #[test]
+    fn masked_box_never_copies_and_wipes_on_take() {
+        let mut inv = Invalidations::default();
+        let mut tb = TextBox::new("");
+        tb.set_masked(true);
+        tb.set_focused(true);
+        for c in "tiger".chars() {
+            tb.on_event(&InputEvent::Char { c, now_ms: 0 }, &mut inv);
+        }
+        tb.on_event(&InputEvent::SelectAll, &mut inv);
+        assert_eq!(tb.copy_selection(), None);
+        assert_eq!(tb.cut_selection(&mut inv), None);
+        assert_eq!(tb.text(), "tiger", "잘라내기가 본문을 지우지도 않는다");
+        assert_eq!(tb.take_secret_text(), "tiger");
+        assert_eq!(tb.text(), "");
+        tb.on_event(&InputEvent::Undo, &mut inv);
+        assert_eq!(tb.text(), "", "되돌리기 기록도 지워졌다");
     }
 }

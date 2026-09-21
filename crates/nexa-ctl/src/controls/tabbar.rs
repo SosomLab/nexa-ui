@@ -131,6 +131,10 @@ pub struct TabBar {
     pressed: Option<Zone>,
     /// 드래그 재정렬: (잡은 탭, 프레스 좌표, 임계 통과 여부).
     drag: Option<(usize, Point, bool)>,
+    /// ★ 드래그 **고스트**(nexa-sql 사용자 09-21 "어떤 탭이 이동하고 있는지 — 결과 그리드의 컬럼 이동처럼"): 지금 포인터 자리 +
+    /// 잡은 점의 탭 왼쪽 기준 오프셋(고스트가 손 아래 그대로). 잡은 탭의 제자리(= 놓일 자리)는 자리 표시로 칠한다.
+    drag_cur: Point,
+    drag_grab_dx: i32,
     pending: Option<TabAction>,
     /// 단일행 스크롤 오프셋(물리 px) — paint가 클램프한다.
     scroll_x: Cell<i32>,
@@ -167,6 +171,8 @@ impl TabBar {
             hover: None,
             pressed: None,
             drag: None,
+            drag_cur: Point { x: 0, y: 0 },
+            drag_grab_dx: 0,
             pending: None,
             scroll_x: Cell::new(0),
             ensure_active: Cell::new(true),
@@ -384,6 +390,8 @@ impl TabBar {
     /// 호스트 주도 드래그 시작(패널 간 이양) — 탭 `index`를 잡은 상태(임계 통과 취급).
     pub fn begin_drag(&mut self, index: usize, x: i32, y: i32) {
         self.drag = Some((index, Point { x, y }, true));
+        self.drag_cur = Point { x, y };
+        self.drag_grab_dx = self.layout.borrow().tabs.get(index).map_or(0, |r| r.w / 2);
     }
 
     /// 단일행 스크롤 오프셋(물리 px · 마지막 페인트 기준).
@@ -506,6 +514,11 @@ impl TabBar {
             started || (x - press.x).abs() > DRAG_THRESHOLD || (y - press.y).abs() > DRAG_THRESHOLD;
         if !begun {
             return;
+        }
+        // 고스트는 포인터를 따라다닌다 — 움직일 때마다 다시 그린다(탭 줄 한 줄 · 값싸다).
+        if self.drag_cur != (Point { x, y }) {
+            self.drag_cur = Point { x, y };
+            inv.push(self.base.bounds);
         }
         if let Some(Zone::Tab(to, _)) = self.zone_at(x, y) {
             let crossed = to != from && {
@@ -778,6 +791,8 @@ impl Widget for TabBar {
                         self.pending = Some(TabAction::Switch(i));
                         // 본체 프레스 = 드래그 재정렬 후보.
                         self.drag = Some((i, Point { x, y }, false));
+                        self.drag_cur = Point { x, y };
+                        self.drag_grab_dx = self.layout.borrow().tabs.get(i).map_or(0, |r| x - r.x);
                     }
                     inv.push(self.base.bounds);
                 }
@@ -872,6 +887,21 @@ impl Widget for TabBar {
             let hover = hover_tab.is_some_and(|(h, _)| h == i);
             let hover_close = hover_tab == Some((i, true));
             let locked = self.is_locked(i);
+            if drag_idx == Some(i) {
+                // 잡은 탭의 제자리(= 놓일 자리 · 라이브 미리보기) = 자리 표시만 — 본체는 고스트로 포인터 아래(맨 마지막에 그린다).
+                ctx.fill_rect(clip, theme.chrome_bg);
+                ctx.fill_rect_alpha(clip, theme.accent, 0.12);
+                for edge in [
+                    Rect::new(cell.x, cell.y, 1, cell.h),
+                    Rect::new(cell.right() - 1, cell.y, 1, cell.h),
+                ] {
+                    let e = edge.intersection(&clip);
+                    if !e.is_empty() {
+                        ctx.fill_rect(e, theme.accent);
+                    }
+                }
+                continue;
+            }
             if active {
                 ctx.fill_rect(clip, theme.panel_bg);
                 if hover {
@@ -981,6 +1011,27 @@ impl Widget for TabBar {
         }
 
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
+        // ★ 드래그 고스트 — 포인터 x를 따라가고(띠 안으로 클램프) 세로는 잡은 탭이 지금 놓인 줄 · 탭 줄 층의 맨 마지막.
+        if let Some(cell) = drag_idx.and_then(|i| lay.tabs.get(i).copied()) {
+            let i = drag_idx.unwrap_or(0);
+            let gx = (self.drag_cur.x - self.drag_grab_dx)
+                .clamp(strip.x, (strip.right() - cell.w).max(strip.x));
+            let g = Rect::new(gx, cell.y, cell.w, cell.h);
+            ctx.fill_rect(g, theme.panel_bg);
+            for edge in [
+                Rect::new(g.x, g.y, g.w, 1),
+                Rect::new(g.x, g.bottom() - 1, g.w, 1),
+                Rect::new(g.x, g.y, 1, g.h),
+                Rect::new(g.right() - 1, g.y, 1, g.h),
+            ] {
+                ctx.fill_rect(edge, self.tab_accent(theme));
+            }
+            if let Some(title) = self.titles.get(i) {
+                let ty = ctx.text_center_y(g.y, g.h);
+                let inner = Rect::new(g.x + 1, g.y + 1, (g.w - 2).max(0), (g.h - 2).max(0));
+                ctx.text(g.x + pad, ty, inner, title, theme.text);
+            }
+        }
         *self.layout.borrow_mut() = lay;
         if self.lines.replace(rows) != rows {
             self.lines_changed.set(true);
@@ -1272,6 +1323,47 @@ mod tests {
         t.set_multiline(true);
         assert!(t.is_multiline());
         assert!(t.take_lines_changed(), "모드 전환 = 재레이아웃 신호");
+    }
+
+    /// 드래그 고스트(nexa-sql 09-21): 임계를 넘으면 포인터를 따라 다시 그리고(무효화) · 잡은 점의 오프셋을 기억한다 ·
+    /// 놓으면 드래그가 끝난다(고스트도 사라진다).
+    #[test]
+    fn drag_ghost_follows_the_pointer() {
+        let (mut t, mut inv) = bar_sized(&["alpha", "beta", "gamma"], 0, 600, 28, false);
+        t.paint(&mut ProbeCtx, &crate::theme::Theme::dark());
+        let r = t.tab_rect(1).expect("tab");
+        t.on_event(
+            &InputEvent::MouseDown {
+                x: r.x + 10,
+                y: r.y + 5,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.drag_grab_dx, 10, "잡은 점 = 탭 왼쪽에서 10px");
+        assert_eq!(t.dragging(), None, "임계 전");
+        let mut inv2 = Invalidations::default();
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: r.x + 40,
+                y: r.y + 5,
+            },
+            &mut inv2,
+        );
+        assert_eq!(t.dragging(), Some(1));
+        assert_eq!(t.drag_cur.x, r.x + 40);
+        assert!(!inv2.is_empty(), "고스트가 움직였으니 다시 그린다");
+        // 그려도 죽지 않는다(자리 표시 + 고스트 경로).
+        t.paint(&mut ProbeCtx, &crate::theme::Theme::dark());
+        t.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 40,
+                y: r.y + 5,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.dragging(), None);
     }
 
     #[test]

@@ -248,6 +248,15 @@ impl TextBuf {
         self.adopt(Self::from_string(text));
     }
 
+    /// **비밀 값 지우기**(nexa-sql 09-21 — 일회성 비밀번호): 물리 바이트열을 0으로 덮어쓴 뒤 빈 본문으로 바꾼다.
+    /// `black_box`로 덮어쓰기가 최적화로 사라지지 않게 한다(`unsafe` 없음). 버퍼가 자라며 옮겨 간 **옛 할당**은 이미 반환된
+    /// 메모리라 닿지 않는다 — 가린 입력란은 짧아서 재할당이 드물다.
+    pub fn wipe(&mut self) {
+        self.data.fill(0);
+        std::hint::black_box(&self.data);
+        self.set_string(String::new());
+    }
+
     /// 밖에서(작업 스레드에서) 만든 버퍼를 받아들인다 — 복사 0 · 세대는 이어서 오른다.
     pub fn adopt(&mut self, mut other: TextBuf) {
         other.epoch = self.epoch.max(other.epoch) + 1;

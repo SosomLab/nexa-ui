@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-21 (51차 · win)** — `geom` 팝업 배치 규칙(`place_popup` · `place_popup_beside` · `nudge_into` · `popup_host` · `DrawCtx::surface_size`) → `ContextMenu`(`open_beside`)·툴팁·`Combo` 안전망 · `TabBar` 끌기 고스트 · `TextBox` 영역 밖 끌기 = 줄 단위(줄 표 · 1.18 → <0.001 ms) · `nexa-dlg` `PickerMode::Folder` · 가린 입력란 복사 금지 + `wipe`/`take_secret_text` → [journal](journal/2026-09-18.md)
 - **2026-09-21 (50차 · mac)** — nexa-sys `layer_present`(macOS IOSurface 화면 내보내기 · 표면 풀 · sRGB 태그 · 알파 채움 · 행 정렬은 OS에 맡김 · present 36 → 2.9 ms · 의존 0) → [journal](journal/2026-09-18.md)
 - **2026-09-20 (49차 · mac)** — `TextBox` 한글 **앱 조합**(전역 스위치 · `hangul::Composer` · preedit 표시 재사용 · 자모 단위 Backspace · 포커스/이동 시 확정) · nexa-sys `input_source`(한글 입력 소스 감지 + 바뀜 알림 · 의존 0) — macOS 첫 키 자모 유출·조합 직후 첫 1바이트 글자 유실 해소(nexa-sql T-139). → [journal](journal/2026-09-18.md)
 - **2026-09-20 (48차 · win)** — CLAUDE.md §3-1(세션 공통 규칙 · `TextBuf`/되돌리기 불변식 · 변경 기록 소비자 규칙) → [journal](journal/2026-09-18.md)

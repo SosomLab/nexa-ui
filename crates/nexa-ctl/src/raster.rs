@@ -337,6 +337,10 @@ fn seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 }
 
 impl DrawCtx for RasterCtx<'_, '_, '_> {
+    fn surface_size(&self) -> Option<(i32, i32)> {
+        Some((self.surface.width() as i32, self.surface.height() as i32))
+    }
+
     fn caret_on(&self) -> bool {
         self.caret_on
     }

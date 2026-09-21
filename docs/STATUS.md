@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-21 (51차 · win) — ★ **팝업 배치 규칙**(메뉴·툴팁·드롭다운은 창 밖으로 잘리지 않는다 · 대상 행을 가리지 않는 `open_beside`) · 탭 끌기 고스트 · 편집기 밖 끌기 선택 = 줄 단위(빠름) · 폴더 고르기 대화상자 · 가린 입력란 = 비밀 값(복사 금지 · 0 덮어쓰기). 테스트 359. → [journal](journal/2026-09-18.md)
+
 ## 2026-09-21 (50차 · mac) — ★ nexa-sys **`layer_present`** = macOS IOSurface 화면 내보내기(표면 풀 · sRGB 태그 · 의존 0 · present 36 → 2.9 ms · nexa-sql `gfx.mac_present`로 선택 · 남은 것 = `Surface` stride) → [journal](journal/2026-09-18.md)
 
 ## 2026-09-20 (49차 · mac) — TextBox 한글 **앱 조합**(전역 스위치 · macOS winit IME 결함 회피) · nexa-sys `input_source`(한글 입력 소스 감지 + 바뀜 알림) → [journal](journal/2026-09-18.md)

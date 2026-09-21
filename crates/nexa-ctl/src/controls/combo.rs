@@ -128,6 +128,9 @@ pub struct ComboCore {
     /// 팝업이 넘지 못하는 **뷰포트 하한 y**(08-20 — 창 아래 끝에서 목록이
     /// 잘려 선택 불가). None = 종전대로 아래로만. 호스트가 창/위젯 경계를 준다.
     viewport_bottom: Option<i32>,
+    /// 마지막 paint가 본 그리기 표면의 높이 — 호스트가 `viewport_bottom`을 주지 않아도 목록이 창 아래로 잘리지 않게 하는
+    /// 안전망(팝업 배치 규칙 · nexa-sql 사용자 09-21). 닫힌 상태의 paint에서도 배우므로 열리는 첫 프레임부터 맞다.
+    surface_bottom: std::cell::Cell<Option<i32>>,
 }
 
 impl ComboCore {
@@ -155,6 +158,7 @@ impl ComboCore {
             item_fade: IntentFade::buttons(),
             changed: false,
             viewport_bottom: None,
+            surface_bottom: std::cell::Cell::new(None),
         }
     }
 }
@@ -317,7 +321,15 @@ pub trait ComboControl: Control {
         // 뷰포트 하한(08-20) — 아래로 펴면 잘리는 자리는 **시작 위치를 위로
         // 이동**해 전체 목록이 보이게 한다(끝자리 = 위로 펼침과 동치). 위로도
         // 모자라면 0에서 멈춘다(잘려도 상단부터 — 히트는 popup_rect 단일 원천).
-        if let Some(limit) = self.core().viewport_bottom {
+        // 하한 = 호스트가 준 값과 표면 높이 가운데 더 위쪽(둘 다 없으면 종전대로 아래로만).
+        let limit = match (
+            self.core().viewport_bottom,
+            self.core().surface_bottom.get(),
+        ) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        if let Some(limit) = limit {
             if y + h > limit {
                 y = (limit - h).min(b.y - self.s(2) - h).max(0);
             }
@@ -366,6 +378,9 @@ pub trait ComboControl: Control {
     // ── 렌더 ──
     /// 닫힌 박스 + 셰브론 + (열렸으면) 드롭다운을 그린다. 편집 텍스트는 구현체가 `box_text`로 제공.
     fn paint_combo(&self, ctx: &mut dyn DrawCtx, theme: &Theme, box_text: &str) {
+        if let Some((_, sh)) = ctx.surface_size() {
+            self.core().surface_bottom.set(Some(sh));
+        }
         let b = self.bounds();
         ctx.fill_round_rect(b, self.s(6), theme.field_bg);
         // ★ hover — 열려 있을 때는 얹지 않는다(드롭다운이 이미 시선을 가져갔다).

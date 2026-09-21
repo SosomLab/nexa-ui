@@ -31,6 +31,12 @@ pub trait DrawCtx {
     /// 이번 프레임에 **캐럿을 그릴 것인가**(깜빡임 위상 · 08-13 사용자 요청).
     /// 위젯은 시계가 없으므로 호스트가 프레임마다 위상을 주입한다 — 포커스 창이
     /// 아니거나 어두운 위상이면 `false`. 기본 = 항상 표시(테스트 백엔드·정적 렌더).
+    /// ★ 그리기 표면의 크기(물리 px) — 팝업(메뉴·툴팁)이 **표면 밖으로 나가지 않게** 스스로 맞추는 데 쓴다(호출자가 영역을
+    /// 잘못 넘겨도 잘리지 않는 안전망 · nexa-sql 사용자 09-21). 크기를 모르는 컨텍스트(테스트용 기록기)는 `None`.
+    fn surface_size(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     fn caret_on(&self) -> bool {
         true
     }
@@ -251,9 +257,25 @@ pub fn draw_tooltip_in(
     let th = ctx.text_height();
     let w = tw + s(12);
     let h = th * lines.len() as i32 + s(8);
-    let lo = clamp_x0 + s(4);
+    // 가로: 호출자의 범위와 표면의 겹침 안에서 · 세로: 기준 아래 6px → 아래로 넘치면 **기준 위**로 → 그래도 안 되면 밀어 넣는다
+    // (창 아래쪽 도구줄·상태줄의 툴팁이 잘리던 것 · nexa-sql 사용자 09-21). 표면 크기를 모르면 종전대로 아래.
+    let surface = ctx.surface_size();
+    let clamp_w = surface.map_or(clamp_w, |(sw, _)| clamp_w.min(sw));
+    let lo = clamp_x0.max(0) + s(4);
     let x = (anchor.x + (anchor.w - w) / 2).clamp(lo, (clamp_w - w - s(4)).max(lo));
-    let r = Rect::new(x, anchor.bottom() + s(6), w, h);
+    let below = anchor.bottom() + s(6);
+    let y = match surface {
+        Some((_, sh)) if below + h > sh => {
+            let above = anchor.y - s(6) - h;
+            if above >= 0 {
+                above
+            } else {
+                (sh - h).max(0)
+            }
+        }
+        _ => below,
+    };
+    let r = Rect::new(x, y, w, h);
     ctx.fill_round_rect_alpha(r, s(4), theme.text, 0.92);
     for (i, line) in lines.iter().enumerate() {
         ctx.text(

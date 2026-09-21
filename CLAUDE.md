@@ -41,6 +41,14 @@
 - ★ **공개 API 변경은 소비자 영향 표기** — 커밋 본문에 `영향: nexa-sql | clip | beep`.
 - `.claude/settings.json`은 덮어쓰기 금지, 병합만.
 
+### 3-0. 팝업 배치 규칙(nexa-sql 사용자 09-21 "우클릭 메뉴·툴팁이 화면에서 잘리지 않게")
+
+- 떠서 그려지는 것(메뉴 · 하위 메뉴 · 툴팁 · 드롭다운)은 **그리기 표면 밖으로 나가지 않는다.** 위치는 `geom::place_popup`(정방향 → 반대쪽 → 밀어 넣기) · 이미 놓인 것은 `geom::nudge_into` · 영역은 `geom::popup_host(host, ctx.surface_size())` — 컨트롤 안에서 위치를 따로 계산하지 않는다.
+- **행(대상)에서 연 메뉴는 그 대상을 가리지 않는다**(nexa-sql 09-21 — 트리 우클릭): `ContextMenu::open_beside(x, y, 대상 rect, …)` → `geom::place_popup_beside`(대상 **바로 아래** → 자리가 없으면 **바로 위** → 둘 다 안 되면 일반 규칙 · 가로는 누른 x에서 일반 규칙). paint의 안전망도 같은 규칙으로 다시 놓는다. 메뉴를 담는 패널의 폭에 가두지 말고 **창 전체**를 host로 주고 창의 팝업 층에서 그린다.
+- **가린 입력란(`set_masked`)은 비밀 값이다**: 복사·잘라내기를 하지 않는다 · 호스트는 값을 `take_secret_text()`로 꺼낸다(꺼내는 즉시 본문·되돌리기 기록·조합 글을 0으로 덮는다 · `TextBox::wipe` → `EditState::wipe` → `TextBuf::wipe` — `unsafe` 없이 `fill(0)` + `black_box`).
+- `DrawCtx::surface_size()`(기본 `None` · `RasterCtx` = 표면 크기)가 안전망의 근거다: `ContextMenu::paint` · `draw::draw_tooltip_in` · `Combo`는 그리는 시점에 표면 크기를 배워 스스로 안으로 들어온다(호출자가 `host`를 잘못 넘겨도 잘리지 않는다). 새 떠 있는 컨트롤도 같은 식으로 만든다.
+- 새 떠 있는 컨트롤 = `geom.rs popup_tests`에 배치 사례를 더하고, 호스트 앱에서 창 모서리 근처 캡처 1장.
+
 ### 3-1. 세션 공통 규칙 · 편집기 코어 불변식(09-20 · 다른 PC에서도 그대로 — 원문 = nexa-sql [docs/61](../nexa-sql/docs/61-core-design-and-working-rules.md))
 
 - **답은 한글로.** "commit · main 병합 · push" = 작업 브랜치 → 커밋 → `main`에 `--ff-only` → 브랜치 삭제 → `docs/BRANCHES.md` → push(**nexa-ui가 nexa-sql보다 먼저** — path 의존) · 커밋 끝에 그 세션이 안내하는 `Co-Authored-By:` 줄.

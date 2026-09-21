@@ -151,6 +151,31 @@ fn main() {
         "text()+count once: {:.3} ms ({n} chars)",
         t.elapsed().as_secs_f64() * 1000.0
     );
+    // 드래그 선택 — 편집기 **왼쪽 밖**에서 위아래로(nexa-sql 09-21: 종전에는 사건마다 본문 전체를 문자열로 떠 개행을 셌고
+    // y를 무시하고 한 글자씩만 움직였다). 사건 하나 = 마우스 이동 하나.
+    paint(&tb, &mut buf);
+    tb.on_event(
+        &InputEvent::MouseDown {
+            x: 200,
+            y: 100,
+            shift: false,
+            primary: false,
+        },
+        &mut inv,
+    );
+    let t = Instant::now();
+    for i in 0..200 {
+        tb.on_event(
+            &InputEvent::MouseMove {
+                x: -300,
+                y: 40 + (i % 30) * 15,
+            },
+            &mut inv,
+        );
+    }
+    let per = t.elapsed().as_secs_f64() * 1000.0 / 200.0;
+    tb.on_event(&InputEvent::MouseUp { x: -300, y: 100 }, &mut inv);
+    println!("drag outside-left ×200 avg: {per:.3} ms/move");
     // 페인트 + Down 을 섞은 "키 하나당" 비용(실제 프레임 = on_event + paint).
     let t = Instant::now();
     for _ in 0..20 {
