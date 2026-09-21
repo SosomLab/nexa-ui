@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/drag-autoscroll-tick | 2026-09-21 | 2026-09-21 → main(삭제) | 1 | 52차(win) — `TextBox` 드래그 자동 스크롤 = 틱 기반(`drag_autoscroll_active` · 포인터가 밖에 멈춰 있어도 이어진다 · 새 타이머 0) · `nexa-fs` 감시 시험 = 조건 대기(`settle`) (nexa-sql 89차 추가 24) |
 | feat/popup-placement-secret-box | 2026-09-21 | 2026-09-21 → main(삭제) | 1 | 51차(win) — `geom` 팝업 배치 규칙(+ `place_popup_beside` · `ContextMenu::open_beside`) · `TabBar` 끌기 고스트 · `TextBox` 영역 밖 끌기 줄 단위 · `nexa-dlg` 폴더 고르기 · 가린 입력란 복사 금지 + `wipe`(nexa-sql 89차) |
 | fix/mac-hangul-app-compose | 2026-09-20 | 2026-09-21 → main(삭제) | 4 | 49~50차(mac) — TextBox 한글 앱 조합 · nexa-sys `input_source` · nexa-sys `layer_present`(IOSurface 화면 내보내기 · nexa-sql T-139 · T-147) |
 | docs/portable-rules | 2026-09-20 | 2026-09-20 → main(삭제) | 1 | 48차 — CLAUDE.md §3-1(편집기 코어 불변식 · 세션 공통 규칙 — 다른 PC에서 이어 가기 · nexa-sql docs/61) |

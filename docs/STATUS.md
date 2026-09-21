@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-21 (52차 · win) — 편집기 드래그 선택: 포인터가 밖에 **멈춰 있어도** 계속 스크롤(틱 기반 · 새 타이머 0) · 파일 감시 시험의 타이밍 의존 제거. 테스트 360. → [journal](journal/2026-09-18.md)
+
 ## 2026-09-21 (51차 · win) — ★ **팝업 배치 규칙**(메뉴·툴팁·드롭다운은 창 밖으로 잘리지 않는다 · 대상 행을 가리지 않는 `open_beside`) · 탭 끌기 고스트 · 편집기 밖 끌기 선택 = 줄 단위(빠름) · 폴더 고르기 대화상자 · 가린 입력란 = 비밀 값(복사 금지 · 0 덮어쓰기). 테스트 359. → [journal](journal/2026-09-18.md)
 
 ## 2026-09-21 (50차 · mac) — ★ nexa-sys **`layer_present`** = macOS IOSurface 화면 내보내기(표면 풀 · sRGB 태그 · 의존 0 · present 36 → 2.9 ms · nexa-sql `gfx.mac_present`로 선택 · 남은 것 = `Surface` stride) → [journal](journal/2026-09-18.md)

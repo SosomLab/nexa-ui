@@ -205,15 +205,51 @@ mod tests {
         std::env::temp_dir().join(format!("nexa_fs_watch_{}_{name}", std::process::id()))
     }
 
-    fn wait(w: &StatWatch) -> Vec<WatchEvent> {
-        for _ in 0..200 {
-            let ev = w.poll();
-            if !ev.is_empty() {
-                return ev;
-            }
-            std::thread::sleep(Duration::from_millis(10));
+    fn key_of(e: &WatchEvent) -> u64 {
+        match e {
+            WatchEvent::Changed { key, .. }
+            | WatchEvent::Missing { key, .. }
+            | WatchEvent::Unreadable { key, .. } => *key,
         }
-        Vec::new()
+    }
+
+    /// **앞서 보낸 확인이 모두 끝날 때까지** 기다린 뒤 그동안의 사건을 돌려준다(시간이 아니라 **조건**으로 · nexa-sql T-161).
+    /// 방법 = 없는 파일을 가리키는 표지 요청 둘을 차례로 보낸다: 감시 스레드는 밀린 요청을 한 묶음으로 합쳐 **뒤에서부터** 처리하므로
+    /// 첫 표지의 사건만으로는 같은 묶음의 앞 요청이 끝났다고 말할 수 없다 → 첫 표지의 사건을 본 뒤에 보낸 둘째 표지는 반드시
+    /// **다음 묶음**이고, 그 사건이 오면 앞 묶음은 다 끝난 것이다. 종전에는 80 ms 잠으로 "끝났겠지" 했다 — 부하가 걸린 PC에서
+    /// 첫 확인이 늦게 돌면 바뀐 파일을 보고 사건을 하나 더 내, 뒤의 단정이 남은 사건을 집었다(09-21 1회 실패).
+    fn settle(w: &StatWatch) -> Vec<WatchEvent> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1 << 40);
+        let mut got = Vec::new();
+        for _ in 0..2 {
+            let mark = NEXT.fetch_add(1, Ordering::Relaxed);
+            w.check(vec![WatchReq {
+                key: mark,
+                path: tmp("no-such-marker"),
+                known: Some(FileSig {
+                    len: 1,
+                    mtime: None,
+                    id: None,
+                }),
+            }]);
+            let mut seen = false;
+            for _ in 0..2000 {
+                for e in w.poll() {
+                    if key_of(&e) == mark {
+                        seen = true;
+                    } else if key_of(&e) < (1 << 40) {
+                        got.push(e);
+                    }
+                }
+                if seen {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(seen, "감시 스레드가 표지에 답하지 않았다");
+        }
+        got
     }
 
     #[test]
@@ -249,12 +285,11 @@ mod tests {
         };
         // 같음 = 사건 없음.
         w.check(req(known));
-        std::thread::sleep(Duration::from_millis(80));
-        assert!(w.poll().is_empty());
+        assert!(settle(&w).is_empty());
         // 내용이 바뀜(크기가 달라 mtime 해상도와 무관).
         std::fs::write(&p, b"two!!").unwrap();
         w.check(req(known));
-        let ev = wait(&w);
+        let ev = settle(&w);
         match &ev[..] {
             [WatchEvent::Changed {
                 key,
@@ -272,17 +307,19 @@ mod tests {
         std::fs::remove_file(&p).unwrap();
         w.check(req(known));
         assert!(matches!(
-            &wait(&w)[..],
+            &settle(&w)[..],
             [WatchEvent::Missing { key: 7, .. }]
         ));
         // 없던 파일이 계속 없음 = 사건 없음 · 상한보다 큰 파일 = 읽지 않음.
         w.check(req(None));
-        std::thread::sleep(Duration::from_millis(80));
-        assert!(w.poll().is_empty());
+        assert!(settle(&w).is_empty());
         std::fs::write(&p, vec![b'x'; 64]).unwrap();
         let small = StatWatch::spawn(Box::new(|| {}), Duration::from_millis(10), 16).unwrap();
         small.check(req(None));
-        assert!(matches!(&wait(&small)[..], [WatchEvent::Unreadable { .. }]));
+        assert!(matches!(
+            &settle(&small)[..],
+            [WatchEvent::Unreadable { .. }]
+        ));
         let _ = std::fs::remove_file(&p);
     }
 }

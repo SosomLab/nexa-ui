@@ -312,6 +312,10 @@ pub struct TextBox {
     caret_xs: std::cell::RefCell<Vec<i32>>,
     /// 드래그 선택 중.
     dragging: bool,
+    /// 멀티라인 드래그 중 마지막 포인터 자리 · 마지막 자동 걸음의 시각(ms) — 포인터가 **영역 위/아래 밖에 가만히 있어도**
+    /// [`Self::tick`]이 같은 자리로 걸음을 되풀이한다(VS Code·Sublime · nexa-sql T-158). 새 타이머·스레드 0.
+    drag_at: Option<(i32, i32)>,
+    drag_step_ms: u64,
     /// 열(블록) 선택 모드 — 호스트가 Alt+Shift 상태를 밀어 준다(`set_column_mode`).
     column_mode: bool,
     /// 열 선택 드래그 시작점(위젯 좌표) — 드래그 동안 줄마다 같은 x 구간을 선택한다.
@@ -479,6 +483,8 @@ pub const MINIMAP_DEFAULT_WIDTH: i32 = 160;
 /// 튀지 않게 상한을 둔다(넘는 행은 빈 칸).
 pub const MINIMAP_MAX_LINES: usize = 4000;
 /// 미니맵 글자 불투명도(공백 제외).
+/// 드래그 자동 스크롤의 걸음 간격(ms) — 포인터가 영역 밖에 멈춰 있을 때(T-158 · 초당 20걸음 × 거리 비례 1~12줄).
+const AUTOSCROLL_STEP_MS: u64 = 50;
 const MINIMAP_ALPHA: f32 = 0.62;
 
 /// **미리 준비한 본문**(nexa-sql 09-20 · 큰 파일 열기): 편집 버퍼([`TextBuf`] = 본문 + 줄 표)를 **UI 스레드 밖에서** 만들어
@@ -732,6 +738,8 @@ impl TextBox {
             text_x: std::cell::Cell::new(0),
             caret_xs: std::cell::RefCell::new(Vec::new()),
             dragging: false,
+            drag_at: None,
+            drag_step_ms: 0,
             column_mode: false,
             col_anchor: None,
             last_click: (0, 0),
@@ -818,7 +826,40 @@ impl TextBox {
         let a = self.ml_bars.tick(now_ms);
         let b = self.hover.tick(now_ms);
         let c = self.minimap_hover.tick(now_ms);
-        a || b || c
+        let d = self.drag_autoscroll_tick(now_ms);
+        a || b || c || d
+    }
+
+    /// 드래그 자동 스크롤을 [`Self::tick`]이 몰아야 하는가 — 멀티라인 드래그 중이고 포인터가 영역의 **위/아래 밖**에 있다.
+    /// 호스트는 이 동안 프레임(틱)을 예약한다(그 밖에는 비용 0).
+    #[must_use]
+    pub fn drag_autoscroll_active(&self) -> bool {
+        self.dragging
+            && self.multiline
+            && self.col_anchor.is_none()
+            && self.drag_at.is_some_and(|(_, y)| {
+                let b = self.base.bounds;
+                y < b.y || y > b.bottom()
+            })
+    }
+
+    /// 포인터가 밖에 멈춰 있는 동안 [`AUTOSCROLL_STEP_MS`]마다 같은 자리로 드래그 걸음을 한 번 더(걸음 수는 거리에 비례 —
+    /// 움직일 때와 같은 규칙). 움직이는 동안에는 이동 사건이 걸음을 만들므로 그 시각을 기준으로 쉰다(두 배로 빨라지지 않는다).
+    fn drag_autoscroll_tick(&mut self, now_ms: u64) -> bool {
+        if !self.drag_autoscroll_active() {
+            return false;
+        }
+        if now_ms.saturating_sub(self.drag_step_ms) < AUTOSCROLL_STEP_MS {
+            return false;
+        }
+        let Some((x, y)) = self.drag_at else {
+            return false;
+        };
+        let before = (self.edit.caret(), self.vscroll.get());
+        let mut inv = Invalidations::default();
+        self.on_event(&InputEvent::MouseMove { x, y }, &mut inv);
+        self.drag_step_ms = now_ms;
+        before != (self.edit.caret(), self.vscroll.get())
     }
 
     /// hover 페이드가 움직이는 중인가(호스트가 프레임을 예약할지).
@@ -4047,6 +4088,7 @@ impl TextBox {
                 self.base.focused = true;
                 self.minimap_drag = true;
                 self.dragging = false;
+                self.drag_at = None;
                 self.col_anchor = None;
                 self.last_click.1 = 0;
                 self.minimap_scroll_to(y, inv);
@@ -4178,6 +4220,8 @@ impl TextBox {
                 inv.push(self.base.bounds);
             }
             InputEvent::MouseMove { x, y } if self.dragging && self.multiline => {
+                // 밖에 멈춰 있어도 `tick`이 이어 가도록 마지막 자리를 기억한다(T-158).
+                self.drag_at = Some((x, y));
                 // 멀티라인 드래그 자동 스크롤(08-17) — 상/하 밖 = 줄 단위 세로 이동
                 // (vscroll이 따라온다), 좌/우 밖 = 한 글자 가로 이동(mhscroll이 따라온다).
                 let b = self.base.bounds;
@@ -4261,6 +4305,7 @@ impl TextBox {
             }
             InputEvent::MouseUp { x, y } => {
                 self.dragging = false;
+                self.drag_at = None;
                 self.col_anchor = None;
                 if self.minimap_drag {
                     self.minimap_drag = false;
@@ -4309,7 +4354,8 @@ impl TextBox {
                 primary,
             } if self.base.focused => {
                 self.last_click.1 = 0; // 키 개입 = 클릭 체인 끊김
-                self.dragging = false; // 키 입력 = 드래그 끝(MouseUp을 못 받은 경우 방어 · nexa-sql 09-15)
+                self.dragging = false;
+                self.drag_at = None; // 키 입력 = 드래그 끝(MouseUp을 못 받은 경우 방어 · nexa-sql 09-15)
                 self.ml_user_scrolled = false; // 키 이동/편집 = 캐럿 이동 → 캐럿 추종 재개
                 match key {
                     Key::Enter => {
@@ -5965,6 +6011,45 @@ mod minimap_tests {
     /// ★ 드래그 선택 중 마우스가 **편집기 옆(왼쪽·오른쪽) 밖**으로 나가도 세로 위치를 따라 **줄 단위**로 선택된다
     /// (nexa-sql 사용자 09-21: 왼쪽 탐색기 위에서 위/아래로 끌면 한 글자씩만 움직였다 — x가 밖이면 y를 무시하고 사건마다
     /// 한 글자 왼쪽으로 갔다). 왼쪽 밖 = 그 줄의 처음 · 오른쪽 밖 = 그 줄의 끝 · 같은 줄에서 가려진 글이 있을 때만 한 글자씩(가로 자동 스크롤).
+    /// 포인터가 아래 밖에 **멈춰 있어도** tick이 선택을 이어 간다 · 간격 안에서는 걷지 않는다 · 놓으면 멈춘다(T-158).
+    #[test]
+    fn drag_autoscroll_continues_while_pointer_rests_outside() {
+        let mut t = editor(200);
+        let mut inv = Invalidations::default();
+        paint(&t);
+        let lh = t.line_h();
+        let bottom = t.bounds().bottom();
+        t.on_event(&down(120, lh / 2), &mut inv);
+        assert!(!t.drag_autoscroll_active(), "안에서는 아니다");
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: 120,
+                y: bottom + 3 * lh,
+            },
+            &mut inv,
+        );
+        assert!(t.drag_autoscroll_active());
+        let c0 = t.edit.caret();
+        assert!(!t.tick(10), "간격 전에는 걷지 않는다");
+        assert_eq!(t.edit.caret(), c0);
+        assert!(t.tick(1_000));
+        let c1 = t.edit.caret();
+        assert!(c1 > c0, "가만히 있어도 선택이 늘어난다");
+        assert!(t.tick(2_000));
+        assert!(t.edit.caret() > c1);
+        t.on_event(
+            &InputEvent::MouseUp {
+                x: 120,
+                y: bottom + 3 * lh,
+            },
+            &mut inv,
+        );
+        assert!(!t.drag_autoscroll_active());
+        let c2 = t.edit.caret();
+        assert!(!t.tick(3_000));
+        assert_eq!(t.edit.caret(), c2);
+    }
+
     #[test]
     fn drag_outside_left_or_right_still_follows_rows() {
         let mut t = editor(40);
