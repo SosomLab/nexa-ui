@@ -280,16 +280,18 @@ fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 /// 앱이 도는 동안 새로 설치된 폰트는 다음 기동에서 보인다(설정 창의 글꼴 변경도 이 목록에서 고른다 — 재시작 안내가 있다).
 fn font_files() -> &'static [PathBuf] {
     static FILES: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
-    FILES.get_or_init(|| {
-        let mut all = Vec::new();
-        for dir in FONT_DIRS {
-            let mut entries = Vec::new();
-            collect_font_files(&expand(dir), 0, &mut entries);
-            entries.sort();
-            all.extend(entries);
-        }
-        all
-    })
+    FILES.get_or_init(walk_font_dirs)
+}
+
+fn walk_font_dirs() -> Vec<PathBuf> {
+    let mut all = Vec::new();
+    for dir in FONT_DIRS {
+        let mut entries = Vec::new();
+        collect_font_files(&expand(dir), 0, &mut entries);
+        entries.sort();
+        all.extend(entries);
+    }
+    all
 }
 
 /// 폰트 폴더 재귀 깊이 상한(Fedora `google-noto/` 1단 · Debian `truetype/noto/` 2단 · 여유 1).
@@ -302,8 +304,16 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
     if want.is_empty() {
         return None;
     }
+    // Windows는 종전대로 호출마다 걷는다(09-22: 캐시 커밋 뒤 CI windows-latest `test`가 두 번 실패 — 로그 인증 불가로 원인 미확인 ·
+    // Linux·macOS는 통과) — Windows는 후보가 고정 경로라 걷기가 기동 비용의 주역이 아니다. 원인을 Windows 세션에서 본 뒤 3-OS로.
+    #[cfg(windows)]
+    let walked = walk_font_dirs();
+    #[cfg(windows)]
+    let files: &[PathBuf] = &walked;
+    #[cfg(not(windows))]
+    let files: &[PathBuf] = font_files();
     {
-        for path in font_files() {
+        for path in files {
             let ext_ok = path
                 .extension()
                 .and_then(|e| e.to_str())

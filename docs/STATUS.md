@@ -2,7 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
-## 2026-09-22 (53차 · linux) — nexa-font **글꼴 가족 탐색이 폰트 트리를 호출마다 걷던 것** 수정(Linux 기동 100~700 ms = `/usr/share/fonts` `statx` 11,786회): 걷기 = 프로세스에서 한 번(`font_files` · `OnceLock`) + `DirEntry::file_type()`(statx 0 · 링크 폴더는 `is_dir()`로 따라감). nexa-sql 창까지 522 → 111 ms의 첫 절반. 테스트 357 · clippy 0 · CI ac57901 = Windows `test` ✗(mac·ubuntu ✓ · 로그 인증 불가) → 링크 안전 수정으로 재시도. → nexa-sql [journal 09-22](../../nexa-sql/docs/journal/2026-09-22.md)
+## 2026-09-22 (53차 · linux) — nexa-font **글꼴 가족 탐색이 폰트 트리를 호출마다 걷던 것** 수정(Linux 기동 100~700 ms = `/usr/share/fonts` `statx` 11,786회): 걷기 = 프로세스에서 한 번(`font_files` · `OnceLock`) + `DirEntry::file_type()`(statx 0 · 링크 폴더는 `is_dir()`로 따라감). nexa-sql 창까지 522 → 111 ms의 첫 절반. 테스트 357 · clippy 0 · CI ac57901 = Windows `test` ✗(mac·ubuntu ✓ · 로그 인증 불가) → 링크 안전 수정(9653c33)도 Windows ✗ → 캐시 경로를 Linux·macOS로 한정(Windows = 종전 걷기) · 원인은 Windows 세션에서. → nexa-sql [journal 09-22](../../nexa-sql/docs/journal/2026-09-22.md)
 
 ## 2026-09-21 (52차 · win) — 편집기 드래그 선택: 포인터가 밖에 **멈춰 있어도** 계속 스크롤(틱 기반 · 새 타이머 0) · 파일 감시 시험의 타이밍 의존 제거. 테스트 360. → [journal](journal/2026-09-18.md)
 
