@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-22 (53차 · linux)** — nexa-font `find_font_by_family` 걷기 1회 캐시(`font_files`) + `file_type()` — Linux 기동 병목(nexa-sql 91차) → nexa-sql journal 09-22
 - **2026-09-21 (52차 · win)** — `TextBox` 드래그 자동 스크롤 = 틱 기반(`drag_autoscroll_active` · `AUTOSCROLL_STEP_MS` 50) · `nexa-fs` 감시 시험 = 조건 대기(`settle`) → [journal](journal/2026-09-18.md)
 - **2026-09-21 (51차 · win)** — `geom` 팝업 배치 규칙(`place_popup` · `place_popup_beside` · `nudge_into` · `popup_host` · `DrawCtx::surface_size`) → `ContextMenu`(`open_beside`)·툴팁·`Combo` 안전망 · `TabBar` 끌기 고스트 · `TextBox` 영역 밖 끌기 = 줄 단위(줄 표 · 1.18 → <0.001 ms) · `nexa-dlg` `PickerMode::Folder` · 가린 입력란 복사 금지 + `wipe`/`take_secret_text` → [journal](journal/2026-09-18.md)
 - **2026-09-21 (50차 · mac)** — nexa-sys `layer_present`(macOS IOSurface 화면 내보내기 · 표면 풀 · sRGB 태그 · 알파 채움 · 행 정렬은 OS에 맡김 · present 36 → 2.9 ms · 의존 0) → [journal](journal/2026-09-18.md)

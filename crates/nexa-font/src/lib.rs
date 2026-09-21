@@ -257,7 +257,13 @@ fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     };
     for e in rd.flatten() {
         let path = e.path();
-        if path.is_dir() {
+        // `file_type()` = `getdents`가 준 d_type(추가 시스템 호출 0) — `path.is_dir()`은 항목마다 `statx`를 부른다
+        // (Linux 09-22 실측: 폰트 976개 × 가족 12회 = `statx` 11,786회 · 기동 100~700 ms 구간이 전부 이것이었다).
+        let is_dir = e
+            .file_type()
+            .map(|t| t.is_dir())
+            .unwrap_or_else(|_| path.is_dir());
+        if is_dir {
             if depth < SCAN_DEPTH {
                 collect_font_files(&path, depth + 1, out);
             }
@@ -265,6 +271,23 @@ fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// 폰트 폴더 목록을 **프로세스에서 한 번만** 걷는다(`FONT_DIRS` 순서 · 폴더 안은 정렬). 가족 탐색은 UI 본 · 고정폭 · 기호 폴백까지
+/// 프로세스마다 10여 회 불리므로 걷기를 호출마다 되풀이하면 그 횟수만큼 곱해진다(Linux 09-22 · 기동 병목).
+/// 앱이 도는 동안 새로 설치된 폰트는 다음 기동에서 보인다(설정 창의 글꼴 변경도 이 목록에서 고른다 — 재시작 안내가 있다).
+fn font_files() -> &'static [PathBuf] {
+    static FILES: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| {
+        let mut all = Vec::new();
+        for dir in FONT_DIRS {
+            let mut entries = Vec::new();
+            collect_font_files(&expand(dir), 0, &mut entries);
+            entries.sort();
+            all.extend(entries);
+        }
+        all
+    })
 }
 
 /// 폰트 폴더 재귀 깊이 상한(Fedora `google-noto/` 1단 · Debian `truetype/noto/` 2단 · 여유 1).
@@ -277,11 +300,8 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
     if want.is_empty() {
         return None;
     }
-    for dir in FONT_DIRS {
-        let mut entries = Vec::new();
-        collect_font_files(&expand(dir), 0, &mut entries);
-        entries.sort();
-        for path in entries {
+    {
+        for path in font_files() {
             let ext_ok = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -294,7 +314,7 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
             };
             let got = norm(stem);
             if got == want || got.starts_with(&want) {
-                if let Some(bytes) = map_font(&path) {
+                if let Some(bytes) = map_font(path) {
                     return Some((bytes, 0));
                 }
             }
