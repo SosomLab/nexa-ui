@@ -260,11 +260,15 @@ fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         // `file_type()` = `getdents`가 준 d_type(추가 시스템 호출 0) — `path.is_dir()`은 항목마다 `statx`를 부른다
         // (Linux 09-22 실측: 폰트 976개 × 가족 12회 = `statx` 11,786회 · 기동 100~700 ms 구간이 전부 이것이었다).
         // 심볼릭 링크(Windows 정션 포함)는 d_type이 "링크"라 그때만 `is_dir()`로 따라간다(종전 동작 유지).
+        #[cfg(not(windows))]
         let is_dir = match e.file_type() {
             Ok(t) if t.is_symlink() => path.is_dir(),
             Ok(t) => t.is_dir(),
             Err(_) => path.is_dir(),
         };
+        // Windows는 종전 그대로(09-22: CI windows-latest `test`가 세 번 실패 — 여기까지 되돌려 Windows 동작을 754bfb4와 같게 · 원인 판별용).
+        #[cfg(windows)]
+        let is_dir = path.is_dir();
         if is_dir {
             if depth < SCAN_DEPTH {
                 collect_font_files(&path, depth + 1, out);
