@@ -278,6 +278,7 @@ fn collect_font_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 /// 폰트 폴더 목록을 **프로세스에서 한 번만** 걷는다(`FONT_DIRS` 순서 · 폴더 안은 정렬). 가족 탐색은 UI 본 · 고정폭 · 기호 폴백까지
 /// 프로세스마다 10여 회 불리므로 걷기를 호출마다 되풀이하면 그 횟수만큼 곱해진다(Linux 09-22 · 기동 병목).
 /// 앱이 도는 동안 새로 설치된 폰트는 다음 기동에서 보인다(설정 창의 글꼴 변경도 이 목록에서 고른다 — 재시작 안내가 있다).
+#[cfg(not(windows))]
 fn font_files() -> &'static [PathBuf] {
     static FILES: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
     FILES.get_or_init(walk_font_dirs)
