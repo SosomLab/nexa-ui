@@ -383,6 +383,8 @@ pub struct TextBox {
     text_inset: i32,
     /// 논리 줄(0부터)별 표시 색 — 북마크·오류·변경 등 호스트가 정한다.
     line_marks: Vec<(usize, Color)>,
+    /// 거터 라벨(줄 → 짧은 글 · 예 북마크 니모닉 숫자) — 줄번호 왼쪽에 accent 상자로(nexa-sql docs/69 U-2 · 09-22).
+    gutter_labels: Vec<(usize, String)>,
     /// ★ 저장 기준선(마지막 저장/열기 시점의 줄들) — 있으면 거터 띠에 줄 변경 유형을 그린다(nexa-sql 사용자 09-17 · Sublime mini_diff/VS Code).
     baseline: Option<Vec<String>>,
     /// 기준선 대비 줄 변경(논리 줄 0 기준 · 정렬) — `DiffKind`. 편집 때마다 `diff_dirty`로 다시 계산(페인트에서).
@@ -773,6 +775,7 @@ impl TextBox {
             gutter_marks: false,
             text_inset: 0,
             line_marks: Vec::new(),
+            gutter_labels: Vec::new(),
             baseline: None,
             diff_marks: std::cell::RefCell::new(Vec::new()),
             diff_dirty: std::cell::Cell::new(false),
@@ -1769,6 +1772,11 @@ impl TextBox {
         self.line_marks = marks;
     }
 
+    /// 거터 라벨(줄 → 한두 글자) — 줄번호 왼쪽 accent 상자(북마크 니모닉).
+    pub fn set_gutter_labels(&mut self, labels: Vec<(usize, String)>) {
+        self.gutter_labels = labels;
+    }
+
     /// 줄번호 거터 폭(마지막 페인트 실측 · 0 = 없음).
     #[must_use]
     pub fn gutter_width(&self) -> i32 {
@@ -2532,6 +2540,48 @@ impl TextBox {
         true
     }
 
+    /// ★ 선택 되돌리기(Sublime `soft_undo` · Ctrl+U/⌘U · nexa-sql 사용자 09-22) — 편집이면 내용도 되돌린다.
+    pub fn soft_undo(&mut self) -> bool {
+        let rev0 = self.edit.rev();
+        if !self.edit.soft_undo() {
+            return false;
+        }
+        if self.edit.rev() != rev0 {
+            self.changed = true;
+        }
+        self.ml_user_scrolled = false;
+        true
+    }
+
+    /// 선택 다시 실행(Sublime `soft_redo` · Ctrl+Shift+U/⌘⇧U).
+    pub fn soft_redo(&mut self) -> bool {
+        let rev0 = self.edit.rev();
+        if !self.edit.soft_redo() {
+            return false;
+        }
+        if self.edit.rev() != rev0 {
+            self.changed = true;
+        }
+        self.ml_user_scrolled = false;
+        true
+    }
+
+    /// 다중 선택 구간 수 상한(0 = 없음 · docs/72).
+    pub fn set_max_regions(&mut self, n: usize) {
+        self.edit.set_max_regions(n);
+    }
+
+    /// 상한에 걸렸는가(1회성).
+    pub fn take_regions_capped(&mut self) -> bool {
+        self.edit.take_regions_capped()
+    }
+
+    /// 선택 구간의 바이트 수(복사/잘라내기 확인의 재료 — 문자열을 만들지 않는다).
+    #[must_use]
+    pub fn selected_bytes(&self) -> usize {
+        self.edit.selected_bytes()
+    }
+
     /// 열 선택 드래그 중인가(테스트·호스트 판정).
     #[must_use]
     pub fn column_dragging(&self) -> bool {
@@ -3152,10 +3202,36 @@ impl TextBox {
             top = top.min(max_top);
         } else {
             let t0 = top;
-            if caret_line < top {
-                top = caret_line;
-            } else if caret_line >= top + rows {
-                top = caret_line + 1 - rows;
+            // ★ 다중 캐럿(nexa-sql 사용자 09-22): 캐럿 중 **하나라도 보이면 화면을 옮기지 않는다** · 하나도 안 보이면 화면에서
+            //   가장 가까운 캐럿을 따라간다 — 주 캐럿(마지막에 더한 것)만 따르면 Alt+F3 뒤 글자마다 맨 아래 출현으로 튀었다.
+            let target = if self.edit.has_multi() && preedit_n == 0 {
+                let mut rs: Vec<usize> = self
+                    .edit
+                    .regions()
+                    .iter()
+                    .map(|&(_, e)| rows_src.row_of(e.min(tbuf.len())))
+                    .collect();
+                rs.push(caret_line);
+                if rs.iter().any(|&r| r >= top && r < top + rows) {
+                    None
+                } else {
+                    rs.into_iter().min_by_key(|&r| {
+                        if r < top {
+                            top - r
+                        } else {
+                            r + 1 - (top + rows)
+                        }
+                    })
+                }
+            } else {
+                Some(caret_line)
+            };
+            if let Some(cl) = target {
+                if cl < top {
+                    top = cl;
+                } else if cl >= top + rows {
+                    top = cl + 1 - rows;
+                }
             }
             top = top.min(n_rows.saturating_sub(1));
             followed = top != t0;
@@ -3428,6 +3504,18 @@ impl TextBox {
                             if let Some(r) = clipv(Rect::new(mx, y + 1, self.s(3), lh - 2)) {
                                 ctx.fill_rect(r, *c);
                             }
+                        }
+                    }
+                    // 거터 라벨(니모닉 숫자 상자) — 거터 맨 왼쪽.
+                    if let Some((_, lab)) = self.gutter_labels.iter().find(|(l, _)| *l == n) {
+                        let bw = self.s(12);
+                        let bx = b.x + self.s(1);
+                        if let Some(r) =
+                            clipv(Rect::new(bx, y + self.s(2), bw, (lh - self.s(4)).max(2)))
+                        {
+                            ctx.fill_round_rect(r, self.s(2), theme.accent);
+                            let tw = ctx.text_width(lab);
+                            ctx.text(bx + (bw - tw) / 2, y, r, lab, theme.window_bg);
                         }
                     }
                     let is_caret_line = li == caret_line || row_selected;

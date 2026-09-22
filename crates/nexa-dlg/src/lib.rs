@@ -154,6 +154,8 @@ pub enum PickerAction {
 pub struct FilePicker {
     base: ControlBase,
     mode: PickerMode,
+    /// 열기 모드에서 다중 선택을 허용하는가(호스트가 용도에 따라 끈다 — 프로젝트 파일 열기 = 단일 · nexa-sql 09-22).
+    multi_ok: bool,
     labels: PickerLabels,
     filters: Vec<FileFilter>,
     dir: PathBuf,
@@ -359,6 +361,7 @@ impl FilePicker {
             grid: TreeGrid::new(TreeModel::new(Vec::new()), Vec::new()),
             name_box: TextBox::new(String::new()),
             marks: Vec::new(),
+            multi_ok: true,
             anchor: None,
             marks_text: String::new(),
             drag_sweep: None,
@@ -1422,7 +1425,15 @@ impl FilePicker {
 
     /// 다중 선택을 쓰는 모드인가(열기만 · 저장·폴더 = 단일).
     fn multi(&self) -> bool {
-        self.mode == PickerMode::Open
+        self.mode == PickerMode::Open && self.multi_ok
+    }
+
+    /// 열기 모드의 다중 선택 허용/금지(기본 허용 · 프로젝트 파일처럼 하나만 뜻이 있는 용도는 끈다).
+    pub fn set_multi(&mut self, on: bool) {
+        self.multi_ok = on;
+        if !on {
+            self.marks.clear();
+        }
     }
 
     /// 가시 행 → 파일 경로(폴더·자리표시는 None).

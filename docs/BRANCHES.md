@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/win-61-soft-undo | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 61차(win): `EditState` 선택 되돌리기(Sublime soft undo/redo · `SoftStep` · `note_sel` · `key()` 이동 · Shift 합침) · `TextBox::soft_undo/soft_redo` · 다중 캐럿 ←/→ 접기 · ★ `max_regions` 다중 선택 상한(전 입구) · `selected_bytes` 공개 · nexa-dlg `set_multi`(용도별 단일 선택) · `TextBox::set_gutter_labels` · 🔧 다중 캐럿 세로 추종 유지 · 테스트 322 |
 | feat/win-58-60-default-item-outside-click-submenu | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 58~60차(win): `ContextMenu::set_default` · `TreeGrid::set_caret_outline` · nexa-dlg Enter=ConfirmMany · `TextBox::set_popup_deferred` · `MenuBar::dismiss` · 하위 메뉴 비활성 행 닫힘 · ★ `ContextMenu::is_outside_click` · `skip_next_occurrence`/`remove_region` · ★ 풀다운 하위 메뉴 `MenuEntry::Sub` |
 | feat/win-56-57-tree-reveal-marked-paths-ellipsis-band | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 56·57차(win): `TreeControl::reveal_row`+PageUp/Down/Home/End · `TreeGrid::set_marked_paths`(강조 = 노드 경로) · `draw::ellipsize_middle`+`set_show_full`(Alt) · `MenuBar::set_max_label_width` · `ContextMenu` 라벨 축약 · nexa-dlg Ctrl+드래그 스윕·러버밴드(빈 공간·행) |
 | feat/win-55-tabbar-group-treegrid-marked-dlg-multi | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 55차(win · nexa-sql 93차 지원): `ScrollBars` 축별 가장자리 깨움 · `TextBox` 가로 범위 통일(`ml_bars_w`)+클릭 잔여 px 유지 · `TabBar` 클릭 수식키 + 묶인 탭 상단 줄(`set_group`) · `TreeGrid::set_marked` · nexa-dlg 열기 모드 다중 선택(`marks` · `ConfirmMany` · 테스트) |

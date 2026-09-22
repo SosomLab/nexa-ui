@@ -42,6 +42,17 @@ pub struct EditState {
     /// 주 선택(`caret`/`anchor`)은 마지막에 추가된 것이다. 삽입·삭제는 전 구간에 함께 적용하고,
     /// 클릭·세로 이동(`set_caret`)·전체 선택은 이 목록을 비운다(하나로 접힘).
     extra: Vec<(usize, usize)>,
+    /// ★ **선택 되돌리기**(Sublime `soft_undo`/`soft_redo` · nexa-sql 사용자 09-22): 선택·캐럿의 변화도 한 단계로 적어 둔다.
+    /// 본문 편집은 `Edit` 표식(실제 내용은 `undo` 묶음) · 선택 변화는 직전 스냅샷. `undo`(Ctrl+Z)는 표식까지 건너뛰어 **편집만**
+    /// 되돌리고, `soft_undo`(Ctrl+U)는 맨 위 한 단계가 무엇이든 되돌린다(Ctrl+D로 더한 마지막 선택 · 클릭 · 이동 · 편집).
+    /// Shift/드래그로 늘리는 연속 변화는 한 단계로 합친다(`soft_extend`). 상한 [`SOFT_MAX`].
+    soft_undo: Vec<SoftStep>,
+    soft_redo: Vec<SoftStep>,
+    soft_extend: bool,
+    /// ★ 다중 선택 **구간 수 상한**(0 = 없음 · nexa-sql `editor.max_occurrences` · docs/72 §2): Ctrl+D/Alt+F3 추가 · Ctrl+클릭 캐럿 ·
+    /// 줄 나누기 · 열 선택 — 모든 입구가 여기서 막힌다(구간마다 캐럿·편집이 곱해진다). 막히면 `regions_capped`에 1회 표식.
+    max_regions: usize,
+    regions_capped: bool,
     /// ★ 되돌리기 히스토리(nexa-sql 사용자 09-15) — 변경 **직전** 스냅샷(버퍼·캐럿·앵커). 연속 타이핑/삭제는 한 묶음
     /// (공백·개행·선택 대체·캐럿 이동이 경계). 상한 [`Self::history_max`](기본 [`Self::HISTORY_MAX`] · 호스트가 설정
     /// `editor.undo_max`로 [`Self::set_history_max`] · nexa-sql docs/39 T-90d) · `set_text`(프로그램 교체)는 히스토리를 비운다.
@@ -113,6 +124,24 @@ struct Txn {
     bytes: usize,
 }
 
+/// 선택 되돌리기 한 단계 — 선택 스냅샷(직전 상태) 또는 본문 편집 표식(내용은 `undo` 묶음이 쥔다).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SoftStep {
+    Sel(SelSnap),
+    Edit,
+}
+
+/// 선택 스냅샷 `(caret, anchor, extra)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelSnap {
+    caret: usize,
+    anchor: Option<usize>,
+    extra: Vec<(usize, usize)>,
+}
+
+/// 선택 되돌리기 단계 상한(스냅샷은 작지만 화살표 이동마다 하나씩 쌓인다).
+const SOFT_MAX: usize = 500;
+
 /// 연산·묶음의 고정비 어림(바이트) — 예산이 "글자 0인 연산 수만 개"로도 차도록.
 const OP_OVERHEAD: usize = 48;
 const TXN_OVERHEAD: usize = 96;
@@ -133,6 +162,11 @@ impl Default for EditState {
             caret: 0,
             anchor: None,
             extra: Vec::new(),
+            soft_undo: Vec::new(),
+            soft_redo: Vec::new(),
+            soft_extend: false,
+            max_regions: 0,
+            regions_capped: false,
             undo: std::collections::VecDeque::new(),
             redo: Vec::new(),
             history_budget: Self::HISTORY_BUDGET,
@@ -219,6 +253,9 @@ impl EditState {
         self.redo = Vec::new();
         self.history_bytes = 0;
         self.last_op = None;
+        self.soft_undo.clear();
+        self.soft_redo.clear();
+        self.soft_extend = false;
     }
 
     /// **비밀 값 지우기**(nexa-sql 09-21): 본문 · 되돌리기/다시 실행 기록이 쥔 글 · 조합 중 글을 0으로 덮어쓰고 비운다.
@@ -249,7 +286,28 @@ impl EditState {
     }
 
     /// 지금 선택(모든 구간)이 쥔 바이트.
-    fn selected_bytes(&self) -> usize {
+    /// 다중 선택 구간 수 상한(0 = 없음).
+    pub fn set_max_regions(&mut self, n: usize) {
+        self.max_regions = n;
+    }
+
+    /// 상한에 걸려 구간을 더하지 못했는가(1회성 보고).
+    pub fn take_regions_capped(&mut self) -> bool {
+        std::mem::take(&mut self.regions_capped)
+    }
+
+    fn regions_full(&mut self) -> bool {
+        if self.max_regions > 0 && self.regions().len() >= self.max_regions {
+            self.regions_capped = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 선택 구간의 바이트 수(주 선택 + 추가 구간 · 복사/잘라내기·거대 편집 판정).
+    #[must_use]
+    pub fn selected_bytes(&self) -> usize {
         if self.anchor.is_none() && self.extra.is_empty() {
             return 0;
         }
@@ -563,6 +621,9 @@ impl EditState {
             bytes: TXN_OVERHEAD,
         });
         self.history_bytes += TXN_OVERHEAD;
+        // 선택 되돌리기 줄에는 편집 표식 하나(같은 묶음에 이어 붙는 타이핑은 표식을 더하지 않는다).
+        self.soft_push(SoftStep::Edit);
+        self.soft_redo.clear();
         for t in self.redo.drain(..) {
             self.history_bytes = self.history_bytes.saturating_sub(t.bytes);
         }
@@ -754,8 +815,18 @@ impl EditState {
         back
     }
 
-    /// 실행 취소 — 되돌렸으면 `true`.
+    /// 실행 취소 — 되돌렸으면 `true`. 선택 되돌리기 줄은 마지막 편집 표식까지(그 뒤의 선택 변화 포함) 걷어 낸다 — Sublime처럼
+    /// `undo`는 선택만 바뀐 단계를 건너뛰고 편집을 되돌린다.
     pub fn undo(&mut self) -> bool {
+        if !self.undo_core() {
+            return false;
+        }
+        self.soft_pop_through_edit();
+        self.soft_redo.push(SoftStep::Edit);
+        true
+    }
+
+    fn undo_core(&mut self) -> bool {
         if self.read_only {
             return false;
         }
@@ -772,6 +843,20 @@ impl EditState {
 
     /// 다시 실행 — 되살렸으면 `true`.
     pub fn redo(&mut self) -> bool {
+        if !self.redo_core() {
+            return false;
+        }
+        // 선택 되돌리기 줄: 다시 실행 쪽에서 편집 표식까지 걷어 내고 되돌리기 쪽에 표식을 놓는다.
+        while let Some(st) = self.soft_redo.pop() {
+            if st == SoftStep::Edit {
+                break;
+            }
+        }
+        self.soft_push(SoftStep::Edit);
+        true
+    }
+
+    fn redo_core(&mut self) -> bool {
         if self.read_only {
             return false;
         }
@@ -784,6 +869,110 @@ impl EditState {
         self.undo.push_back(back);
         self.last_op = None;
         true
+    }
+
+    // ───────────── 선택 되돌리기(Sublime soft undo) ─────────────
+
+    fn snap(&self) -> SelSnap {
+        SelSnap {
+            caret: self.caret,
+            anchor: self.anchor,
+            extra: self.extra.clone(),
+        }
+    }
+
+    fn restore_snap(&mut self, sn: SelSnap) {
+        let n = self.buf.len();
+        self.caret = sn.caret.min(n);
+        self.anchor = sn.anchor.map(|a| a.min(n));
+        self.extra = sn
+            .extra
+            .into_iter()
+            .map(|(a, c)| (a.min(n), c.min(n)))
+            .collect();
+        self.last_op = None;
+    }
+
+    fn soft_push(&mut self, st: SoftStep) {
+        if self.soft_undo.len() >= SOFT_MAX {
+            self.soft_undo.remove(0);
+        }
+        self.soft_undo.push(st);
+    }
+
+    /// 선택 변화를 적는다(변화가 없으면 무시 · `extend`가 이어지면 한 단계로 합침 · 새 변화는 다시 실행을 버린다).
+    fn note_sel(&mut self, before: SelSnap, extend: bool) {
+        if before == self.snap() {
+            return;
+        }
+        let merge =
+            extend && self.soft_extend && matches!(self.soft_undo.last(), Some(SoftStep::Sel(_)));
+        if !merge {
+            self.soft_push(SoftStep::Sel(before));
+        }
+        self.soft_extend = extend;
+        self.soft_redo.clear();
+    }
+
+    /// 마지막 편집 표식까지(포함) 걷어 낸다 — 편집을 되돌리면 그 뒤의 선택 변화는 뜻을 잃는다.
+    fn soft_pop_through_edit(&mut self) {
+        while let Some(st) = self.soft_undo.pop() {
+            if st == SoftStep::Edit {
+                break;
+            }
+        }
+        self.soft_extend = false;
+    }
+
+    /// ★ **선택 되돌리기**(Sublime `soft_undo` · Ctrl+U/⌘U): 맨 위 한 단계를 되돌린다 — 선택 변화면 직전 선택으로(Ctrl+D로 더한
+    /// 마지막 선택이 빠지고 · 클릭/이동 전 자리로), 편집 표식이면 그 편집을 되돌린다(= `undo` 한 단계). 되돌렸으면 `true`.
+    pub fn soft_undo(&mut self) -> bool {
+        match self.soft_undo.pop() {
+            Some(SoftStep::Sel(sn)) => {
+                let cur = self.snap();
+                self.restore_snap(sn);
+                self.soft_redo.push(SoftStep::Sel(cur));
+                self.soft_extend = false;
+                true
+            }
+            Some(SoftStep::Edit) if self.undo_core() => {
+                self.soft_redo.push(SoftStep::Edit);
+                self.soft_extend = false;
+                true
+            }
+            Some(SoftStep::Edit) => false,
+            None => false,
+        }
+    }
+
+    /// 선택 다시 실행(Sublime `soft_redo` · Ctrl+Shift+U/⌘⇧U).
+    pub fn soft_redo(&mut self) -> bool {
+        match self.soft_redo.pop() {
+            Some(SoftStep::Sel(sn)) => {
+                let cur = self.snap();
+                self.restore_snap(sn);
+                self.soft_push(SoftStep::Sel(cur));
+                self.soft_extend = false;
+                true
+            }
+            Some(SoftStep::Edit) if self.redo_core() => {
+                self.soft_push(SoftStep::Edit);
+                self.soft_extend = false;
+                true
+            }
+            Some(SoftStep::Edit) => false,
+            None => false,
+        }
+    }
+
+    #[must_use]
+    pub fn can_soft_undo(&self) -> bool {
+        !self.soft_undo.is_empty()
+    }
+
+    #[must_use]
+    pub fn can_soft_redo(&self) -> bool {
+        !self.soft_redo.is_empty()
     }
 
     #[must_use]
@@ -971,10 +1160,14 @@ impl EditState {
     /// 구간을 추가로 선택한다 — 지금 선택은 추가 목록으로 내려가고 새 구간이 주 선택이 된다.
     /// 이미 선택된 구간이면 아무것도 하지 않는다(`false`).
     pub fn add_selection(&mut self, from: usize, to: usize) -> bool {
+        let before = self.snap();
         let n = self.buf.len();
         let (from, to) = (from.min(n), to.min(n));
         let key = (from.min(to), from.max(to));
         if self.regions().contains(&key) {
+            return false;
+        }
+        if self.regions_full() {
             return false;
         }
         let cur = (self.anchor.unwrap_or(self.caret), self.caret);
@@ -984,12 +1177,20 @@ impl EditState {
         self.anchor = Some(from);
         self.caret = to;
         self.last_op = None;
+        self.note_sel(before, false);
         true
     }
 
     /// 캐럿 하나를 **더한다**(Ctrl+클릭 · Sublime) — 지금 주 선택/캐럿은 추가 목록으로 내려가고 새 자리가 주 캐럿.
     /// 같은 자리에 이미 캐럿이 있으면 **뺀다**(토글 · 마지막 하나는 남긴다). 반환 = 더했으면 true.
     pub fn toggle_caret(&mut self, idx: usize) -> bool {
+        let before = self.snap();
+        let r = self.toggle_caret_inner(idx);
+        self.note_sel(before, false);
+        r
+    }
+
+    fn toggle_caret_inner(&mut self, idx: usize) -> bool {
         let n = self.buf.len();
         let idx = idx.min(n);
         let cur = (self.anchor.unwrap_or(self.caret), self.caret);
@@ -1005,6 +1206,9 @@ impl EditState {
                 self.caret = c;
             }
             self.last_op = None;
+            return false;
+        }
+        if self.regions_full() {
             return false;
         }
         self.extra.push(cur);
@@ -1027,19 +1231,27 @@ impl EditState {
 
     /// 구간 목록으로 선택을 통째로 바꾼다(열 선택 드래그) — 마지막 구간이 주 선택.
     pub fn set_regions(&mut self, regions: &[(usize, usize)]) {
+        let before = self.snap();
         let n = self.buf.len();
         let mut v: Vec<(usize, usize)> =
             regions.iter().map(|&(a, c)| (a.min(n), c.min(n))).collect();
+        if self.max_regions > 0 && v.len() > self.max_regions {
+            v.truncate(self.max_regions);
+            self.regions_capped = true;
+        }
         let Some((a, c)) = v.pop() else { return };
         self.extra = v;
         self.anchor = (a != c).then_some(a);
         self.caret = c;
         self.last_op = None;
+        // 열 선택 드래그는 줄이 늘 때마다 오므로 한 단계로 합친다.
+        self.note_sel(before, true);
     }
 
     /// 추가 목록에서 구간 `[a, b)` 하나를 뺀다(순서 무관 · 주 선택은 건드리지 않는다) — 뺐으면 `true`.
     /// Sublime `find_under_expand_skip`(Ctrl+K,Ctrl+D)의 재료: 방금 주 선택이던 구간을 버릴 때.
     pub fn remove_region(&mut self, a: usize, b: usize) -> bool {
+        let before = self.snap();
         let key = (a.min(b), a.max(b));
         let Some(i) = self
             .extra
@@ -1049,13 +1261,16 @@ impl EditState {
             return false;
         };
         self.extra.remove(i);
+        self.note_sel(before, false);
         true
     }
 
     /// 추가 선택을 모두 지운다(Esc·클릭) — 지웠으면 `true`.
     pub fn clear_multi(&mut self) -> bool {
+        let before = self.snap();
         let had = !self.extra.is_empty();
         self.extra.clear();
+        self.note_sel(before, false);
         had
     }
 
@@ -1292,6 +1507,7 @@ impl EditState {
 
     /// 캐럿을 옮긴다 — `extend`면 기존 앵커를 유지해 범위가 늘어난다(드래그·Shift 이동).
     pub fn set_caret(&mut self, idx: usize, extend: bool) {
+        let before = self.snap();
         self.last_op = None; // 캐럿 이동 = 타이핑 묶음 경계
         self.extra.clear(); // 클릭·세로 이동 = 다중 선택 접기(Sublime)
         let i = idx.min(self.buf.len());
@@ -1303,14 +1519,18 @@ impl EditState {
             self.anchor = None;
         }
         self.caret = i;
+        // 드래그·Shift 이동으로 늘리는 연속 변화는 한 단계.
+        self.note_sel(before, extend);
     }
 
     /// 범위를 직접 선택한다(더블클릭 단어 선택 등).
     pub fn set_selection(&mut self, from: usize, to: usize) {
+        let before = self.snap();
         self.extra.clear();
         let n = self.buf.len();
         self.anchor = Some(from.min(n));
         self.caret = to.min(n);
+        self.note_sel(before, false);
     }
 
     /// 전체 교체(캐럿 끝·선택 해제).
@@ -1342,6 +1562,16 @@ impl EditState {
 
     /// 키 처리. 비Shift 이동 중 선택이 있으면 선택 가장자리로 접는다(표준 관례).
     pub fn key(&mut self, k: EditKey, shift: bool) {
+        let before = self.snap();
+        let rev0 = self.rev;
+        self.key_inner(k, shift);
+        if self.rev == rev0 {
+            // 본문이 안 바뀐 키 = 선택/캐럿 이동 → 선택 되돌리기 한 단계(Shift 이동은 합침).
+            self.note_sel(before, shift);
+        }
+    }
+
+    fn key_inner(&mut self, k: EditKey, shift: bool) {
         if k == EditKey::DeleteForward {
             let n = self.selected_bytes();
             if self.giant_refused(n, true) {
@@ -1359,7 +1589,15 @@ impl EditState {
                 EditKey::Left | EditKey::Right => {
                     let right = matches!(k, EditKey::Right);
                     let n = self.buf.len();
+                    // ★ 구간에 선택이 있고 Shift가 아니면 **옮기지 않고 그 구간의 앞/뒤로 접는다**(Sublime · nexa-sql 사용자 09-22:
+                    //   Alt+F3로 SELECT 전부 선택 → ← = 모든 S 앞에 캐럿 · → = 모든 T 뒤에 캐럿 — 다중 캐럿은 유지된다).
+                    //   선택이 없는 캐럿만 한 칸 움직인다 · Shift는 종전처럼 늘린다.
                     let step = |a: Option<usize>, c: usize| -> (Option<usize>, usize) {
+                        if let (false, Some(a)) = (shift, a) {
+                            if a != c {
+                                return (None, if right { a.max(c) } else { a.min(c) });
+                            }
+                        }
                         let nc = if right {
                             (c + 1).min(n)
                         } else {
@@ -2203,6 +2441,116 @@ mod undo_tests {
         e.set_selection(0, 2);
         assert!(e.add_selection(3, 5));
         assert!(!e.add_selection(0, 2), "이미 선택된 구간은 추가하지 않는다");
+    }
+
+    /// 선택 되돌리기(Sublime soft undo): Ctrl+D식 추가 선택을 하나씩 되돌리고 · 캐럿 이동도 · 편집 표식은 편집을 되돌린다 ·
+    /// `undo`(Ctrl+Z)는 선택 단계를 건너뛰어 편집만 · Shift 연속 이동은 한 단계.
+    #[test]
+    fn soft_undo_steps_selection_and_edits() {
+        let mut e = EditState::default();
+        e.set_text("ab ab ab");
+        assert!(!e.can_soft_undo(), "set_text = 히스토리 없음");
+        e.set_caret(0, false);
+        e.set_selection(0, 2);
+        assert!(e.add_selection(3, 5));
+        assert!(e.add_selection(6, 8));
+        assert_eq!(e.regions(), vec![(0, 2), (3, 5), (6, 8)]);
+        assert!(e.soft_undo(), "마지막 추가 선택 취소");
+        assert_eq!(e.regions(), vec![(0, 2), (3, 5)]);
+        assert!(e.soft_undo());
+        assert_eq!(e.regions(), vec![(0, 2)]);
+        assert!(e.soft_redo(), "다시 실행");
+        assert_eq!(e.regions(), vec![(0, 2), (3, 5)]);
+        // 편집: 두 곳에 X → 편집 표식. soft_undo = 편집 되돌림(선택은 편집 전으로).
+        e.insert_str("X");
+        assert_eq!(e.text(), "X X ab");
+        assert!(e.soft_undo());
+        assert_eq!(e.text(), "ab ab ab");
+        assert_eq!(e.regions(), vec![(0, 2), (3, 5)]);
+        assert!(e.soft_redo());
+        assert_eq!(e.text(), "X X ab");
+        // 이동 뒤 편집 뒤 이동: undo(Ctrl+Z)는 선택 단계를 건너뛰고 편집만.
+        e.set_caret(1, false);
+        e.set_caret(2, false);
+        e.insert_str("Y");
+        e.set_caret(0, false);
+        assert!(e.undo());
+        assert_eq!(e.text(), "X X ab");
+        assert_eq!(e.caret(), 2, "편집 직전 캐럿");
+        assert!(e.soft_undo(), "이제 소프트 되돌리기는 이동 단계로");
+        assert_eq!(e.caret(), 1);
+        // Shift 연속 이동 = 한 단계.
+        e.set_caret(0, false);
+        e.set_caret(1, true);
+        e.set_caret(2, true);
+        e.set_caret(3, true);
+        assert_eq!(e.selection(), Some((0, 3)));
+        assert!(e.soft_undo());
+        assert_eq!(e.selection(), None, "Shift 연속은 한 번에 풀린다");
+        assert_eq!(e.caret(), 0);
+        // 변화 없는 호출은 단계를 만들지 않는다.
+        let n = e.soft_undo.len();
+        e.set_caret(0, false);
+        assert_eq!(e.soft_undo.len(), n);
+    }
+
+    /// 다중 선택에서 ←/→ = 각 구간을 옮기지 않고 앞/뒤로 접는다(캐럿 여러 개 유지) · 선택 없는 캐럿은 한 칸 · Shift는 늘림(사용자 09-22).
+    #[test]
+    fn multi_left_right_collapse_each_region_to_edge() {
+        let mut e = EditState::default();
+        e.set_text("SELECT a SELECT b SELECT");
+        e.set_selection(0, 6);
+        assert!(e.add_selection(9, 15));
+        assert!(e.add_selection(18, 24));
+        e.key(EditKey::Left, false);
+        assert_eq!(
+            e.regions(),
+            vec![(0, 0), (9, 9), (18, 18)],
+            "← = 각 S 앞 · 선택 해제 · 캐럿 3"
+        );
+        assert!(e.has_multi());
+        e.set_selection(0, 6);
+        assert!(e.add_selection(9, 15));
+        assert!(e.add_selection(18, 24));
+        e.key(EditKey::Right, false);
+        assert_eq!(e.regions(), vec![(6, 6), (15, 15), (24, 24)], "→ = 각 T 뒤");
+        // 이미 접힌 캐럿들은 한 칸씩 움직인다.
+        e.key(EditKey::Left, false);
+        assert_eq!(e.regions(), vec![(5, 5), (14, 14), (23, 23)]);
+        // Shift+→ 는 늘린다(구간 유지).
+        e.key(EditKey::Right, true);
+        assert_eq!(e.regions(), vec![(5, 6), (14, 15), (23, 24)]);
+        // 뒤→앞으로 만든 선택(캐럿이 앞)도 ← = 앞, → = 뒤.
+        e.set_selection(6, 0);
+        assert!(e.add_selection(15, 9));
+        e.key(EditKey::Right, false);
+        assert_eq!(e.regions(), vec![(6, 6), (15, 15)]);
+    }
+
+    /// 다중 선택 구간 상한: add_selection · toggle_caret · set_regions(줄 나누기·열 선택) 모두 상한에서 멈추고 1회 보고.
+    #[test]
+    fn max_regions_caps_every_entry_point() {
+        let mut e = EditState::default();
+        e.set_text("a a a a a a");
+        e.set_max_regions(3);
+        e.set_selection(0, 1);
+        assert!(e.add_selection(2, 3));
+        assert!(e.add_selection(4, 5));
+        assert!(!e.add_selection(6, 7), "3개에서 막힘");
+        assert!(e.take_regions_capped());
+        assert!(!e.take_regions_capped(), "1회성");
+        assert_eq!(e.regions().len(), 3);
+        assert!(!e.toggle_caret(8), "Ctrl+클릭 추가도 막힘");
+        assert!(e.take_regions_capped());
+        e.set_regions(&[(0, 0), (2, 2), (4, 4), (6, 6), (8, 8)]);
+        assert_eq!(
+            e.regions(),
+            vec![(0, 0), (2, 2), (4, 4)],
+            "열 선택/줄 나누기는 앞에서부터 상한 개"
+        );
+        assert!(e.take_regions_capped());
+        e.set_max_regions(0);
+        assert!(e.add_selection(6, 7), "0 = 상한 없음");
     }
 
     #[test]

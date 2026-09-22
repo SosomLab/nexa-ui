@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-22 (61차 · win) — ★ `EditState` **선택 되돌리기**(`SoftStep` `Sel`/`Edit` · `soft_undo`/`soft_redo` · `note_sel` 후킹 8곳 + `key()` 이동 키 · Shift 연속 합침 · 상한 500 · `undo`는 편집 표식까지 걷어 냄) · `TextBox::soft_undo/soft_redo` · 🔧 다중 캐럿 ←/→ = 선택 있는 구간은 앞/뒤로 접기(옮기지 않음 · Sublime) · ★ `EditState::max_regions`(다중 선택 구간 상한 — `add_selection`·`toggle_caret`·`set_regions` 공통 · `take_regions_capped`) · `selected_bytes` 공개 · nexa-dlg `FilePicker::set_multi`(프로젝트 파일 등 단일 선택 용도) · `TextBox::set_gutter_labels`(거터 라벨 상자 · 북마크 니모닉) · 🔧 다중 캐럿 세로 추종 = 보이는 캐럿이 있으면 유지, 없으면 가장 가까운 캐럿 · 테스트 322. → nexa-sql journal 09-22 §65·§67.
+
 ## 2026-09-22 (60차 · win) — `ContextMenu::is_outside_click`(바깥 좌/우 클릭 판정 — 호스트가 "닫고 통과"를 구현하는 근거) · `TextBox::skip_next_occurrence` + `EditState::remove_region`(Sublime Quick Skip Next) · ★ **풀다운 하위 메뉴 `MenuEntry::Sub`**(`MenuBar` · `›` · hover/→/Enter 펼침 · ←/Esc 접힘 · 표면 밖 = 왼쪽 뒤집기/`nudge_into` · `paint_panel` 공용 · `popup_bounds`) · 테스트 319. → nexa-sql journal 09-22 §58~60.
 
 ## 2026-09-22 (59차 · win) — `TextBox::set_popup_deferred`/`close_menu`(편집 메뉴를 컨테이너 팝업 층에서 · 배타) · `EditMenu::close` · `MenuBar::dismiss` · `ContextMenu` 하위 메뉴 = 비활성 행에서도 닫힘(`row_at`). → nexa-sql journal 09-22 §54~56.
