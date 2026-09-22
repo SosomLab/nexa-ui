@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-23 (62차 · win)** — `fallback_file_icon` 부품 · `TreeGrid` 선택 없음(+ nexa-dlg 빈 곳 클릭 해제) · `TextBox` 미니맵 표식/줄 끝 라벨 · `TabBar::set_tab_colors`
 - **2026-09-22 (61차 · win)** — ★ `EditState` 선택 되돌리기(Sublime soft undo/redo · `SoftStep`) · `TextBox::soft_undo/soft_redo` · 🔧 다중 캐럿 ←/→ 접기 · ★ `max_regions` 다중 선택 상한 · `selected_bytes` 공개 · `set_gutter_labels` · 🔧 다중 캐럿 스크롤 유지.
 - **2026-09-22 (60차 · win)** — `ContextMenu::is_outside_click` · `TextBox::skip_next_occurrence`/`EditState::remove_region` · ★ 풀다운 하위 메뉴 `MenuEntry::Sub`.
 - **2026-09-22 (59차 · win)** — `TextBox::set_popup_deferred`/`close_menu` · `EditMenu::close` · `MenuBar::dismiss` · 하위 메뉴 비활성 행 닫힘.

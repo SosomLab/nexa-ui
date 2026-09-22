@@ -676,6 +676,8 @@ pub struct TreeGrid {
     base: ControlBase,
     model: TreeModel,
     selected: usize,
+    /// 선택이 있는가 — 빈 곳 클릭으로 해제하면 false(캐럿 행 `selected`는 남겨 키 이동의 기준으로 · nexa-dlg 09-22).
+    has_sel: bool,
     /// 열 정의(첫 열 = 트리 열).
     columns: Vec<GridColumn>,
     scroll_x: i32,
@@ -706,6 +708,7 @@ impl TreeGrid {
             base: ControlBase::default(),
             model,
             selected: 0,
+            has_sel: true,
             columns,
             scroll_x: 0,
             scroll_y: 0,
@@ -770,6 +773,18 @@ impl Control for TreeGrid {
         &mut self.base
     }
 }
+impl TreeGrid {
+    /// 선택 해제(빈 곳 클릭) — 강조 행 0 · 키 이동은 마지막 캐럿 행에서 이어진다.
+    pub fn clear_selection(&mut self) {
+        self.has_sel = false;
+    }
+
+    /// 선택된 행이 있는가(`clear_selection` 뒤 false · `set_selected_row`/키 이동으로 다시 true).
+    pub fn has_selection(&self) -> bool {
+        self.has_sel
+    }
+}
+
 impl TreeControl for TreeGrid {
     fn model(&self) -> &TreeModel {
         &self.model
@@ -782,6 +797,7 @@ impl TreeControl for TreeGrid {
     }
     fn set_selected_row(&mut self, i: usize) {
         self.selected = i;
+        self.has_sel = true;
     }
     fn scroll(&self) -> (i32, i32) {
         (self.scroll_x, self.scroll_y)
@@ -874,8 +890,8 @@ impl Widget for TreeGrid {
             if y < top || y + rh > bottom {
                 continue;
             }
-            let fill =
-                self.marked.contains(&row.path) || (i == self.selected && !self.caret_outline);
+            let fill = self.marked.contains(&row.path)
+                || (self.has_sel && i == self.selected && !self.caret_outline);
             if fill {
                 ctx.fill_rect(
                     Rect::new(b.x, y, row_w, rh),
@@ -886,11 +902,15 @@ impl Widget for TreeGrid {
                     },
                 );
             }
-            if self.caret_outline && i == self.selected && self.is_active() {
+            if self.caret_outline && self.has_sel && i == self.selected && self.is_active() {
                 ctx.stroke_round_rect(Rect::new(b.x, y, row_w, rh), 0, theme.accent, 1.0);
             }
+            // ★ 선택 없음(빈 곳 클릭) + 캐럿 행 = 배경 없이 **테두리만**(키보드 이동의 기준점 · nexa-sql 사용자 09-23) — 흐린 색.
+            if !self.has_sel && i == self.selected && self.is_active() {
+                ctx.stroke_round_rect(Rect::new(b.x, y, row_w, rh), 0, theme.text_dim, 1.0);
+            }
             // ★ hover는 **행 전체**에 얹는다(첫 열만 밝아지면 행이 잘려 보인다).
-            let a = hover_alpha(i == self.selected, self.hover.value(i));
+            let a = hover_alpha(self.has_sel && i == self.selected, self.hover.value(i));
             if a > 0.0 {
                 ctx.fill_rect_alpha(Rect::new(b.x, y, row_w, rh), theme.text, a);
             }

@@ -1629,6 +1629,9 @@ impl FilePicker {
 
     /// 선택 행 → (경로, 폴더?).
     fn selected_item(&self) -> Option<(PathBuf, bool)> {
+        if !self.grid.has_selection() {
+            return None;
+        }
         let rows = self.grid.rows();
         let r = rows.get(self.grid.selected_row())?;
         Self::row_item(&r.cells, &r.label)
@@ -2683,9 +2686,20 @@ impl Widget for FilePicker {
                                 self.activate_row(row);
                             }
                         }
-                    } else if self.multi() && !shift {
-                        // 빈 공간(행 아래 · 열 밖) 좌클릭 = 러버밴드 시작(Ctrl = 기존 선택에 추가).
-                        self.band_start(x, y, primary);
+                    } else {
+                        // ★ 빈 곳(행 아래 · 열 밖) 클릭 = **선택 해제**(세 모드 공통 · 사용자 09-22): 강조 행 0 ·
+                        //   열기/폴더 고르기는 이름 상자도 비운다(폴더 고르기의 확정 = **지금 폴더** · 열기 = 고른 것 없음) ·
+                        //   저장은 적어 둔 파일명을 지키고 목록 강조만 푼다.
+                        self.grid.clear_selection();
+                        self.last_row_click = None;
+                        if self.mode != PickerMode::Save {
+                            self.name_box.set_text("");
+                        }
+                        self.pending_overwrite = None;
+                        if self.multi() && !shift {
+                            // 빈 공간(행 아래 · 열 밖) 좌클릭 = 러버밴드 시작(Ctrl = 기존 선택에 추가).
+                            self.band_start(x, y, primary);
+                        }
                     }
                 }
                 InputEvent::RightDown { x, y } => {
@@ -2888,52 +2902,9 @@ impl Widget for FilePicker {
     }
 }
 
-/// 셸 아이콘이 없는 OS의 자체 그림(16px · 폴더 = 호박색 탭 폴더 · 파일 = 회색 종이 + 접힌 모서리).
+/// 셸 아이콘이 없는 OS의 자체 그림 — nexa-ctl 부품(`fallback_file_icon` · 프로젝트 탐색기와 공용 · 09-22).
 fn fallback_icon(is_dir: bool) -> IconImage {
-    const N: u32 = 16;
-    let mut rgba = vec![0u8; (N * N * 4) as usize];
-    let mut put = |x: u32, y: u32, c: [u8; 4]| {
-        let i = ((y * N + x) * 4) as usize;
-        rgba[i..i + 4].copy_from_slice(&c);
-    };
-    if is_dir {
-        let body = [0xE8, 0xB8, 0x4A, 0xFF];
-        let dark = [0xC9, 0x96, 0x2E, 0xFF];
-        for y in 3..14 {
-            for x in 1..15 {
-                let tab = y < 5 && x > 7;
-                if !tab {
-                    put(
-                        x,
-                        y,
-                        if y == 3 || y == 13 || x == 1 || x == 14 {
-                            dark
-                        } else {
-                            body
-                        },
-                    );
-                }
-            }
-        }
-    } else {
-        let paper = [0xF4, 0xF4, 0xF4, 0xFF];
-        let edge = [0x9A, 0x9A, 0x9A, 0xFF];
-        for y in 1..15 {
-            for x in 3..13 {
-                let fold = x > 9 && y < 4 && (x - 9) > (3 - y);
-                if fold {
-                    continue;
-                }
-                let border = y == 1
-                    || y == 14
-                    || x == 3
-                    || x == 12
-                    || (x > 9 && y < 5 && (x - 9) == (4 - y));
-                put(x, y, if border { edge } else { paper });
-            }
-        }
-    }
-    IconImage::from_rgba(N, N, rgba)
+    nexa_ctl::controls::fallback_file_icon(is_dir)
 }
 
 /// 빈 폴더 셰브론 프로브(폴더마다 첫 일치 열거) 켜기/끄기 — 설정 `file.probe_chevrons`(끄면 모든 폴더에 셰브론 · nexa-sql 09-17 실행 속도 향상).

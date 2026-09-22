@@ -670,6 +670,55 @@ pub fn draw_chevron_down(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
     );
 }
 
+/// ★ 셸 아이콘이 없거나 아직 안 온 파일/폴더의 자체 그림(16px · 폴더 = 호박색 탭 폴더 · 파일 = 회색 종이 + 접힌 모서리).
+/// nexa-dlg 파일 대화상자와 nexa-sql 프로젝트 탐색기가 같은 그림을 쓴다(둘째 사용처 → 부품 · 09-22).
+pub fn fallback_file_icon(is_dir: bool) -> crate::IconImage {
+    const N: u32 = 16;
+    let mut rgba = vec![0u8; (N * N * 4) as usize];
+    let mut put = |x: u32, y: u32, c: [u8; 4]| {
+        let i = ((y * N + x) * 4) as usize;
+        rgba[i..i + 4].copy_from_slice(&c);
+    };
+    if is_dir {
+        let body = [0xE8, 0xB8, 0x4A, 0xFF];
+        let dark = [0xC9, 0x96, 0x2E, 0xFF];
+        for y in 3..14 {
+            for x in 1..15 {
+                let tab = y < 5 && x > 7;
+                if !tab {
+                    put(
+                        x,
+                        y,
+                        if y == 3 || y == 13 || x == 1 || x == 14 {
+                            dark
+                        } else {
+                            body
+                        },
+                    );
+                }
+            }
+        }
+    } else {
+        let paper = [0xF4, 0xF4, 0xF4, 0xFF];
+        let edge = [0x9A, 0x9A, 0x9A, 0xFF];
+        for y in 1..15 {
+            for x in 3..13 {
+                let fold = x > 9 && y < 4 && (x - 9) > (3 - y);
+                if fold {
+                    continue;
+                }
+                let border = y == 1
+                    || y == 14
+                    || x == 3
+                    || x == 12
+                    || (x > 9 && y < 5 && (x - 9) == (4 - y));
+                put(x, y, if border { edge } else { paper });
+            }
+        }
+    }
+    crate::IconImage::from_rgba(N, N, rgba)
+}
+
 /// 오른쪽 셰브론(›) — 트리 접힘 표식. 아래 셰브론(∨)과 같은 세트 크기(h/5 · 사용자 확정).
 /// ★ 펼침/접힘 셰브론(nexa-dir2 파일 그리드와 같은 모양 · 꺾임 **90°** · 사용자 09-15 "dir2 모양 그대로").
 /// `area` 한 변 = 글꼴 높이 정도 · 다리 길이 = 변의 0.32 · `expanded` = ∨ · 아니면 ›. 색은 호출자(접힘 = 흐림 · 펼침/hover = 본문).

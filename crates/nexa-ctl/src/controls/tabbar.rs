@@ -118,6 +118,8 @@ pub struct TabBar {
     /// ★ **묶인 탭**(동시 편집 · 사용자 09-22): 활성이 아니어도 상단 accent 줄을 그린다 — 나란히 열린 칸의 탭이
     /// 어느 것들인지 탭 줄에서 보이게. 인덱스 정렬 · 부족분 = false.
     group: Vec<bool>,
+    /// 탭별 상단 줄 색 덮어쓰기(활성·묶인 탭 · None = `accent` → 테마) — 편집기 탭 유형별 색(nexa-sql 09-23).
+    tab_colors: Vec<Option<Color>>,
     /// 탭별 앞 표식(부족분 = None).
     badges: Vec<TabBadge>,
     active: usize,
@@ -166,6 +168,7 @@ impl TabBar {
             locked: Vec::new(),
             pinned: Vec::new(),
             group: Vec::new(),
+            tab_colors: Vec::new(),
             badges: Vec::new(),
             active: 0,
             multiline: false,
@@ -242,6 +245,27 @@ impl TabBar {
             self.group = group;
             inv.push(self.base.bounds);
         }
+    }
+
+    /// 탭별 상단 줄 색(활성 탭·묶인 탭 모두 자기 색 · None = 바 공통 `set_accent` → 테마 accent). 바뀔 때만 무효화.
+    pub fn set_tab_colors(&mut self, colors: Vec<Option<Color>>, inv: &mut Invalidations) {
+        if self.tab_colors != colors {
+            self.tab_colors = colors;
+            inv.push(self.base.bounds);
+        }
+    }
+
+    /// 탭 `i`의 줄 색 — 탭별 색 > 바 공통 > 테마 accent · 창 비활성 = text_dim.
+    fn tab_accent_of(&self, i: usize, theme: &Theme) -> Color {
+        if !self.is_active() {
+            return theme.text_dim;
+        }
+        self.tab_colors
+            .get(i)
+            .copied()
+            .flatten()
+            .or(self.accent)
+            .unwrap_or(theme.accent)
     }
 
     /// 탭 `i`가 묶여 있는가(동시 편집 칸).
@@ -942,7 +966,7 @@ impl Widget for TabBar {
                 }
                 let line = Rect::new(cell.x, cell.y, cell.w, self.s(2).max(1)).intersection(&clip);
                 if !line.is_empty() {
-                    ctx.fill_rect(line, self.tab_accent(theme));
+                    ctx.fill_rect(line, self.tab_accent_of(i, theme));
                 }
             } else {
                 ctx.state_layer(
@@ -961,7 +985,8 @@ impl Widget for TabBar {
                     let line =
                         Rect::new(cell.x, cell.y, cell.w, self.s(2).max(1)).intersection(&clip);
                     if !line.is_empty() {
-                        ctx.fill_rect(line, self.tab_accent(theme));
+                        // 묶인 탭도 **자기** 탭 색(사용자 09-23 "원래 자기 탭 색").
+                        ctx.fill_rect(line, self.tab_accent_of(i, theme));
                     }
                 }
             }

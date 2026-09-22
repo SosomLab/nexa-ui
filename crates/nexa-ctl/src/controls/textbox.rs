@@ -385,6 +385,10 @@ pub struct TextBox {
     line_marks: Vec<(usize, Color)>,
     /// 거터 라벨(줄 → 짧은 글 · 예 북마크 니모닉 숫자) — 줄번호 왼쪽에 accent 상자로(nexa-sql docs/69 U-2 · 09-22).
     gutter_labels: Vec<(usize, String)>,
+    /// 미니맵 표식(논리 줄 → 색) — 오류 줄(`minimap_errors`)과 같은 방식으로 오른쪽 가장자리 점(북마크 · nexa-sql docs/69 U-2).
+    minimap_marks: Vec<(usize, Color)>,
+    /// 줄 끝 인라인 라벨(논리 줄 → 흐린 글) — 본문 뒤에 여백을 두고 `text_dim`으로(북마크 라벨 · 편집 대상 아님).
+    inline_labels: Vec<(usize, String)>,
     /// ★ 저장 기준선(마지막 저장/열기 시점의 줄들) — 있으면 거터 띠에 줄 변경 유형을 그린다(nexa-sql 사용자 09-17 · Sublime mini_diff/VS Code).
     baseline: Option<Vec<String>>,
     /// 기준선 대비 줄 변경(논리 줄 0 기준 · 정렬) — `DiffKind`. 편집 때마다 `diff_dirty`로 다시 계산(페인트에서).
@@ -776,6 +780,8 @@ impl TextBox {
             text_inset: 0,
             line_marks: Vec::new(),
             gutter_labels: Vec::new(),
+            minimap_marks: Vec::new(),
+            inline_labels: Vec::new(),
             baseline: None,
             diff_marks: std::cell::RefCell::new(Vec::new()),
             diff_dirty: std::cell::Cell::new(false),
@@ -1775,6 +1781,16 @@ impl TextBox {
     /// 거터 라벨(줄 → 한두 글자) — 줄번호 왼쪽 accent 상자(북마크 니모닉).
     pub fn set_gutter_labels(&mut self, labels: Vec<(usize, String)>) {
         self.gutter_labels = labels;
+    }
+
+    /// 미니맵 표식(논리 줄 0 기준 → 색) — 행 전체 옅게 + 오른쪽 가장자리 점(오류 줄과 같은 자리 · 오류가 우선).
+    pub fn set_minimap_marks(&mut self, marks: Vec<(usize, Color)>) {
+        self.minimap_marks = marks;
+    }
+
+    /// 줄 끝 인라인 라벨(논리 줄 0 기준 → 글) — 그 논리 줄의 마지막 행 뒤에 흐리게 그린다(캐럿·선택에 영향 없음).
+    pub fn set_inline_labels(&mut self, labels: Vec<(usize, String)>) {
+        self.inline_labels = labels;
     }
 
     /// 줄번호 거터 폭(마지막 페인트 실측 · 0 = 없음).
@@ -3728,6 +3744,22 @@ impl TextBox {
                     }
                 }
             }
+            // 줄 끝 인라인 라벨(북마크 라벨 등) — 논리 줄의 마지막 행 뒤 · 흐린 글 · 뷰 밖이면 생략.
+            if !self.inline_labels.is_empty() {
+                let le = *start_idx + line_len;
+                let ends_line = li + 1 >= n_rows || rows_src.start(li + 1) == le + 1;
+                if ends_line {
+                    if let Some(n) = rows_src.logical_no(li, &logical_starts) {
+                        if let Some((_, lab)) = self.inline_labels.iter().find(|(l, _)| *l == n) {
+                            let lx = dx + w.get(line_len).copied().unwrap_or(0) + self.s(16);
+                            if lx < vx1 {
+                                let col = theme.text_dim.lerp(theme.field_bg, 0.25);
+                                ctx.text(lx.max(vx0), ty, view, lab, col);
+                            }
+                        }
+                    }
+                }
+            }
             // 캐럿 — 이 줄에 있는 캐럿 전부(다중 커서 · 포커스·깜빡임 위상).
             if self.base.focused && ctx.caret_on() {
                 for &(cl, c) in &caret_rows {
@@ -3824,7 +3856,22 @@ impl TextBox {
                     };
                     self.minimap_errors.contains(&li)
                 };
-                if !has_sel && needle.is_none() && !has_find && !is_err {
+                let mark = if self.minimap_marks.is_empty() {
+                    None
+                } else {
+                    let li = if self.wrap {
+                        logical_starts
+                            .partition_point(|&st| st <= *start_idx)
+                            .saturating_sub(1)
+                    } else {
+                        row
+                    };
+                    self.minimap_marks
+                        .iter()
+                        .find(|(l, _)| *l == li)
+                        .map(|(_, c)| *c)
+                };
+                if !has_sel && needle.is_none() && !has_find && !is_err && mark.is_none() {
                     continue;
                 }
                 let lchars: Vec<char> = line_str.chars().collect();
@@ -3857,6 +3904,15 @@ impl TextBox {
                             .intersection(&band);
                     if !edge.is_empty() {
                         ctx.fill_rect(edge, theme.danger);
+                    }
+                } else if let Some(c) = mark {
+                    // 표식 줄(북마크): 행 전체 아주 옅게 + 오른쪽 가장자리 점(오류와 같은 자리 · 오류가 우선).
+                    dot(ctx, 0, cols, c, 0.18);
+                    let edge =
+                        Rect::new(band.right() - mm_cw.max(2) - 1, y, mm_cw.max(2), mm_row_h)
+                            .intersection(&band);
+                    if !edge.is_empty() {
+                        ctx.fill_rect(edge, c);
                     }
                 }
                 if has_find {
