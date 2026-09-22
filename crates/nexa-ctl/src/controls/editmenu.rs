@@ -133,6 +133,11 @@ impl EditMenu {
         self.menu.is_open()
     }
 
+    /// 닫기(다른 팝업과 배타 · nexa-sql 09-22).
+    pub fn close(&mut self) {
+        self.menu.close();
+    }
+
     #[must_use]
     pub fn bounds(&self) -> Rect {
         self.menu.bounds()

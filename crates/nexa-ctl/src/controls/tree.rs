@@ -689,6 +689,8 @@ pub struct TreeGrid {
     /// ★ **표시된 행**(다중 선택 · nexa-dlg 열기 모드 · 09-22): 선택 행이 아니어도 선택 배경을 칠한다. 열쇠 = 노드 경로(`FlatRow::path`)
     /// — 가시 행 인덱스가 아니라서 다른 폴더를 펼치거나 접어 행이 밀려도 표시가 따라간다(사용자 09-22 실기).
     marked: std::collections::HashSet<Vec<usize>>,
+    /// 다중 선택 모드: 캐럿 행은 채우지 않고 **테두리**만(선택 = `marked`) — 폴더가 "기본 선택"처럼 보이지 않게(사용자 09-22).
+    caret_outline: bool,
 }
 
 impl TreeGrid {
@@ -712,7 +714,13 @@ impl TreeGrid {
             hover: HoverFade::default(),
             fit_columns: false,
             marked: std::collections::HashSet::new(),
+            caret_outline: false,
         }
+    }
+
+    /// 다중 선택 모드(캐럿 = 테두리 · 채움은 `set_marked_paths`만).
+    pub fn set_caret_outline(&mut self, on: bool) {
+        self.caret_outline = on;
     }
 
     /// 다중 선택 표시 — 노드 경로 목록(`FlatRow::path` · 빈 목록 = 없음).
@@ -866,7 +874,9 @@ impl Widget for TreeGrid {
             if y < top || y + rh > bottom {
                 continue;
             }
-            if i == self.selected || self.marked.contains(&row.path) {
+            let fill =
+                self.marked.contains(&row.path) || (i == self.selected && !self.caret_outline);
+            if fill {
                 ctx.fill_rect(
                     Rect::new(b.x, y, row_w, rh),
                     if self.is_active() {
@@ -875,6 +885,9 @@ impl Widget for TreeGrid {
                         theme.sel_bg_inactive
                     },
                 );
+            }
+            if self.caret_outline && i == self.selected && self.is_active() {
+                ctx.stroke_round_rect(Rect::new(b.x, y, row_w, rh), 0, theme.accent, 1.0);
             }
             // ★ hover는 **행 전체**에 얹는다(첫 열만 밝아지면 행이 잘려 보인다).
             let a = hover_alpha(i == self.selected, self.hover.value(i));

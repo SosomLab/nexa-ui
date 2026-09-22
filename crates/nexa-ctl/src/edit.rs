@@ -1037,6 +1037,21 @@ impl EditState {
         self.last_op = None;
     }
 
+    /// 추가 목록에서 구간 `[a, b)` 하나를 뺀다(순서 무관 · 주 선택은 건드리지 않는다) — 뺐으면 `true`.
+    /// Sublime `find_under_expand_skip`(Ctrl+K,Ctrl+D)의 재료: 방금 주 선택이던 구간을 버릴 때.
+    pub fn remove_region(&mut self, a: usize, b: usize) -> bool {
+        let key = (a.min(b), a.max(b));
+        let Some(i) = self
+            .extra
+            .iter()
+            .rposition(|&(x, y)| (x.min(y), x.max(y)) == key)
+        else {
+            return false;
+        };
+        self.extra.remove(i);
+        true
+    }
+
     /// 추가 선택을 모두 지운다(Esc·클릭) — 지웠으면 `true`.
     pub fn clear_multi(&mut self) -> bool {
         let had = !self.extra.is_empty();

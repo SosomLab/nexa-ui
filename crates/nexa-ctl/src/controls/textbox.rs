@@ -334,6 +334,8 @@ pub struct TextBox {
     /// 지금 치는 글자가 보여야 한다(대화 입력과 동일한 경험 — 호스트가 배선).
     /// 우클릭 편집 메뉴(08-13 전수 검사 — 대화 입력에만 있고 일반 필드엔 없었다).
     ctx_menu: super::EditMenu,
+    /// 우클릭 편집 메뉴를 `paint`에서 그리지 않고 컨테이너의 팝업 층(`paint_popup`)에만 맡긴다(토스트·카드 위 · nexa-sql 09-22).
+    popup_deferred: bool,
     /// 메뉴에서 고른 클립보드 행동(1회성) — OS 클립보드는 호스트 몫이라 요청만 남긴다.
     edit_ctx: Option<EditCtxAction>,
     /// 붙여넣기 항목 활성 근거(호스트가 우클릭 시점에 1회 주입 — 대화 입력과 동일).
@@ -749,6 +751,7 @@ impl TextBox {
             last_click_at: None,
             hscroll: std::cell::Cell::new(0),
             ctx_menu: super::EditMenu::new(),
+            popup_deferred: false,
             edit_ctx: None,
             clip_has_text: true,
             char_filter: None,
@@ -2514,6 +2517,21 @@ impl TextBox {
         }
     }
 
+    /// ★ Sublime `find_under_expand_skip`(Ctrl+K,Ctrl+D · nexa-sql 사용자 09-22) — 주 선택(마지막에 더한 구간)을 **버리고**
+    /// 같은 문자열의 다음 출현을 대신 선택한다(건너뛰기). 선택이 없으면 Ctrl+D와 같다(캐럿 밑 단어). 더 찾을 것이 없으면
+    /// `false`(지금 선택은 그대로).
+    pub fn skip_next_occurrence(&mut self) -> bool {
+        let Some((a, b)) = self.edit.selection() else {
+            return self.select_next_occurrence();
+        };
+        if !self.select_next_occurrence() {
+            return false;
+        }
+        // 종전 주 선택은 `add_selection`이 추가 목록 끝에 내려 놓았다 → 그것을 뺀다.
+        self.edit.remove_region(a, b);
+        true
+    }
+
     /// 열 선택 드래그 중인가(테스트·호스트 판정).
     #[must_use]
     pub fn column_dragging(&self) -> bool {
@@ -2985,6 +3003,16 @@ impl TextBox {
     /// 필드가 메뉴를 덮었다 — z순서는 그리는 순서가 전부다). `paint`도 그리지만
     /// (단독 사용 안전망), 컨테이너는 **모든 자식을 그린 뒤** 이걸 한 번 더 불러
     /// 팝업을 맨 위로 올린다.
+    /// 우클릭 편집 메뉴 닫기(다른 팝업과 배타).
+    pub fn close_menu(&mut self) {
+        self.ctx_menu.close();
+    }
+
+    /// 우클릭 편집 메뉴를 본문 `paint`에서 빼고 팝업 층에서만 그린다(컨테이너가 `paint_popup`을 부른다).
+    pub fn set_popup_deferred(&mut self, on: bool) {
+        self.popup_deferred = on;
+    }
+
     pub fn paint_popup(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         if self.ctx_menu.is_open() {
             self.ctx_menu.paint(ctx, theme);
@@ -3813,7 +3841,9 @@ impl TextBox {
             (top as i32) * lh + rem,
             self.base.scale,
         );
-        self.paint_popup(ctx, theme);
+        if !self.popup_deferred {
+            self.paint_popup(ctx, theme);
+        }
         ctx.set_tab_origin(None);
     }
 }
@@ -4749,8 +4779,10 @@ impl Widget for TextBox {
         self.draw_help_tip(ctx, theme, badge);
 
         // 우클릭 편집 메뉴 — 이 위젯 안에서는 최상위. 형제 위젯이 뒤에 그려지는
-        // 컨테이너에선 부족하다 — 컨테이너가 `paint_popup`을 끝에 한 번 더 부른다.
-        self.paint_popup(ctx, theme);
+        // 컨테이너에선 부족하다 — 컨테이너가 `paint_popup`을 끝에 한 번 더 부른다(`set_popup_deferred`면 여기서는 안 그린다).
+        if !self.popup_deferred {
+            self.paint_popup(ctx, theme);
+        }
     }
 }
 
@@ -5761,6 +5793,37 @@ c  d",
         // Esc = 접기.
         assert!(t.clear_multi());
         assert!(!t.has_multi());
+    }
+
+    /// Ctrl+K,Ctrl+D = 건너뛰기: 하나뿐이면 옮기고 · 여럿이면 마지막 것을 버리고 다음을 더한다 · 더 없으면 그대로.
+    #[test]
+    fn skip_next_occurrence_replaces_last_region() {
+        let mut t = TextBox::new("p").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t.set_focused(true);
+        t.set_text("sum a sum b sum c sum");
+        t.edit.set_caret(1, false);
+        assert!(t.skip_next_occurrence(), "선택이 없으면 Ctrl+D와 같다");
+        assert_eq!(t.edit.regions(), vec![(0, 3)]);
+        assert!(t.skip_next_occurrence(), "하나뿐이면 다음으로 옮긴다");
+        assert_eq!(t.edit.regions(), vec![(6, 9)]);
+        assert!(t.select_next_occurrence());
+        assert_eq!(t.edit.regions(), vec![(6, 9), (12, 15)]);
+        assert!(
+            t.skip_next_occurrence(),
+            "마지막(12..15)을 버리고 다음(18..21)"
+        );
+        assert_eq!(t.edit.regions(), vec![(6, 9), (18, 21)]);
+        assert!(t.select_next_occurrence(), "끝이면 처음으로 되돌아 0..3");
+        assert_eq!(t.edit.regions(), vec![(0, 3), (6, 9), (18, 21)]);
+        assert!(
+            t.select_next_occurrence(),
+            "건너뛴 12..15도 다시 잡을 수 있다"
+        );
+        assert_eq!(t.selection_count(), 4);
+        assert!(!t.skip_next_occurrence(), "더 없으면 false · 선택 유지");
+        assert_eq!(t.selection_count(), 4);
     }
 
     #[test]

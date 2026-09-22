@@ -2,6 +2,12 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-22 (60차 · win) — `ContextMenu::is_outside_click`(바깥 좌/우 클릭 판정 — 호스트가 "닫고 통과"를 구현하는 근거) · `TextBox::skip_next_occurrence` + `EditState::remove_region`(Sublime Quick Skip Next) · ★ **풀다운 하위 메뉴 `MenuEntry::Sub`**(`MenuBar` · `›` · hover/→/Enter 펼침 · ←/Esc 접힘 · 표면 밖 = 왼쪽 뒤집기/`nudge_into` · `paint_panel` 공용 · `popup_bounds`) · 테스트 319. → nexa-sql journal 09-22 §58~60.
+
+## 2026-09-22 (59차 · win) — `TextBox::set_popup_deferred`/`close_menu`(편집 메뉴를 컨테이너 팝업 층에서 · 배타) · `EditMenu::close` · `MenuBar::dismiss` · `ContextMenu` 하위 메뉴 = 비활성 행에서도 닫힘(`row_at`). → nexa-sql journal 09-22 §54~56.
+
+## 2026-09-22 (58차 · win) — `ContextMenu::set_default`(기본 항목 · Enter · accent 테두리) · `TreeGrid::set_caret_outline`(다중 모드 캐럿 = 테두리) · nexa-dlg Enter = 다중이면 `ConfirmMany` · 확정 버튼 `ButtonTone::Accent`. → nexa-sql journal 09-22 §47.
+
 ## 2026-09-22 (57차 · win) — ★ `draw::ellipsize_middle`(가운데 … · 접두사 폭 표 · 앞 ≈ 뒤) + 전역 `set_show_full/show_full`(Alt = 전체 경로) · `MenuBar::set_max_label_width`(항목 폭 상한 · 전체 보기면 해제) · `ContextMenu` 라벨 축약(단축키 자리 유지) · nexa-dlg **Ctrl+드래그 스윕 선택**(`drag_sweep`/`sweep_to` · MouseUp 어디서든 종료) · **러버밴드**(빈 공간 + 파일 행에서 시작 · `band_start`/`band_to` · 반투명 사각형 · Ctrl = 유지). → nexa-sql journal 09-22 §38~40.
 
 ## 2026-09-22 (56차 · win) — 🔧 `TreeControl::move_selection`이 선택만 옮기고 스크롤을 따라가지 않던 결함(nexa-sql 파일 창 실기) → `reveal_row(i)`(뷰포트 안으로 · 배치 전 무시) · `tree_event` PageUp/PageDown(`page_rows`)/Home/End · nexa-dlg `select_name`·`refresh_grid` 뒤 `reveal_row` · 테스트 `keyboard_selection_scrolls_into_view` · 🔧 `TreeGrid` 다중 선택 강조 열쇠 = 노드 경로(`set_marked_paths` · 가시 행 인덱스는 폴더 펼침에 밀렸다). → nexa-sql journal 09-22 §36~37.

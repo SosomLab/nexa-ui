@@ -10,7 +10,7 @@
 //! 파일명 상자 Enter = 확정 · 확장자 필터 · 숨김 표시 · 새 폴더 · 저장은 **덮어쓰기 2단 확인**(같은 이름으로 한 번 더) ·
 //! 확장자 자동 부여 · 파일명 규칙 즉시 검증.
 
-use nexa_ctl::controls::{glyph, ContextMenu, CtxItem, GlyphKind, LabelSide, MenuIcon};
+use nexa_ctl::controls::{glyph, ButtonTone, ContextMenu, CtxItem, GlyphKind, LabelSide, MenuIcon};
 use nexa_ctl::IconImage;
 use nexa_ctl::{
     Button, Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, DrawCtx, FontSlot,
@@ -369,7 +369,11 @@ impl FilePicker {
             dot_chk: Checkbox::new(labels.show_dot.clone(), true).with_label_side(LabelSide::Right),
             show_dot: true,
             extra: None,
-            ok_btn: Button::new(ok_label),
+            ok_btn: {
+                let mut b = Button::new(ok_label);
+                b.set_tone(ButtonTone::Accent); // 기본 버튼(Enter) 표시 — 사용자 09-22
+                b
+            },
             cancel_btn: Button::new(labels.cancel.clone()),
             cursor: (0, 0),
             message: None,
@@ -1406,6 +1410,7 @@ impl FilePicker {
         let mut inv = Invalidations::default();
         grid.set_bounds(self.grid_rect, &mut inv);
         grid.reveal_row(grid.selected_row());
+        grid.set_caret_outline(self.multi());
         self.grid = grid;
         self.last_row_click = None;
         if self.multi() && !self.marks.is_empty() {
@@ -2597,8 +2602,13 @@ impl Widget for FilePicker {
                 InputEvent::Key {
                     key: Key::Enter, ..
                 } => {
-                    let row = self.grid.selected_row();
-                    self.activate_row(row);
+                    // 다중 선택이 있으면 Enter = **기본 버튼(열기)** = 통째로 확정(사용자 09-22) · 아니면 캐럿 행 활성화.
+                    if self.multi() && self.marks.len() > 1 {
+                        self.confirm();
+                    } else {
+                        let row = self.grid.selected_row();
+                        self.activate_row(row);
+                    }
                 }
                 InputEvent::Char { c: '\u{8}', .. } => self.go_up(),
                 InputEvent::MouseDown {

@@ -232,6 +232,9 @@ pub struct ContextMenu {
     /// 열려 있으면 좌상단 좌표(경계 보정 완료 · 셀 — paint의 실측 재접기).
     at: std::cell::Cell<Option<Point>>,
     hover: Option<usize>,
+    /// ★ **기본 항목**(nexa-sql 사용자 09-22 "기본 메뉴 개념"): hover가 없을 때 Enter가 고르는 항목 · 그림은 hover(채움)와 달리
+    /// accent **테두리 + accent 글자**. `open_at`마다 비워진다 — 호스트가 연 뒤 `set_default`.
+    default_idx: Option<usize>,
     picked: Option<String>,
     scale: f32,
     /// 마지막으로 계산한 팝업 rect(히트 판정용). 열 때는 호스트가 준 근사 폭으로
@@ -271,6 +274,13 @@ impl ContextMenu {
         }
     }
 
+    /// 기본 항목 지정(활성 항목만 · Enter = 이것 · 열린 뒤에 부른다).
+    pub fn set_default(&mut self, i: usize) {
+        if matches!(self.items.get(i), Some(CtxItem::Item { enabled: true, .. })) {
+            self.default_idx = Some(i);
+        }
+    }
+
     /// 배율(고DPI).
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
@@ -299,6 +309,22 @@ impl ContextMenu {
         }
     }
 
+    /// **바깥 클릭**인가 — 열린 동안 좌/우 MouseDown이 팝업(하위 메뉴 포함) 밖. `on_event`는 바깥 클릭을 *닫고 소비*하므로
+    /// 호스트는 이 판정으로 "닫힌 클릭"과 "메뉴가 먹은 클릭"을 갈라 **바깥 클릭은 그대로 아래로 흘린다**(팝업 UX 규칙 —
+    /// nexa-sql 09-22: 탭 메뉴가 열린 채 편집기·결과 탭을 우클릭하면 닫히기만 하고 다시 눌러야 했다).
+    #[must_use]
+    pub fn is_outside_click(&self, ev: &InputEvent) -> bool {
+        if !self.is_open() {
+            return false;
+        }
+        match *ev {
+            InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y } => {
+                !self.bounds().contains(Point { x, y })
+            }
+            _ => false,
+        }
+    }
+
     /// 닫는다(하위 메뉴 포함).
     pub fn close(&mut self) {
         self.at.set(None);
@@ -316,6 +342,7 @@ impl ContextMenu {
             return;
         }
         self.items = items;
+        self.default_idx = None;
         self.fit_w.set(text_w);
         self.sc_w.set(0);
         self.host = host;
@@ -427,6 +454,11 @@ impl ContextMenu {
             y += h;
         }
         None
+    }
+
+    /// 어느 행이든(비활성·구분선 포함) 커서 아래 행 — 하위 메뉴 닫기 판정용(nexa-sql 사용자 09-22 "비활성 항목에선 상세 메뉴가 안 닫힘").
+    fn row_at(&self, p: Point) -> Option<usize> {
+        (0..self.items.len()).find(|&i| self.row_rect(i).is_some_and(|r| r.contains(p)))
     }
 
     fn hit(&self, p: Point) -> Option<usize> {
@@ -556,7 +588,9 @@ impl ContextMenu {
                         self.pending_since = None;
                         return self.forward_child(ev);
                     }
-                    if let Some(i) = self.hit(p) {
+                    // 비활성 행·구분선 위로 옮겨도 하위 메뉴는 닫힌다(포인터가 부모의 다른 행에 있으면 하위는 의미가 없다 · Windows 관례).
+                    if let Some(i) = self.row_at(p) {
+                        let enabled = matches!(self.items[i], CtxItem::Item { enabled: true, .. });
                         if Some(i) != self.child_of {
                             // ★ 자식 쪽으로 움직이는 중(가로로 자식에 가까워지고 · 부모 행~자식 사이 세로 띠 안)이면
                             //   유예 동안 자식을 유지 — 대각선 이동 중 다른 부모 행을 스쳐도 잃지 않는다.
@@ -579,8 +613,8 @@ impl ContextMenu {
                             }
                             self.pending_since = None;
                             self.close_child();
-                            self.hover = Some(i);
-                            if self.items[i].has_children() {
+                            self.hover = enabled.then_some(i);
+                            if enabled && self.items[i].has_children() {
                                 self.open_child(i, false);
                             }
                         } else {
@@ -673,9 +707,10 @@ impl ContextMenu {
                                 return true;
                             }
                         }
+                        // hover가 없으면 **기본 항목**(사용자 09-22).
                         if let Some(CtxItem::Item {
                             id, enabled: true, ..
-                        }) = self.hover.map(|i| &self.items[i])
+                        }) = self.hover.or(self.default_idx).map(|i| &self.items[i])
                         {
                             self.picked = Some(id.clone());
                         }
@@ -807,17 +842,26 @@ impl ContextMenu {
                     let h = self.row_h();
                     let row = Rect::new(r.x, y, r.w, h);
                     let hot = *enabled && (self.hover == Some(i) || self.child_of == Some(i));
+                    let is_default = self.default_idx == Some(i);
                     if hot {
                         ctx.fill_rect(
                             Rect::new(r.x + self.s(2), y, r.w - self.s(4), h),
                             theme.accent,
+                        );
+                    } else if is_default {
+                        // 기본 항목 = 채움이 아니라 accent 테두리(hover·키보드 이동과 구분).
+                        ctx.stroke_round_rect(
+                            Rect::new(r.x + self.s(2), y, r.w - self.s(4), h),
+                            self.s(3),
+                            theme.accent,
+                            1.0,
                         );
                     }
                     let fg = if !*enabled {
                         theme.text_dim
                     } else if hot {
                         theme.window_bg
-                    } else if *active {
+                    } else if *active || is_default {
                         theme.accent
                     } else {
                         theme.text
@@ -970,6 +1014,20 @@ mod tests {
         assert_eq!(m.take_picked(), None);
     }
 
+    /// 바깥 클릭 판정: 안 = false · 밖(좌/우) = true · 이동/닫힘 = false — 호스트가 바깥 클릭을 아래로 흘리는 근거.
+    #[test]
+    fn outside_click_is_reported_for_host_passthrough() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items(), host(), 60);
+        let r = m.bounds();
+        assert!(!m.is_outside_click(&down(r.x + 2, r.y + 2)));
+        assert!(m.is_outside_click(&down(390, 290)));
+        assert!(m.is_outside_click(&InputEvent::RightDown { x: 390, y: 290 }));
+        assert!(!m.is_outside_click(&InputEvent::MouseMove { x: 390, y: 290 }));
+        m.close();
+        assert!(!m.is_outside_click(&down(390, 290)));
+    }
+
     #[test]
     fn folds_inside_host_bounds_near_edges() {
         let mut m = ContextMenu::new();
@@ -1000,6 +1058,53 @@ mod tests {
         m.on_event(&key(Key::Enter));
         assert_eq!(m.take_picked().as_deref(), Some("paste"));
         assert!(!m.is_open(), "Enter 선택 = 닫힘");
+    }
+
+    /// 기본 항목: hover 없이 Enter = 기본 항목 · 키보드로 옮기면 hover가 우선 · 비활성은 기본이 될 수 없다.
+    #[test]
+    fn default_item_is_picked_by_enter_without_hover() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items(), host(), 60);
+        m.set_default(1); // cut = 비활성 → 무시
+        assert!(m.default_idx.is_none());
+        m.set_default(2); // 구분선 → 무시
+        assert!(m.default_idx.is_none());
+        m.set_default(3);
+        m.on_event(&key(Key::Enter));
+        assert_eq!(m.take_picked().as_deref(), Some("paste"));
+        m.open_at(10, 10, items(), host(), 60);
+        assert!(m.default_idx.is_none(), "다시 열면 비워진다");
+    }
+
+    /// 하위 메뉴가 열린 채 부모의 **비활성** 행으로 옮기면 하위가 닫힌다(활성 행과 같은 규칙).
+    #[test]
+    fn moving_onto_disabled_row_closes_submenu() {
+        let mut m = ContextMenu::new();
+        let items = vec![
+            CtxItem::submenu("go", "이동", vec![CtxItem::item("a", "A")]),
+            CtxItem::maybe("cut", "잘라내기", false),
+            CtxItem::item("paste", "붙여넣기"),
+        ];
+        m.open_at(10, 10, items, host(), 60);
+        m.set_scale(1.0);
+        let r0 = m.row_rect(0).expect("row");
+        m.on_event(&InputEvent::MouseMove {
+            x: r0.x + 4,
+            y: r0.y + 2,
+        });
+        assert!(m.child_for_test().is_some(), "하위 메뉴 열림");
+        // 유예 시간을 지나 비활성 행으로.
+        m.pending_since = Some(
+            std::time::Instant::now()
+                - std::time::Duration::from_millis(SUBMENU_GRACE_MS as u64 + 50),
+        );
+        let r1 = m.row_rect(1).expect("row");
+        m.on_event(&InputEvent::MouseMove {
+            x: r1.x + 4,
+            y: r1.y + 2,
+        });
+        assert!(m.child_for_test().is_none(), "비활성 행 = 하위 닫힘");
+        assert!(m.hover.is_none(), "비활성 행은 hover 없음");
     }
 
     #[test]
