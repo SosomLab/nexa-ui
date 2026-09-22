@@ -255,6 +255,12 @@ impl TabBar {
         }
     }
 
+    /// 탭 `i`에 지정된 줄 색(호스트가 `set_tab_colors`로 준 것 · 없으면 None) — 호스트 시험용.
+    #[must_use]
+    pub fn tab_color(&self, i: usize) -> Option<Color> {
+        self.tab_colors.get(i).copied().flatten()
+    }
+
     /// 탭 `i`의 줄 색 — 탭별 색 > 바 공통 > 테마 accent · 창 비활성 = text_dim.
     fn tab_accent_of(&self, i: usize, theme: &Theme) -> Color {
         if !self.is_active() {
