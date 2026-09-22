@@ -262,7 +262,38 @@ pub trait TreeControl: Control {
         }
         let i = (self.selected_row() as i32 + delta).clamp(0, n - 1);
         self.set_selected_row(i as usize);
+        self.reveal_row(i as usize);
         inv.push(self.bounds());
+    }
+
+    /// 행 `i`가 뷰포트 안에 들어오도록 세로 스크롤(키보드 이동 · 프로그램 선택 뒤 — nexa-sql 파일 창 사용자 09-22
+    /// "선택만 화면 밖으로 사라지고 스크롤이 안 된다"). 뷰포트가 아직 없으면(배치 전) 그대로.
+    fn reveal_row(&mut self, i: usize) {
+        let vp = self.rows_viewport();
+        if vp.h <= 0 {
+            return;
+        }
+        let rh = self.s(ROW_H).max(1);
+        let (sx, sy) = self.scroll();
+        let top = i as i32 * rh;
+        let bottom = top + rh;
+        let mut ny = if top < sy {
+            top
+        } else if bottom > sy + vp.h {
+            bottom - vp.h
+        } else {
+            sy
+        };
+        let (_, ch) = self.content_size();
+        ny = ny.clamp(0, (ch - vp.h).max(0));
+        if ny != sy {
+            self.set_scroll(sx, ny);
+        }
+    }
+
+    /// 한 페이지의 행 수(PageUp/PageDown · 최소 1).
+    fn page_rows(&self) -> i32 {
+        (self.rows_viewport().h / self.s(ROW_H).max(1)).max(1)
     }
 
     /// 가시 행 i의 펼침 토글.
@@ -427,6 +458,22 @@ fn tree_event<T: TreeControl + ?Sized>(t: &mut T, ev: &InputEvent, inv: &mut Inv
         InputEvent::Key { key, .. } if t.is_focused() => match key {
             Key::Up => t.move_selection(-1, inv),
             Key::Down => t.move_selection(1, inv),
+            Key::PageUp => {
+                let p = t.page_rows();
+                t.move_selection(-p, inv);
+            }
+            Key::PageDown => {
+                let p = t.page_rows();
+                t.move_selection(p, inv);
+            }
+            Key::Home => {
+                let n = t.rows().len() as i32;
+                t.move_selection(-n, inv);
+            }
+            Key::End => {
+                let n = t.rows().len() as i32;
+                t.move_selection(n, inv);
+            }
             Key::Right => t.expand_selected(true, inv),
             Key::Left => t.expand_selected(false, inv),
             Key::Enter | Key::Space => {
@@ -639,8 +686,9 @@ pub struct TreeGrid {
     hover: HoverFade,
     /// 선택·hover·클릭을 **열 합 폭까지만**(그 밖은 빈 공간 · 파일 대화상자 · 사용자 09-15).
     fit_columns: bool,
-    /// ★ **표시된 행**(다중 선택 · nexa-dlg 열기 모드 · 09-22): 선택 행이 아니어도 선택 배경을 칠한다. 인덱스 정렬 · 부족분 = false.
-    marked: Vec<bool>,
+    /// ★ **표시된 행**(다중 선택 · nexa-dlg 열기 모드 · 09-22): 선택 행이 아니어도 선택 배경을 칠한다. 열쇠 = 노드 경로(`FlatRow::path`)
+    /// — 가시 행 인덱스가 아니라서 다른 폴더를 펼치거나 접어 행이 밀려도 표시가 따라간다(사용자 09-22 실기).
+    marked: std::collections::HashSet<Vec<usize>>,
 }
 
 impl TreeGrid {
@@ -663,19 +711,21 @@ impl TreeGrid {
             border: BorderSpec::default(),
             hover: HoverFade::default(),
             fit_columns: false,
-            marked: Vec::new(),
+            marked: std::collections::HashSet::new(),
         }
     }
 
-    /// 다중 선택 표시(행마다 · 가시 행 인덱스 기준 · 빈 목록 = 없음).
-    pub fn set_marked(&mut self, marked: Vec<bool>) {
-        self.marked = marked;
+    /// 다중 선택 표시 — 노드 경로 목록(`FlatRow::path` · 빈 목록 = 없음).
+    pub fn set_marked_paths(&mut self, paths: Vec<Vec<usize>>) {
+        self.marked = paths.into_iter().collect();
     }
 
-    /// 행 `i`가 다중 선택에 들어 있는가.
+    /// 가시 행 `i`가 다중 선택에 들어 있는가.
     #[must_use]
     pub fn is_marked(&self, i: usize) -> bool {
-        self.marked.get(i).copied().unwrap_or(false)
+        self.rows()
+            .get(i)
+            .is_some_and(|r| self.marked.contains(&r.path))
     }
 
     /// 외곽 테두리 설정(두께·색·투명도 · 두께 0 = 없음).
@@ -816,7 +866,7 @@ impl Widget for TreeGrid {
             if y < top || y + rh > bottom {
                 continue;
             }
-            if i == self.selected || self.is_marked(i) {
+            if i == self.selected || self.marked.contains(&row.path) {
                 ctx.fill_rect(
                     Rect::new(b.x, y, row_w, rh),
                     if self.is_active() {
@@ -1072,6 +1122,41 @@ mod tests {
         for f in rec.fills.iter().filter(|f| f.w > 0) {
             assert!(f.x >= b.x - 1, "채우기가 컨트롤 왼쪽 밖: {f:?}");
         }
+    }
+
+    /// 키보드 ↓/PageDown/End로 선택이 뷰포트 밖으로 가면 스크롤이 따라온다(↑/Home으로 돌아오면 0) — nexa-sql 파일 창 09-22.
+    #[test]
+    fn keyboard_selection_scrolls_into_view() {
+        let nodes: Vec<TreeNode> = (0..40)
+            .map(|i| TreeNode::leaf(format!("row {i}")))
+            .collect();
+        let mut v = TreeView::new(TreeModel::new(nodes));
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 200, 100), &mut inv);
+        v.set_focused(true);
+        let key = |k: Key| InputEvent::Key {
+            key: k,
+            shift: false,
+            primary: false,
+        };
+        for _ in 0..10 {
+            v.on_event(&key(Key::Down), &mut inv);
+        }
+        assert_eq!(v.selected_row(), 10);
+        let (_, sy) = v.scroll();
+        let rh = 24;
+        assert!(
+            sy > 0 && 10 * rh + rh <= sy + 100,
+            "선택 행이 뷰포트 안: sy={sy}"
+        );
+        v.on_event(&key(Key::End), &mut inv);
+        assert_eq!(v.selected_row(), 39);
+        let (_, sy) = v.scroll();
+        assert_eq!(sy, 40 * rh - 100, "끝 = 최대 스크롤");
+        v.on_event(&key(Key::PageUp), &mut inv);
+        assert_eq!(v.selected_row(), 39 - 4);
+        v.on_event(&key(Key::Home), &mut inv);
+        assert_eq!((v.selected_row(), v.scroll().1), (0, 0));
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-22 (57차 · win)** — ★ `draw::ellipsize_middle` + `set_show_full`(Alt 전체 경로) · `MenuBar::set_max_label_width` · `ContextMenu` 라벨 축약 · nexa-dlg Ctrl+드래그 스윕 선택 · 빈 공간 러버밴드 선택.
+- **2026-09-22 (56차 · win)** — 🔧 트리 키보드 이동 스크롤 추종(`TreeControl::reveal_row` · PageUp/Down/Home/End) · nexa-dlg 선택 뒤 `reveal_row` · `TreeGrid::set_marked_paths`(강조 = 노드 경로).
 - **2026-09-22 (55차 · win)** — nexa-sql 93차 지원: `ScrollBars` 축별 깨움 · `TextBox` 가로 범위 통일·클릭 잔여 px · `TabBar` 수식키 + 묶인 탭 상단 줄(`set_group`) · `TreeGrid::set_marked` · nexa-dlg 열기 모드 다중 선택(`ConfirmMany`).
 - **2026-09-22 (54차 · win)** — nexa-font 시험의 `set_text_gdi` 경주 제거(`tests::GdiOn` — 53차 Windows CI 실패의 원인) · 걷기 캐시 + `file_type()` 3-OS 복귀(Windows 걷기 12.6 → 1.2 ms · 한 번만) · 진단 `time_font_walk` → nexa-sql journal 09-22 §14
 - **2026-09-22 (53차 · linux)** — nexa-font `find_font_by_family` 걷기 1회 캐시(`font_files`) + `file_type()` — Linux 기동 병목(nexa-sql 91차) → nexa-sql journal 09-22

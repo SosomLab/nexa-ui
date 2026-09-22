@@ -66,6 +66,9 @@ pub struct MenuBar {
     picked: Option<String>,
     /// 페인트 시 측정한 (라벨 폭들, 팝업 내용 폭들) 캐시 — 측정 전엔 추정치.
     measured: RefCell<(Vec<i32>, Vec<i32>)>,
+    /// 드롭다운 항목 라벨 폭 상한(논리 px · nexa-sql 사용자 09-22 "최근 파일 경로가 길면 가운데 …") — 넘는 라벨은
+    /// [`crate::draw::ellipsize_middle`]로 줄인다 · 전체 보기 스위치(Alt)면 상한 없이 그대로.
+    max_label_w: i32,
 }
 
 impl MenuBar {
@@ -80,10 +83,16 @@ impl MenuBar {
             hover_item: None,
             picked: None,
             measured: RefCell::new((Vec::new(), Vec::new())),
+            max_label_w: 480,
         }
     }
 
     /// 메뉴 전체 교체(i18n 언어 전환 등) — 열림 상태·측정 캐시 초기화.
+    /// 드롭다운 항목 라벨 폭 상한(논리 px · 기본 480).
+    pub fn set_max_label_width(&mut self, logical_px: i32) {
+        self.max_label_w = logical_px.max(80);
+    }
+
     pub fn set_menus(&mut self, menus: Vec<MenuDef>) {
         self.menus = menus;
         self.open = None;
@@ -344,6 +353,11 @@ impl Widget for MenuBar {
                         })
                         .max()
                         .unwrap_or(0)
+                        .min(if crate::draw::show_full() {
+                            i32::MAX
+                        } else {
+                            self.s(self.max_label_w)
+                        })
                 })
                 .collect();
         }
@@ -394,11 +408,16 @@ impl Widget for MenuBar {
                             ctx.image_scaled(fit, img, row);
                         }
                         let tx = tx + self.s(LEADING_ICON) + self.s(6);
+                        let shown = crate::draw::ellipsize_middle(
+                            ctx,
+                            &it.label,
+                            row.right() - self.s(10) - tx,
+                        );
                         ctx.text(
                             tx,
                             cy - th / 2,
                             row,
-                            &it.label,
+                            &shown,
                             if disabled { theme.text_dim } else { theme.text },
                         );
                     }

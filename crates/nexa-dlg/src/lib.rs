@@ -209,6 +209,12 @@ pub struct FilePicker {
     anchor: Option<usize>,
     /// 이름 상자에 넣어 둔 다중 선택 표기(사용자가 고치면 선택을 푼다).
     marks_text: String,
+    /// ★ Ctrl+드래그 스윕(사용자 09-22): (마지막으로 지난 행, 추가인가) — 누른 행이 토글로 선택됐으면 지나는 파일을 **추가**,
+    /// 해제됐으면 **해제**. MouseUp(어디서든)에 끝난다.
+    drag_sweep: Option<(usize, bool)>,
+    /// ★ 러버밴드(사용자 09-22 "빈 공간에서 좌클릭 드래그로 다중 선택"): (시작점, 지금 점, 시작 때의 선택 — Ctrl이면 유지·아니면 빈 것).
+    /// 밴드의 세로 범위와 겹치는 행의 파일 = 선택. MouseUp(어디서든)에 끝난다.
+    band: Option<(Point, Point, Vec<PathBuf>)>,
     filter_combo: Combo,
     hidden_chk: Checkbox,
     dot_chk: Checkbox,
@@ -355,6 +361,8 @@ impl FilePicker {
             marks: Vec::new(),
             anchor: None,
             marks_text: String::new(),
+            drag_sweep: None,
+            band: None,
             filter_combo: Combo::new(items, 0),
             hidden_chk: Checkbox::new(labels.show_hidden.clone(), false)
                 .with_label_side(LabelSide::Right),
@@ -1397,6 +1405,7 @@ impl FilePicker {
         grid.set_selected_row(select.min(n_rows.saturating_sub(1)));
         let mut inv = Invalidations::default();
         grid.set_bounds(self.grid_rect, &mut inv);
+        grid.reveal_row(grid.selected_row());
         self.grid = grid;
         self.last_row_click = None;
         if self.multi() && !self.marks.is_empty() {
@@ -1458,6 +1467,84 @@ impl FilePicker {
         self.sync_marks();
     }
 
+    /// Ctrl+드래그 — 마지막으로 지난 행에서 `row`까지의 파일을 추가/해제(폴더는 건너뜀).
+    fn sweep_to(&mut self, row: usize) {
+        let Some((last, add)) = self.drag_sweep else {
+            return;
+        };
+        if last == row {
+            return;
+        }
+        let (lo, hi) = (last.min(row), last.max(row));
+        let mut changed = false;
+        for r in lo..=hi {
+            let Some(p) = self.row_file(r) else { continue };
+            let at = self.marks.iter().position(|m| *m == p);
+            match (add, at) {
+                (true, None) => {
+                    self.marks.push(p);
+                    changed = true;
+                }
+                (false, Some(i)) => {
+                    self.marks.remove(i);
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        self.drag_sweep = Some((row, add));
+        if changed {
+            self.sync_marks();
+        }
+    }
+
+    /// 러버밴드 시작(빈 공간 좌클릭) — Ctrl이면 지금 선택을 밑바탕으로 · 아니면 선택을 비운다.
+    fn band_start(&mut self, x: i32, y: i32, keep: bool) {
+        let base = if keep { self.marks.clone() } else { Vec::new() };
+        if !keep && !self.marks.is_empty() {
+            self.marks.clear();
+            self.sync_marks();
+        }
+        self.band = Some((Point { x, y }, Point { x, y }, base));
+    }
+
+    /// 러버밴드 끌기 — 밴드 세로 범위와 겹치는 행의 파일 = 밑바탕 ∪ 그 파일들(행 순서 · 폴더 제외).
+    fn band_to(&mut self, x: i32, y: i32) {
+        let Some((o, _, base)) = self.band.clone() else {
+            return;
+        };
+        let (y0, y1) = (o.y.min(y), o.y.max(y));
+        let vp = self.grid.rows_viewport();
+        let (_, ch) = self.grid.content_size();
+        let n = self.grid.rows().len();
+        let (_, sy) = self.grid.scroll();
+        let mut marks = base;
+        if n > 0 && ch > 0 {
+            let rh = (ch / n as i32).max(1);
+            for r in 0..n {
+                let top = vp.y - sy + r as i32 * rh;
+                let bottom = top + rh;
+                if bottom <= y0 || top >= y1 || bottom <= vp.y || top >= vp.bottom() {
+                    continue;
+                }
+                if let Some(p) = self.row_file(r) {
+                    if !marks.contains(&p) {
+                        marks.push(p);
+                    }
+                }
+            }
+        }
+        self.band = Some((
+            o,
+            Point { x, y },
+            self.band.as_ref().map(|b| b.2.clone()).unwrap_or_default(),
+        ));
+        if marks != self.marks {
+            self.marks = marks;
+            self.sync_marks();
+        }
+    }
+
     /// Ctrl+A — 보이는 파일 전부(행 순서).
     fn mark_all(&mut self) {
         let n = self.grid.rows().len();
@@ -1468,14 +1555,16 @@ impl FilePicker {
     /// 선택 → 그리드 강조 · 이름 상자(`"a" "b"` · Windows 관례) · 안내 줄(개수 · 합계 크기).
     fn sync_marks(&mut self) {
         let rows = self.grid.rows();
-        let marked: Vec<bool> = rows
+        // 강조는 노드 경로로(행 인덱스 아님) — 다른 폴더를 펼쳐 행이 밀려도 그대로.
+        let marked: Vec<Vec<usize>> = rows
             .iter()
-            .map(|r| {
+            .filter(|r| {
                 Self::row_item(&r.cells, &r.label)
                     .is_some_and(|(p, is_dir)| !is_dir && self.marks.contains(&p))
             })
+            .map(|r| r.path.clone())
             .collect();
-        self.grid.set_marked(marked);
+        self.grid.set_marked_paths(marked);
         if self.marks.len() > 1 {
             let text = self
                 .marks
@@ -1537,6 +1626,7 @@ impl FilePicker {
             .position(|r| r.depth == 0 && r.label == name)
         {
             self.grid.set_selected_row(row);
+            self.grid.reveal_row(row);
         }
     }
 
@@ -2138,7 +2228,7 @@ impl FilePicker {
                 self.marks.clear();
                 self.anchor = None;
                 self.marks_text.clear();
-                self.grid.set_marked(Vec::new());
+                self.grid.set_marked_paths(Vec::new());
             }
             if matches!(self.message, Some((_, false))) {
                 self.message = None;
@@ -2192,6 +2282,12 @@ impl Widget for FilePicker {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        if matches!(ev, InputEvent::MouseUp { .. }) {
+            self.drag_sweep = None;
+            if self.band.take().is_some() {
+                inv.push(self.base.bounds);
+            }
+        }
         if let InputEvent::MouseMove { x, y }
         | InputEvent::MouseDown { x, y, .. }
         | InputEvent::MouseUp { x, y }
@@ -2551,8 +2647,14 @@ impl Widget for FilePicker {
                                     self.mark_range(row);
                                 } else if primary {
                                     self.mark_toggle(row);
+                                    // 스윕 시작 — 누른 파일이 지금 선택돼 있으면 추가 모드 · 아니면 해제 모드.
+                                    if let Some(p) = self.row_file(row) {
+                                        self.drag_sweep = Some((row, self.marks.contains(&p)));
+                                    }
                                 } else {
                                     self.mark_single(row);
+                                    // 행에서 시작하는 드래그 = 러버밴드(누른 파일을 밑바탕으로 · 클릭만 하면 단일 그대로 · 사용자 09-22).
+                                    self.band_start(x, y, true);
                                 }
                             }
                             if dbl {
@@ -2560,6 +2662,9 @@ impl Widget for FilePicker {
                                 self.activate_row(row);
                             }
                         }
+                    } else if self.multi() && !shift {
+                        // 빈 공간(행 아래 · 열 밖) 좌클릭 = 러버밴드 시작(Ctrl = 기존 선택에 추가).
+                        self.band_start(x, y, primary);
                     }
                 }
                 InputEvent::RightDown { x, y } => {
@@ -2570,6 +2675,17 @@ impl Widget for FilePicker {
                         self.menu_row = None;
                     }
                     self.open_menu(x, y);
+                }
+                InputEvent::MouseMove { x, y } if self.band.is_some() => {
+                    self.band_to(x, y);
+                    inv.push(self.base.bounds);
+                }
+                InputEvent::MouseMove { x, y } if self.drag_sweep.is_some() => {
+                    self.grid.on_event(ev, inv);
+                    if let Some((row, _)) = self.grid.row_hit(x, y) {
+                        self.sweep_to(row);
+                        self.grid.set_selected_row(row);
+                    }
                 }
                 InputEvent::SelectAll if self.multi() => self.mark_all(),
                 InputEvent::Key {
@@ -2653,6 +2769,19 @@ impl Widget for FilePicker {
         }
         self.places_view.paint(ctx, theme);
         self.grid.paint(ctx, theme);
+        if let Some((o, c, _)) = &self.band {
+            let r = Rect::new(
+                o.x.min(c.x),
+                o.y.min(c.y),
+                (o.x - c.x).abs().max(1),
+                (o.y - c.y).abs().max(1),
+            )
+            .intersection(&self.grid.bounds());
+            if !r.is_empty() {
+                ctx.fill_rect_alpha(r, theme.accent, 0.15);
+                ctx.stroke_round_rect(r, 0, theme.accent, 1.0);
+            }
+        }
         // 헤더 드래그 피드백 — 끄는 컬럼은 선택색 · 놓일 자리는 accent 세로선.
         if let Some((pos, _, x, true, _)) = self.hdr_drag {
             let cells = self.header_cells();
@@ -2954,6 +3083,7 @@ mod tests {
         for n in ["c1.sql", "c2.sql", "c3.sql"] {
             std::fs::write(d.join(n), "x").unwrap();
         }
+        std::fs::write(d.join("sub").join("z.sql"), "z").unwrap();
         let mut p = FilePicker::new(PickerMode::Open, Some(&d), Vec::new(), labels());
         settle(&mut p);
         let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
@@ -2980,13 +3110,69 @@ mod tests {
         let before = p.marks.clone();
         p.mark_toggle(dir_row);
         assert_eq!(p.marks, before);
+        // ★ 폴더를 펼쳐 행이 끼어들어도 강조는 파일을 따라간다(가시 행 인덱스가 아니라 노드 경로 · 사용자 09-22 실기).
+        let dir_path = p.grid.rows()[dir_row].path.clone();
+        p.grid.model_mut().set_expanded(&dir_path, true);
+        p.lazy_load_grid();
+        settle(&mut p);
+        let rows_now = p.grid.rows();
+        assert!(rows_now.len() > names.len(), "자식 행이 들어왔다");
+        for (i, r) in rows_now.iter().enumerate() {
+            let is_file = FilePicker::row_item(&r.cells, &r.label).is_some_and(|(_, d)| !d);
+            let in_marks = FilePicker::row_item(&r.cells, &r.label)
+                .is_some_and(|(pp, _)| before.contains(&pp));
+            assert_eq!(
+                p.grid.is_marked(i),
+                is_file && in_marks,
+                "row {i} {}",
+                r.label
+            );
+        }
+        p.grid.model_mut().set_expanded(&dir_path, false);
+        // ★ Ctrl+드래그 스윕: 누른 행이 선택돼 있으면 지나는 파일을 추가 · 해제돼 있으면 해제(사용자 09-22).
+        p.drag_sweep = Some((file_rows[0], true));
+        p.sweep_to(*file_rows.last().unwrap());
+        assert_eq!(p.marks.len(), file_rows.len(), "전부 추가");
+        p.drag_sweep = Some((file_rows[0], false));
+        p.sweep_to(file_rows[1]);
+        assert_eq!(p.marks.len(), file_rows.len() - 2, "두 행 해제");
+        let mut inv2 = Invalidations::default();
+        p.on_event(&InputEvent::MouseUp { x: 0, y: 0 }, &mut inv2);
+        assert!(p.drag_sweep.is_none(), "MouseUp = 스윕 끝");
+        // ★ 러버밴드: 빈 공간에서 끌어 세로 범위와 겹치는 행의 파일 선택 · Ctrl = 밑바탕 유지 · MouseUp = 끝.
+        p.set_bounds(Rect::new(0, 0, 640, 480), &mut inv2);
+        let vp = p.grid.rows_viewport();
+        let rh = p.grid.content_size().1 / p.grid.rows().len() as i32;
+        let y_of = |r: usize| vp.y + r as i32 * rh + rh / 2;
+        p.band_start(vp.x + 5, y_of(file_rows[0]), false);
+        assert!(p.marks.is_empty(), "수식키 없는 밴드 = 선택 비움");
+        p.band_to(vp.x + 50, y_of(file_rows[1]));
+        assert_eq!(p.marks.len(), 2, "두 행과 겹침: {:?}", p.marks);
+        p.on_event(&InputEvent::MouseUp { x: 0, y: 0 }, &mut inv2);
+        assert!(p.band.is_none());
+        p.band_start(vp.x + 5, y_of(*file_rows.last().unwrap()), true);
+        assert_eq!(p.marks.len(), 2, "Ctrl 밴드 = 기존 유지");
+        p.band_to(vp.x + 5, y_of(*file_rows.last().unwrap()) + 1);
+        assert_eq!(p.marks.len(), 3);
+        p.on_event(&InputEvent::MouseUp { x: 0, y: 0 }, &mut inv2);
+        // 행에서 시작한 일반 드래그: 누른 파일 + 지나는 행(밑바탕 = 그 파일 하나).
+        p.mark_single(file_rows[0]);
+        p.band_start(vp.x + 5, y_of(file_rows[0]), true);
+        assert_eq!(p.marks.len(), 1, "클릭만 = 단일");
+        p.band_to(vp.x + 5, y_of(file_rows[2]));
+        assert_eq!(p.marks.len(), 3, "행에서 끌어 세 파일: {:?}", p.marks);
+        p.band_to(vp.x + 5, y_of(file_rows[0]));
+        assert_eq!(p.marks.len(), 1, "되돌리면 밑바탕만");
+        p.on_event(&InputEvent::MouseUp { x: 0, y: 0 }, &mut inv2);
+        p.marks = before.clone();
+        p.sync_marks();
         // 확정 = 통째로(고른 순서).
         p.confirm();
         assert_eq!(p.take_action(), PickerAction::ConfirmMany(before));
         // 이름 상자를 고치면 단일로.
         p.name_box.set_text("c1.sql");
         p.marks.clear();
-        p.grid.set_marked(Vec::new());
+        p.grid.set_marked_paths(Vec::new());
         p.confirm();
         assert_eq!(p.take_action(), PickerAction::Confirm(d.join("c1.sql")));
         // Ctrl+A = 보이는 파일 전부 · 폴더 이동 = 해제.

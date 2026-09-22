@@ -862,10 +862,15 @@ impl ContextMenu {
                     x += icon_col;
                     // 세로 정확히 가운데 — 글자 높이를 재서 놓는다(눈대중 상수 금지 · 08-09).
                     let ty = ctx.text_center_y(y, h);
-                    ctx.text(x, ty, row, label, fg);
-                    // 단축키 — 오른쪽 정렬 · 흐리게(hover면 본문색).
                     let right =
                         r.right() - self.s(PAD_H) - if arrows { self.s(ARROW_W) } else { 0 };
+                    // 긴 라벨(경로)은 가운데 … — 단축키 자리를 남기고(Alt = 전체 · 사용자 09-22).
+                    let sc_room = shortcut
+                        .as_deref()
+                        .map_or(0, |sc| ctx.text_width(sc) + self.s(PAD_H));
+                    let shown = crate::draw::ellipsize_middle(ctx, label, right - sc_room - x);
+                    ctx.text(x, ty, row, &shown, fg);
+                    // 단축키 — 오른쪽 정렬 · 흐리게(hover면 본문색).
                     if let Some(sc) = shortcut {
                         let w = ctx.text_width(sc);
                         let scfg = if hot { fg } else { theme.text_dim };

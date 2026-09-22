@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+## 2026-09-22 (57차 · win) — ★ `draw::ellipsize_middle`(가운데 … · 접두사 폭 표 · 앞 ≈ 뒤) + 전역 `set_show_full/show_full`(Alt = 전체 경로) · `MenuBar::set_max_label_width`(항목 폭 상한 · 전체 보기면 해제) · `ContextMenu` 라벨 축약(단축키 자리 유지) · nexa-dlg **Ctrl+드래그 스윕 선택**(`drag_sweep`/`sweep_to` · MouseUp 어디서든 종료) · **러버밴드**(빈 공간 + 파일 행에서 시작 · `band_start`/`band_to` · 반투명 사각형 · Ctrl = 유지). → nexa-sql journal 09-22 §38~40.
+
+## 2026-09-22 (56차 · win) — 🔧 `TreeControl::move_selection`이 선택만 옮기고 스크롤을 따라가지 않던 결함(nexa-sql 파일 창 실기) → `reveal_row(i)`(뷰포트 안으로 · 배치 전 무시) · `tree_event` PageUp/PageDown(`page_rows`)/Home/End · nexa-dlg `select_name`·`refresh_grid` 뒤 `reveal_row` · 테스트 `keyboard_selection_scrolls_into_view` · 🔧 `TreeGrid` 다중 선택 강조 열쇠 = 노드 경로(`set_marked_paths` · 가시 행 인덱스는 폴더 펼침에 밀렸다). → nexa-sql journal 09-22 §36~37.
+
 ## 2026-09-22 (55차 · win) — nexa-sql 93차 지원: `ScrollBars` 가장자리 접근 = 그 축만 깨움 · `TextBox` 가로 범위 통일(`ml_bars_w`) + 클릭 시 잔여 px 유지 · `TabBar` 클릭 수식키(`last_click_mods`) + **묶인 탭 상단 줄**(`set_group`/`is_grouped` · 동시 편집) · `TreeGrid` **다중 선택 표시**(`set_marked`/`is_marked`) · nexa-dlg **열기 모드 다중 선택**(`marks` 고른 순서 · Ctrl 토글 · Shift 범위 · Space · Ctrl+A · 이름 상자 `"a" "b"` · `labels.multi_selected` · `PickerAction::ConfirmMany` · 테스트 `open_mode_multi_select_rules`). → nexa-sql journal 09-22 §22~§30.
 
 ## 2026-09-22 (54차 · win) — 🔧 53차 CI windows-latest `test` 실패의 **진짜 원인 = 시험끼리의 `set_text_gdi` 경주**(프로세스 전역 스위치를 `gdi_path_gives_integer_advances`가 끄는 순간 `gdi_cleartype_stems_bold_and_advances`가 ab_glyph 경로로 떨어져 볼드가 무시됨 = "볼드 잉크 27.7 ≤ 보통 27.7" · `gh run view --log-failed`로 확인 · `file_type()`은 걷기를 빠르게 해 타이밍을 드러냈을 뿐) → 시험 가드 `tests::GdiOn`(뮤텍스 + Drop에서 끔 · 패닉 안전) · **걷기 캐시 + `file_type()`을 3-OS 한 길로 복귀**(`#[cfg(windows)]` 분기 둘 제거) · 실측(Release · 폰트 701개): 걷기 1회 12.6 → 1.2 ms(종전은 가족 탐색마다 되풀이) · 진단 시험 `time_font_walk`(ignored). 테스트 360 · clippy 0 · check-3os ✓ · nexa-font 60회 반복 0 실패 · **CI e5433cb = 3-OS ✓(windows-latest 포함 — 원인 확인)**. → nexa-sql [journal 09-22 §14](../../nexa-sql/docs/journal/2026-09-22.md)

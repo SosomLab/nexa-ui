@@ -9,6 +9,7 @@
 
 use crate::geom::Rect;
 use crate::theme::Color;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 폰트 슬롯 — 위젯이 페인트 시작에 자신의 슬롯을 선택한다(상태 공유 · 순서 무관 보장).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -288,6 +289,74 @@ pub fn draw_tooltip_in(
     }
 }
 
+/// ★ **전체 경로 보기 스위치**(nexa-sql 사용자 09-22 "긴 경로는 가운데 …로 축약 · Alt를 누르는 동안 전체 경로"): 호스트가
+/// 수식키 사건에서 켜고 끈다(프로세스 전역 · 어느 창이든). 켜져 있으면 [`ellipsize_middle`]이 축약하지 않는다.
+static SHOW_FULL: AtomicBool = AtomicBool::new(false);
+
+/// 전체 경로 보기를 켜거나 끈다 — **바뀌었으면 true**(호스트가 다시 그린다).
+pub fn set_show_full(on: bool) -> bool {
+    SHOW_FULL.swap(on, Ordering::Relaxed) != on
+}
+
+/// 지금 전체 경로 보기인가.
+#[must_use]
+pub fn show_full() -> bool {
+    SHOW_FULL.load(Ordering::Relaxed)
+}
+
+/// 글이 `max_w`보다 넓으면 **가운데를 `…`로 줄여** 맞춘다(앞·뒤를 번갈아 늘려 앞 ≈ 뒤 · 경로·긴 라벨 공통 · 폭은 지금 글꼴로 실측).
+/// [`show_full`]이면 그대로 돌려준다. `max_w`가 `…` 하나도 못 넣으면 `…`.
+pub fn ellipsize_middle(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> String {
+    if show_full() || text.is_empty() {
+        return text.to_string();
+    }
+    let mut pw = Vec::new();
+    ctx.text_prefix_widths(text, &mut pw);
+    let n = pw.len().saturating_sub(1);
+    if n == 0 || pw[n] <= max_w {
+        return text.to_string();
+    }
+    let ell = ctx.text_width("…");
+    let budget = max_w - ell;
+    if budget <= 0 {
+        return "…".to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut head, mut tail) = (0usize, 0usize);
+    // 앞·뒤를 번갈아 한 글자씩 늘리되 합이 예산을 넘기 직전에 멈춘다(앞이 뒤보다 한 글자 많을 수 있다).
+    loop {
+        if head + tail >= n {
+            break;
+        }
+        let try_head = head <= tail;
+        let (h2, t2) = if try_head {
+            (head + 1, tail)
+        } else {
+            (head, tail + 1)
+        };
+        let w = pw[h2] + (pw[n] - pw[n - t2]);
+        if w > budget {
+            // 이쪽은 더 못 늘린다 — 다른 쪽을 한 번 더 시도한 뒤 끝.
+            let (h3, t3) = if try_head {
+                (head, tail + 1)
+            } else {
+                (head + 1, tail)
+            };
+            if h3 + t3 <= n && pw[h3] + (pw[n] - pw[n - t3]) <= budget {
+                head = h3;
+                tail = t3;
+            }
+            break;
+        }
+        head = h2;
+        tail = t2;
+    }
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(chars[n - tail..].iter());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +373,29 @@ mod tests {
             let n = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
             n * n * 3
         }
+    }
+
+    /// 가운데 축약: 넓으면 앞…뒤(예산 안 · 앞 ≈ 뒤) · 맞으면 그대로 · 전체 보기 스위치면 그대로 · 아주 좁으면 `…`만.
+    #[test]
+    fn ellipsize_middle_fits_and_respects_switch() {
+        let mut ctx = Quirky; // 폭 = 글자수²×3 — 비선형이라 접두사 폭 표로만 맞출 수 있다.
+        let text = "abcdefghij"; // 폭 300
+        assert_eq!(ellipsize_middle(&mut ctx, text, 300), text);
+        let e = ellipsize_middle(&mut ctx, text, 100); // 예산 100 − '…'(3) = 97 → head²·3 + tail²·3 ≤ 97
+        assert!(
+            e.contains('…') && e.starts_with('a') && e.ends_with('j'),
+            "{e}"
+        );
+        assert!(ctx.text_width(&e) <= 100, "{e} 폭 {}", ctx.text_width(&e));
+        assert_eq!(ellipsize_middle(&mut ctx, text, 2), "…");
+        assert!(set_show_full(true));
+        assert_eq!(
+            ellipsize_middle(&mut ctx, text, 10),
+            text,
+            "전체 보기 = 축약 없음"
+        );
+        assert!(set_show_full(false));
+        assert!(!set_show_full(false), "같은 값 = 안 바뀜");
     }
 
     /// 계약(08-14): `out[i]` == `text_width(접두사 i)` · `out[0]` == 0 · 길이 = 문자수+1.
