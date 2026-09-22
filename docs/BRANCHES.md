@@ -4,7 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
-| feat/win-63-tab-color-accessor | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 63차(win): `TabBar::tab_color(i)` 접근자(호스트 시험용 — nexa-sql 묶인 탭 유형 색 시험) |
+| feat/win-63-tab-color-accessor | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 63차(win): `TabBar::tab_color(i)` 접근자(호스트 시험용 — nexa-sql 묶인 탭 유형 색 시험) · push `a6d8f50` ci ✓ |
 | feat/win-62-tabbar-tree-filter | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 62차(win): `fallback_file_icon` · `TreeGrid` 선택 없음/캐럿 테두리 · nexa-dlg 빈 곳 클릭 해제 · `TextBox` 미니맵 표식·줄 끝 라벨 · `TabBar::set_tab_colors` |
 | feat/win-61-soft-undo | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 61차(win): `EditState` 선택 되돌리기(Sublime soft undo/redo · `SoftStep` · `note_sel` · `key()` 이동 · Shift 합침) · `TextBox::soft_undo/soft_redo` · 다중 캐럿 ←/→ 접기 · ★ `max_regions` 다중 선택 상한(전 입구) · `selected_bytes` 공개 · nexa-dlg `set_multi`(용도별 단일 선택) · `TextBox::set_gutter_labels` · 🔧 다중 캐럿 세로 추종 유지 · 테스트 322 |
 | feat/win-58-60-default-item-outside-click-submenu | 2026-09-22 | 2026-09-22 → main(삭제) | 1 | 58~60차(win): `ContextMenu::set_default` · `TreeGrid::set_caret_outline` · nexa-dlg Enter=ConfirmMany · `TextBox::set_popup_deferred` · `MenuBar::dismiss` · 하위 메뉴 비활성 행 닫힘 · ★ `ContextMenu::is_outside_click` · `skip_next_occurrence`/`remove_region` · ★ 풀다운 하위 메뉴 `MenuEntry::Sub` |
