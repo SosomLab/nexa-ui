@@ -262,8 +262,20 @@ impl ScrollBars {
                     let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                     return (ox, oy, true);
                 }
+                // ★ 가장자리 접근 = 그 축의 바를 드러낸다(모듈 머리의 "바 근처 접근" — 09-22까지 빠져 있어 가로 휠·Shift+휠이
+                //   없는 환경에서는 가로 막대를 볼 수도 끌 수도 없었다 · nexa-sql 사용자 "편집기 가로 스크롤이 동작하지 않는다").
+                //   축은 따로(09-14 규칙): 아래 띠 = 가로만 · 오른쪽 띠 = 세로만 · 그 축이 필요할 때만.
+                if vp.contains(p) {
+                    let edge = thick + sc(MARGIN, scale);
+                    if Self::h_needed(vp, content_w) && y >= vp.bottom() - edge {
+                        self.wake(Axis::H);
+                    }
+                    if Self::v_needed(vp, content_h) && x >= vp.right() - edge {
+                        self.wake(Axis::V);
+                    }
+                }
                 // 호버 판정(썸 위 = 2단계 두껍게). **그 축의** 바가 보일 때만 판정한다
-                // (0단계에선 접근으로 다시 뜨지 않는다 — 스크롤로만 깨어난다).
+                // (0단계에선 바 위가 아닌 접근으로는 뜨지 않는다 — 스크롤 또는 위의 가장자리 접근으로만).
                 let was_hover = self.hover;
                 self.hover = None;
                 if self.is_active(Axis::V) {
@@ -449,6 +461,92 @@ mod tests {
             1.0,
         );
         assert!(up);
+    }
+
+    /// 가장자리 접근: 아래 띠에 오면 가로 막대만, 오른쪽 띠에 오면 세로 막대만 깨어난다 · 그 축이 필요 없으면(내용이 들어가면) 안 깨어난다 ·
+    /// 가운데 이동은 아무것도 깨우지 않는다(09-22 가로 스크롤 결함).
+    #[test]
+    fn approaching_an_edge_reveals_that_axis_only() {
+        let vp = Rect::new(0, 0, 200, 100);
+        let mut b = ScrollBars::new();
+        b.on_event(
+            &InputEvent::MouseMove { x: 100, y: 50 },
+            vp,
+            800,
+            400,
+            0,
+            0,
+            1.0,
+        );
+        assert!(!b.is_visible(), "가운데 이동은 깨우지 않는다");
+        b.on_event(
+            &InputEvent::MouseMove { x: 100, y: 96 },
+            vp,
+            800,
+            400,
+            0,
+            0,
+            1.0,
+        );
+        assert!(
+            b.is_active(Axis::H) && !b.is_active(Axis::V),
+            "아래 띠 = 가로만"
+        );
+        let mut c = ScrollBars::new();
+        c.on_event(
+            &InputEvent::MouseMove { x: 196, y: 50 },
+            vp,
+            800,
+            400,
+            0,
+            0,
+            1.0,
+        );
+        assert!(
+            c.is_active(Axis::V) && !c.is_active(Axis::H),
+            "오른쪽 띠 = 세로만"
+        );
+        let mut d = ScrollBars::new();
+        d.on_event(
+            &InputEvent::MouseMove { x: 100, y: 96 },
+            vp,
+            150,
+            400,
+            0,
+            0,
+            1.0,
+        );
+        assert!(!d.is_active(Axis::H), "가로가 필요 없으면 안 깨어난다");
+        // 드러난 가로 막대는 썸을 잡아 끌 수 있다(가로 휠 없이도 가로 스크롤).
+        let t = ScrollBars::h_thumb_for_test(vp, 800, 0, 1.0).expect("썸");
+        let (ox, _, consumed) = b.on_event(
+            &InputEvent::MouseDown {
+                x: t.x + 2,
+                y: t.y + 2,
+                shift: false,
+                primary: true,
+            },
+            vp,
+            800,
+            400,
+            0,
+            0,
+            1.0,
+        );
+        assert!(consumed && ox == 0);
+        let (ox, _, _) = b.on_event(
+            &InputEvent::MouseMove {
+                x: t.x + 52,
+                y: t.y + 2,
+            },
+            vp,
+            800,
+            400,
+            0,
+            0,
+            1.0,
+        );
+        assert!(ox > 0, "끌면 오프셋이 는다: {ox}");
     }
 
     #[test]

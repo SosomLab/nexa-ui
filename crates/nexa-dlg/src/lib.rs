@@ -130,6 +130,8 @@ pub struct PickerLabels {
     pub menu_copy_name: String,
     /// 우클릭 메뉴 — 새로 고침.
     pub menu_refresh: String,
+    /// 다중 선택 안내(`{0}` = 파일 수 · `{1}` = 합계 크기).
+    pub multi_selected: String,
 }
 
 /// 선택기 결과(1회성 · [`FilePicker::take_action`]).
@@ -139,6 +141,8 @@ pub enum PickerAction {
     None,
     /// 확정(열기·저장 경로).
     Confirm(PathBuf),
+    /// ★ 열기 모드 다중 확정(고른 순서 · 파일만 · nexa-sql 사용자 09-22).
+    ConfirmMany(Vec<PathBuf>),
     /// 취소.
     Cancel,
     /// 클립보드에 쓸 텍스트(경로/이름 복사 — 클립보드는 호스트 몫).
@@ -198,6 +202,13 @@ pub struct FilePicker {
     places_view: TreeView,
     grid: TreeGrid,
     name_box: TextBox,
+    /// ★ **다중 선택**(열기 모드만 · nexa-sql 사용자 09-22 · nexa-dir2 규약): **고른 순서**의 파일 경로(폴더는 들어가지 않는다).
+    /// 클릭 = 단일 · Ctrl(⌘)+클릭/Space = 토글 · Shift+클릭/Shift+방향키 = 기준 행~여기 범위 · Ctrl+A = 보이는 파일 전부.
+    marks: Vec<PathBuf>,
+    /// Shift 범위의 기준 행(가시 행 인덱스).
+    anchor: Option<usize>,
+    /// 이름 상자에 넣어 둔 다중 선택 표기(사용자가 고치면 선택을 푼다).
+    marks_text: String,
     filter_combo: Combo,
     hidden_chk: Checkbox,
     dot_chk: Checkbox,
@@ -341,6 +352,9 @@ impl FilePicker {
             places_view: TreeView::new(TreeModel::new(Vec::new())),
             grid: TreeGrid::new(TreeModel::new(Vec::new()), Vec::new()),
             name_box: TextBox::new(String::new()),
+            marks: Vec::new(),
+            anchor: None,
+            marks_text: String::new(),
             filter_combo: Combo::new(items, 0),
             hidden_chk: Checkbox::new(labels.show_hidden.clone(), false)
                 .with_label_side(LabelSide::Right),
@@ -913,6 +927,9 @@ impl FilePicker {
 
     /// 폴더 이동(읽기 실패 = 메시지 · 현재 폴더 유지).
     fn go(&mut self, dir: &Path) {
+        self.marks.clear();
+        self.anchor = None;
+        self.marks_text.clear();
         if self.go_no_history(dir) {
             self.history.push(self.dir.clone());
             self.sync_nav_buttons();
@@ -1382,6 +1399,127 @@ impl FilePicker {
         grid.set_bounds(self.grid_rect, &mut inv);
         self.grid = grid;
         self.last_row_click = None;
+        if self.multi() && !self.marks.is_empty() {
+            self.sync_marks();
+        }
+    }
+
+    // ───────────────────────── 다중 선택(열기 모드 · 09-22) ──────────────────
+
+    /// 다중 선택을 쓰는 모드인가(열기만 · 저장·폴더 = 단일).
+    fn multi(&self) -> bool {
+        self.mode == PickerMode::Open
+    }
+
+    /// 가시 행 → 파일 경로(폴더·자리표시는 None).
+    fn row_file(&self, row: usize) -> Option<PathBuf> {
+        let rows = self.grid.rows();
+        let r = rows.get(row)?;
+        match Self::row_item(&r.cells, &r.label) {
+            Some((p, false)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// 고른 파일들(고른 순서).
+    #[must_use]
+    pub fn marked_files(&self) -> &[PathBuf] {
+        &self.marks
+    }
+
+    /// 단일 선택(기존 해제 · 기준 행 갱신) — 폴더면 빈 선택.
+    fn mark_single(&mut self, row: usize) {
+        self.marks = self.row_file(row).into_iter().collect();
+        self.anchor = Some(row);
+        self.sync_marks();
+    }
+
+    /// Ctrl — 토글(폴더는 기준 행만 옮긴다).
+    fn mark_toggle(&mut self, row: usize) {
+        if let Some(p) = self.row_file(row) {
+            if let Some(i) = self.marks.iter().position(|m| *m == p) {
+                self.marks.remove(i);
+            } else {
+                self.marks.push(p);
+            }
+        }
+        self.anchor = Some(row);
+        self.sync_marks();
+    }
+
+    /// Shift — 기준 행~`row`의 가시 파일 전부(행 순서 · 기준 행은 그대로).
+    fn mark_range(&mut self, row: usize) {
+        let a = self.anchor.unwrap_or(row);
+        let (lo, hi) = (a.min(row), a.max(row));
+        self.marks = (lo..=hi).filter_map(|r| self.row_file(r)).collect();
+        if self.anchor.is_none() {
+            self.anchor = Some(row);
+        }
+        self.sync_marks();
+    }
+
+    /// Ctrl+A — 보이는 파일 전부(행 순서).
+    fn mark_all(&mut self) {
+        let n = self.grid.rows().len();
+        self.marks = (0..n).filter_map(|r| self.row_file(r)).collect();
+        self.sync_marks();
+    }
+
+    /// 선택 → 그리드 강조 · 이름 상자(`"a" "b"` · Windows 관례) · 안내 줄(개수 · 합계 크기).
+    fn sync_marks(&mut self) {
+        let rows = self.grid.rows();
+        let marked: Vec<bool> = rows
+            .iter()
+            .map(|r| {
+                Self::row_item(&r.cells, &r.label)
+                    .is_some_and(|(p, is_dir)| !is_dir && self.marks.contains(&p))
+            })
+            .collect();
+        self.grid.set_marked(marked);
+        if self.marks.len() > 1 {
+            let text = self
+                .marks
+                .iter()
+                .map(|p| {
+                    format!(
+                        "\"{}\"",
+                        p.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.name_box.set_text(&text);
+            self.marks_text = text;
+            let total: u64 = self
+                .marks
+                .iter()
+                .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+                .sum();
+            self.message = Some((
+                self.labels
+                    .multi_selected
+                    .replace("{0}", &self.marks.len().to_string())
+                    .replace("{1}", &nexa_fs::fmt_size(total)),
+                false,
+            ));
+        } else {
+            if !self.marks_text.is_empty() && self.name_box.text() == self.marks_text {
+                // 다중 표기가 남아 있으면 단일 이름(또는 빈 칸)으로 되돌린다.
+                let one = self
+                    .marks
+                    .first()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.name_box.set_text(&one);
+            }
+            self.marks_text.clear();
+            if matches!(self.message, Some((_, false))) {
+                self.message = None;
+            }
+        }
     }
 
     /// 선택 행 → (경로, 폴더?).
@@ -1488,6 +1626,11 @@ impl FilePicker {
 
     /// 확정 — 파일명 상자 → 경로. 저장은 덮어쓰기 2단 확인 · 확장자 자동 부여 · 이름 검증.
     fn confirm(&mut self) {
+        // ★ 다중 선택(열기 모드): 이름 상자가 다중 표기 그대로면 고른 순서대로 통째로 확정.
+        if self.multi() && self.marks.len() > 1 && self.name_box.text() == self.marks_text {
+            self.action = PickerAction::ConfirmMany(self.marks.clone());
+            return;
+        }
         let mut name = self.name_box.text().trim().to_string();
         if name.is_empty() {
             if let Some((path, is_dir)) = self.selected_item() {
@@ -1989,8 +2132,14 @@ impl FilePicker {
             self.confirm();
         }
         if self.name_box.take_changed().is_some() {
-            // 이름을 고치면 덮어쓰기 확인은 무효.
+            // 이름을 고치면 덮어쓰기 확인은 무효 · 다중 선택 표기를 고쳤으면 선택도 푼다.
             self.pending_overwrite = None;
+            if self.marks.len() > 1 && self.name_box.text() != self.marks_text {
+                self.marks.clear();
+                self.anchor = None;
+                self.marks_text.clear();
+                self.grid.set_marked(Vec::new());
+            }
             if matches!(self.message, Some((_, false))) {
                 self.message = None;
             }
@@ -2356,7 +2505,12 @@ impl Widget for FilePicker {
                     self.activate_row(row);
                 }
                 InputEvent::Char { c: '\u{8}', .. } => self.go_up(),
-                InputEvent::MouseDown { x, y, .. } => {
+                InputEvent::MouseDown {
+                    x,
+                    y,
+                    shift,
+                    primary,
+                } => {
                     let hit = self.grid.row_hit(x, y);
                     self.grid.on_event(ev, inv);
                     self.lazy_load_grid();
@@ -2391,6 +2545,16 @@ impl Widget for FilePicker {
                                     self.pending_overwrite = None;
                                 }
                             }
+                            // ★ 다중 선택(열기 모드): 클릭 = 단일 · Ctrl = 토글 · Shift = 범위(dir2 규약).
+                            if self.multi() {
+                                if shift {
+                                    self.mark_range(row);
+                                } else if primary {
+                                    self.mark_toggle(row);
+                                } else {
+                                    self.mark_single(row);
+                                }
+                            }
                             if dbl {
                                 self.last_row_click = None;
                                 self.activate_row(row);
@@ -2406,6 +2570,35 @@ impl Widget for FilePicker {
                         self.menu_row = None;
                     }
                     self.open_menu(x, y);
+                }
+                InputEvent::SelectAll if self.multi() => self.mark_all(),
+                InputEvent::Key {
+                    key: Key::Space, ..
+                } if self.multi() && self.row_file(self.grid.selected_row()).is_some() => {
+                    // 파일 행의 Space = 선택 토글(폴더 행은 그리드의 펼침/접힘 그대로).
+                    let row = self.grid.selected_row();
+                    self.mark_toggle(row);
+                }
+                InputEvent::Key {
+                    key,
+                    shift,
+                    primary,
+                } if self.multi()
+                    && matches!(
+                        key,
+                        Key::Up | Key::Down | Key::PageUp | Key::PageDown | Key::Home | Key::End
+                    ) =>
+                {
+                    self.grid.on_event(ev, inv);
+                    self.lazy_load_grid();
+                    let row = self.grid.selected_row();
+                    if shift {
+                        self.mark_range(row);
+                    } else if primary {
+                        // Ctrl+방향키 = 캐럿만(선택 유지 · 탐색기 규약).
+                    } else {
+                        self.mark_single(row);
+                    }
                 }
                 _ => {
                     self.grid.on_event(ev, inv);
@@ -2750,6 +2943,61 @@ mod tests {
         settle(&mut p);
         let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
         assert_eq!(names, vec!["deep"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 다중 선택(열기 모드 · 09-22): 단일 → Shift 범위 → Ctrl 토글 → 폴더 제외 → 확정 = 고른 순서 · 저장 모드는 단일.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn open_mode_multi_select_rules() {
+        let d = temp_dir("multi");
+        for n in ["c1.sql", "c2.sql", "c3.sql"] {
+            std::fs::write(d.join(n), "x").unwrap();
+        }
+        let mut p = FilePicker::new(PickerMode::Open, Some(&d), Vec::new(), labels());
+        settle(&mut p);
+        let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
+        let file_rows: Vec<usize> = (0..names.len())
+            .filter(|&r| p.row_file(r).is_some())
+            .collect();
+        let dir_row = (0..names.len()).find(|&r| p.row_file(r).is_none()).unwrap();
+        assert!(file_rows.len() >= 3, "{names:?}");
+        // 단일.
+        p.mark_single(file_rows[0]);
+        assert_eq!(p.marks.len(), 1);
+        assert!(p.grid.is_marked(file_rows[0]));
+        // Shift 범위(폴더 행이 사이에 있어도 파일만).
+        p.mark_range(*file_rows.last().unwrap());
+        assert_eq!(p.marks.len(), file_rows.len());
+        assert!(!p.grid.is_marked(dir_row));
+        assert!(p.name_box.text().starts_with('"'));
+        assert!(matches!(p.message, Some((_, false))));
+        // Ctrl 토글 = 빼기 · 고른 순서 유지.
+        p.mark_toggle(file_rows[1]);
+        assert_eq!(p.marks.len(), file_rows.len() - 1);
+        assert_eq!(p.marks[0], p.row_file(file_rows[0]).unwrap());
+        // 폴더 토글 = 선택 변화 없음.
+        let before = p.marks.clone();
+        p.mark_toggle(dir_row);
+        assert_eq!(p.marks, before);
+        // 확정 = 통째로(고른 순서).
+        p.confirm();
+        assert_eq!(p.take_action(), PickerAction::ConfirmMany(before));
+        // 이름 상자를 고치면 단일로.
+        p.name_box.set_text("c1.sql");
+        p.marks.clear();
+        p.grid.set_marked(Vec::new());
+        p.confirm();
+        assert_eq!(p.take_action(), PickerAction::Confirm(d.join("c1.sql")));
+        // Ctrl+A = 보이는 파일 전부 · 폴더 이동 = 해제.
+        p.mark_all();
+        assert_eq!(p.marks.len(), file_rows.len());
+        p.go(&d.join("sub"));
+        assert!(p.marks.is_empty());
+        // 저장 모드는 다중을 쓰지 않는다.
+        let mut sv = FilePicker::new(PickerMode::Save, Some(&d), Vec::new(), labels());
+        settle(&mut sv);
+        assert!(!sv.multi());
         let _ = std::fs::remove_dir_all(&d);
     }
 

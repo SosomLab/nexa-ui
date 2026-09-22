@@ -639,6 +639,8 @@ pub struct TreeGrid {
     hover: HoverFade,
     /// 선택·hover·클릭을 **열 합 폭까지만**(그 밖은 빈 공간 · 파일 대화상자 · 사용자 09-15).
     fit_columns: bool,
+    /// ★ **표시된 행**(다중 선택 · nexa-dlg 열기 모드 · 09-22): 선택 행이 아니어도 선택 배경을 칠한다. 인덱스 정렬 · 부족분 = false.
+    marked: Vec<bool>,
 }
 
 impl TreeGrid {
@@ -661,7 +663,19 @@ impl TreeGrid {
             border: BorderSpec::default(),
             hover: HoverFade::default(),
             fit_columns: false,
+            marked: Vec::new(),
         }
+    }
+
+    /// 다중 선택 표시(행마다 · 가시 행 인덱스 기준 · 빈 목록 = 없음).
+    pub fn set_marked(&mut self, marked: Vec<bool>) {
+        self.marked = marked;
+    }
+
+    /// 행 `i`가 다중 선택에 들어 있는가.
+    #[must_use]
+    pub fn is_marked(&self, i: usize) -> bool {
+        self.marked.get(i).copied().unwrap_or(false)
     }
 
     /// 외곽 테두리 설정(두께·색·투명도 · 두께 0 = 없음).
@@ -802,7 +816,7 @@ impl Widget for TreeGrid {
             if y < top || y + rh > bottom {
                 continue;
             }
-            if i == self.selected {
+            if i == self.selected || self.is_marked(i) {
                 ctx.fill_rect(
                     Rect::new(b.x, y, row_w, rh),
                     if self.is_active() {

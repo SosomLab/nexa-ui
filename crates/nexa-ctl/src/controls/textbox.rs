@@ -402,6 +402,9 @@ pub struct TextBox {
     /// 멀티라인 콘텐츠 크기 (content_w, content_h) px — paint가 실측해 캐시하고
     /// on_event(폰트 못 재는 경로)가 스크롤바 계산에 쓴다.
     ml_content: std::cell::Cell<(i32, i32)>,
+    /// 스크롤바에 넘기는 가로 내용 폭 = `max_hs + 뷰포트 폭` — paint가 한 번 정하고 on_event가 **같은 값**을 쓴다(09-22: 두 곳이 다른
+    /// 공식이라 휠은 거터 폭만큼 끝에 못 미치고 썸 범위는 줄 끝 너머 빈 곳까지였다).
+    ml_bars_w: std::cell::Cell<i32>,
     /// 단일행 가로 범위(총 px, 가용 px) — paint가 캐시 · 휠 가로 스크롤 클램프(nexa-sql 사용자 09-17).
     sl_range: std::cell::Cell<(i32, i32)>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
@@ -780,6 +783,7 @@ impl TextBox {
             gutter_px: std::cell::Cell::new(0),
             ml_bars: super::ScrollBars::new(),
             ml_content: std::cell::Cell::new((0, 0)),
+            ml_bars_w: std::cell::Cell::new(0),
             sl_range: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
             goal_x: None,
@@ -3114,15 +3118,19 @@ impl TextBox {
         let rows = (((b.h - self.s(12)) / lh).max(1)) as usize;
         let max_top = n_rows.saturating_sub(rows);
         let mut top = self.vscroll.get();
+        // 캐럿 추종이 **실제로** 첫 줄을 옮겼는가 — 옮기지 않았으면(캐럿이 이미 보임 · 클릭으로 캐럿만 옮긴 경우) 화면은 그대로다.
+        let mut followed = false;
         if self.ml_user_scrolled {
             top = top.min(max_top);
         } else {
+            let t0 = top;
             if caret_line < top {
                 top = caret_line;
             } else if caret_line >= top + rows {
                 top = caret_line + 1 - rows;
             }
             top = top.min(n_rows.saturating_sub(1));
+            followed = top != t0;
         }
         self.vscroll.set(top);
 
@@ -3149,6 +3157,8 @@ impl TextBox {
         } else {
             (content_w - avail).max(0)
         };
+        // 스크롤바 범위 = 정확히 `max_hs`(뷰포트 폭을 더한 내용 폭) — on_event·paint가 이 값 하나를 쓴다.
+        self.ml_bars_w.set(max_hs + b.w);
         let mut hs = self.mhscroll.get();
         if self.ml_user_scrolled {
             // 사용자 스크롤(바/휠) — 캐럿 안 따라감. 콘텐츠 범위로만 클램프.
@@ -3271,7 +3281,9 @@ impl TextBox {
         // ★ 픽셀 스크롤(nexa-sql 사용자 09-16): 휠 잔여 px(`ml_wheel_rem`)만큼 행을 위로 밀어 그린다 — 줄 단위 반올림은
         //   위/아래 반응이 비대칭이었다(내림이면 위로는 1px에 한 줄, 아래로는 한 줄 높이를 채워야). 캐럿 추종 중이거나
         //   맨 아래면 잔여를 버린다. 밀린 만큼 아래에 한 행을 더 그리고, 채움·캐럿·텍스트는 본문 영역으로 세로 클립.
-        let rem = if self.ml_user_scrolled && top < max_top {
+        // ★ 잔여 px는 캐럿 추종이 첫 줄을 **옮겼을 때만** 버린다(09-22 nexa-sql 사용자: 휠로 부분 줄이 위에 걸린 채 빈 줄을 클릭하면 캐럿만
+        //   옮겨야 하는데 화면이 줄 경계로 튀고, 클릭마다 왔다갔다 흔들렸다 — 클릭이 `ml_user_scrolled`를 끄면 잔여를 버리던 것).
+        let rem = if top < max_top && (self.ml_user_scrolled || !followed) {
             self.ml_wheel_rem.get().clamp(0, lh - 1)
         } else {
             self.ml_wheel_rem.set(0);
@@ -3790,14 +3802,12 @@ impl TextBox {
         } else {
             self.minimap_cache.replace(None);
         }
-        // 스크롤바 오버레이(08-18 · 대화 입력창과 동일) — 상하+좌우 · 자동 숨김.
-        // content_w에 좌우 여백 s(20)을 더해 스크롤 범위를 max_hs와 맞춘다(끝 글자
-        // 가림 수정 · on_event와 같은 값).
+        // 스크롤바 오버레이(08-18 · 대화 입력창과 동일) — 상하+좌우 · 자동 숨김. 가로 범위 = `ml_bars_w`(= max_hs + b.w · on_event와 같은 값).
         self.ml_bars.paint(
             ctx,
             theme,
             b,
-            (content_w + self.s(20) + gw + band.w).max(b.w),
+            self.ml_bars_w.get().max(b.w),
             content_h.max(b.h),
             hs,
             (top as i32) * lh + rem,
@@ -4028,10 +4038,10 @@ impl TextBox {
             let vp = self.base.bounds;
             let (cw, ch) = self.ml_content.get();
             let line_h = self.line_h();
-            // ★ 스크롤바는 뷰포트를 vp.w로 보지만 실제 텍스트 뷰포트는 좌우 여백
-            //   s(20)을 뺀 값이다(08-18 실기: 끝 ~2글자가 여백만큼 안 보였다).
-            //   content_w에 그 여백을 더해 스크롤 범위를 paint의 max_hs와 맞춘다.
-            let cw_bars = cw + self.s(20) + self.minimap_rect.get().w;
+            // ★ 가로 범위는 paint가 정한 `ml_bars_w`(= max_hs + vp.w) 그대로 — 여기서 따로 계산하면(09-22까지 `cw + 20 + 미니맵`) 거터 폭만큼
+            //   어긋나 휠이 줄 끝에 못 닿았다(nexa-sql 사용자 "오른쪽에 내용이 더 있는데 스크롤로 안 간다").
+            let _ = cw;
+            let cw_bars = self.ml_bars_w.get();
             // ★ 세로 오프셋은 줄 단위(`vscroll`)지만 휠은 px로 온다 — 줄로 반올림하고 남은 px를 버리면 트랙패드의
             //   느린 이동(사건당 1~3px)이 영원히 한 줄을 못 넘는다(nexa-sql 사용자 09-16). 잔여 px를 `ml_wheel_rem`에
             //   보관해 다음 휠 사건에 더한다 · 휠이 아닌 사건(썸 드래그·클릭)은 잔여를 버리고 가장 가까운 줄로.
@@ -5939,6 +5949,93 @@ mod minimap_tests {
 
     /// ② 미니맵 클릭 = 그 자리가 뷰포트 가운데 오도록 스크롤 · 드래그 = 따라감 · 캐럿·선택은 불변.
     /// 단일행: 긴 값은 휠/HWheel로 가로 이동(범위 클램프 · 자유 스크롤 → 캐럿 따라가기 중지 · 키 입력이 풀어 준다).
+    /// 휠로 부분 줄이 위에 걸린 상태(잔여 px)에서 **보이는 줄을 클릭**하면 캐럿만 옮기고 화면(첫 줄 · 잔여)은 그대로 —
+    /// 캐럿이 안 보이는 곳으로 가야만 화면이 움직인다(09-22).
+    #[test]
+    fn click_on_visible_line_keeps_pixel_scroll() {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 300, 120), &mut inv);
+        let text: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+        t.set_text(&text);
+        paint(&t);
+        let lh = t.line_h();
+        // 휠로 5.5줄 내려간다 → 잔여 = 반 줄.
+        t.on_event(
+            &InputEvent::Wheel {
+                delta: -(lh * 5 + lh / 2) * 3,
+            },
+            &mut inv,
+        );
+        paint(&t);
+        let (top, rem) = (t.vscroll.get(), t.ml_wheel_rem.get());
+        assert!(top >= 5 && rem > 0, "top {top} rem {rem}");
+        // 보이는 줄(둘째 보이는 행)을 클릭 → 캐럿만.
+        let y = 8 + lh + lh / 2;
+        t.on_event(
+            &InputEvent::MouseDown {
+                x: 40,
+                y,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        t.on_event(&InputEvent::MouseUp { x: 40, y }, &mut inv);
+        paint(&t);
+        assert_eq!(
+            (t.vscroll.get(), t.ml_wheel_rem.get()),
+            (top, rem),
+            "클릭은 화면을 옮기지 않는다"
+        );
+        // 다시 그려도 그대로(왔다갔다 없음).
+        paint(&t);
+        assert_eq!((t.vscroll.get(), t.ml_wheel_rem.get()), (top, rem));
+        // 캐럿을 화면 밖(맨 위)으로 보내면 그때는 따라간다.
+        t.edit.set_caret(0, false);
+        t.ml_user_scrolled = false;
+        paint(&t);
+        assert_eq!(t.vscroll.get(), 0);
+    }
+
+    /// 멀티라인(편집기): 줄바꿈이 꺼진 긴 줄은 HWheel로 가로 이동하고 **다음 그리기에서 되돌아오지 않는다**
+    /// (사용자 09-22 "편집기 가로 스크롤이 동작하지 않는다" 재현 — 캐럿이 0열이어도 사용자 스크롤은 유지).
+    #[test]
+    fn multiline_hwheel_scrolls_and_paint_keeps_it() {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 200, 100), &mut inv);
+        t.set_text(&format!(
+            "{}
+short
+",
+            "0123456789".repeat(40)
+        ));
+        paint(&t);
+        let (cw, _) = t.ml_content.get();
+        assert!(cw > 200, "긴 줄의 내용 폭 {cw}");
+        t.on_event(&InputEvent::HWheel { delta: 90 }, &mut inv);
+        let hs = t.mhscroll.get();
+        assert!(hs > 0, "HWheel 뒤 가로 오프셋 {hs}");
+        assert!(t.ml_user_scrolled);
+        // 마우스가 움직여도(hover) · 다시 그려도 오프셋이 남는다.
+        t.on_event(&InputEvent::MouseMove { x: 50, y: 50 }, &mut inv);
+        paint(&t);
+        assert_eq!(t.mhscroll.get(), hs, "그리기가 캐럿 열로 되돌리면 안 된다");
+        // 세로 휠은 가로 오프셋을 건드리지 않는다(가로/세로 독립).
+        t.on_event(&InputEvent::Wheel { delta: -30 }, &mut inv);
+        assert_eq!(t.mhscroll.get(), hs);
+        // 끝까지 돌리면 **정확히 줄 끝**(max_hs = 내용 폭 − 가용 폭)에 선다 — 거터만큼 못 미치지도, 너머 빈 곳까지 가지도 않는다(09-22).
+        t.on_event(&InputEvent::HWheel { delta: 90000 }, &mut inv);
+        let max_hs = t.ml_content.get().0 - t.ml_avail.get();
+        assert_eq!(t.mhscroll.get(), max_hs, "휠 끝 = max_hs");
+        paint(&t);
+        assert_eq!(t.mhscroll.get(), max_hs, "그리기도 같은 끝");
+        // 반대로 돌리면 0으로.
+        t.on_event(&InputEvent::HWheel { delta: -90000 }, &mut inv);
+        assert_eq!(t.mhscroll.get(), 0);
+    }
+
     #[test]
     fn single_line_wheel_scrolls_horizontally() {
         let mut t = TextBox::new("").with_text("0123456789".repeat(20).as_str());

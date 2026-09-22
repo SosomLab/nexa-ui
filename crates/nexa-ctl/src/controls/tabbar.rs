@@ -115,6 +115,9 @@ pub struct TabBar {
     locked: Vec<bool>,
     /// 탭별 고정(핀 그룹 앞 정렬은 호스트 몫).
     pinned: Vec<bool>,
+    /// ★ **묶인 탭**(동시 편집 · 사용자 09-22): 활성이 아니어도 상단 accent 줄을 그린다 — 나란히 열린 칸의 탭이
+    /// 어느 것들인지 탭 줄에서 보이게. 인덱스 정렬 · 부족분 = false.
+    group: Vec<bool>,
     /// 탭별 앞 표식(부족분 = None).
     badges: Vec<TabBadge>,
     active: usize,
@@ -136,6 +139,8 @@ pub struct TabBar {
     drag_cur: Point,
     drag_grab_dx: i32,
     pending: Option<TabAction>,
+    /// 마지막 탭 본체 클릭의 수식키(shift · primary) — 호스트가 `Switch`를 받을 때 읽는다(nexa-sql 동시 편집 09-22).
+    last_mods: (bool, bool),
     /// 단일행 스크롤 오프셋(물리 px) — paint가 클램프한다.
     scroll_x: Cell<i32>,
     /// 다음 페인트에서 활성 탭이 보이도록 스크롤(1회성).
@@ -160,6 +165,7 @@ impl TabBar {
             titles: Vec::new(),
             locked: Vec::new(),
             pinned: Vec::new(),
+            group: Vec::new(),
             badges: Vec::new(),
             active: 0,
             multiline: false,
@@ -174,6 +180,7 @@ impl TabBar {
             drag_cur: Point { x: 0, y: 0 },
             drag_grab_dx: 0,
             pending: None,
+            last_mods: (false, false),
             scroll_x: Cell::new(0),
             ensure_active: Cell::new(true),
             layout: RefCell::new(Layout::default()),
@@ -229,6 +236,20 @@ impl TabBar {
     }
 
     /// 탭별 고정 표시 갱신(핀 점 표식).
+    /// 탭별 **묶임**(동시 편집의 칸에 든 탭 = 상단 줄 표시). 바뀔 때만 무효화.
+    pub fn set_group(&mut self, group: Vec<bool>, inv: &mut Invalidations) {
+        if self.group != group {
+            self.group = group;
+            inv.push(self.base.bounds);
+        }
+    }
+
+    /// 탭 `i`가 묶여 있는가(동시 편집 칸).
+    #[must_use]
+    pub fn is_grouped(&self, i: usize) -> bool {
+        self.group.get(i).copied().unwrap_or(false)
+    }
+
     pub fn set_pinned(&mut self, pinned: Vec<bool>, inv: &mut Invalidations) {
         if self.pinned != pinned {
             self.pinned = pinned;
@@ -337,6 +358,12 @@ impl TabBar {
     /// 호스트가 수거할 탭 동작(1회성).
     pub fn take_action(&mut self) -> Option<TabAction> {
         self.pending.take()
+    }
+
+    /// 마지막 탭 본체 클릭의 수식키 `(shift, primary)` — `Switch`와 함께 읽는다(Shift = 연속 · primary = 개별 선택).
+    #[must_use]
+    pub fn last_click_mods(&self) -> (bool, bool) {
+        self.last_mods
     }
 
     /// 탭 본체 히트(× 상자 포함) — 호스트의 더블클릭 라우팅용.
@@ -782,12 +809,18 @@ impl Widget for TabBar {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
-            InputEvent::MouseDown { x, y, .. } => match self.zone_at(x, y) {
+            InputEvent::MouseDown {
+                x,
+                y,
+                shift,
+                primary,
+            } => match self.zone_at(x, y) {
                 Some(Zone::Tab(i, close)) => {
                     if close && self.can_close(i) {
                         // × 프레스 — 해제 시 같은 상자면 닫기.
                         self.pressed = Some(Zone::Tab(i, true));
                     } else {
+                        self.last_mods = (shift, primary);
                         self.pending = Some(TabAction::Switch(i));
                         // 본체 프레스 = 드래그 재정렬 후보.
                         self.drag = Some((i, Point { x, y }, false));
@@ -922,6 +955,14 @@ impl Widget for TabBar {
                     .intersection(&clip);
                 if !sep.is_empty() {
                     ctx.fill_rect(sep, theme.border);
+                }
+                // 묶인 탭(동시 편집 칸) = 활성 탭과 같은 상단 줄(사용자 09-22 "동시에 선택된 탭은 Focus 선").
+                if self.is_grouped(i) {
+                    let line =
+                        Rect::new(cell.x, cell.y, cell.w, self.s(2).max(1)).intersection(&clip);
+                    if !line.is_empty() {
+                        ctx.fill_rect(line, self.tab_accent(theme));
+                    }
                 }
             }
             // 앞 표식(이미지 버튼) + 핀 점 표식 + 제목.
