@@ -542,8 +542,16 @@ mod tests {
             .filter(|p| p.kind == PairKind::SQuote)
             .map(|p| (p.open, p.close))
             .collect();
-        assert_eq!(quotes, vec![(13, 21), (24, 25)], "'O''Neil' 하나 · 빈 문자열 하나");
-        let round = t.pairs.iter().find(|p| p.kind == PairKind::Round).expect("( )");
+        assert_eq!(
+            quotes,
+            vec![(13, 21), (24, 25)],
+            "'O''Neil' 하나 · 빈 문자열 하나"
+        );
+        let round = t
+            .pairs
+            .iter()
+            .find(|p| p.kind == PairKind::Round)
+            .expect("( )");
         assert_eq!((round.open, round.close), (23, 26));
         // `'a'''` = a' — 끝의 `''`가 이스케이프고 마지막 `'`가 닫는다.
         let t = PairTable::build("x 'a''' y", Some(&sql), PairOpts::default());

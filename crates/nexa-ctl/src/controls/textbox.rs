@@ -6372,14 +6372,25 @@ mod minimap_tests {
         paint(&t);
         let lh = t.line_h();
         // 줄 수 = 201(마지막 빈 줄) · 콘텐츠 높이 = 201·lh + 16 · 뷰포트 120 → 끝 오프셋이 줄 경계에 안 떨어진다.
-        t.on_event(&InputEvent::Wheel { delta: -lh * 3 * 400 }, &mut inv);
+        t.on_event(
+            &InputEvent::Wheel {
+                delta: -lh * 3 * 400,
+            },
+            &mut inv,
+        );
         paint(&t);
         let (top, rem) = (t.vscroll.get(), t.ml_wheel_rem.get());
-        assert!(rem > 0, "끝에서 잔여 px가 남아야 시나리오가 성립 (top {top} rem {rem})");
+        assert!(
+            rem > 0,
+            "끝에서 잔여 px가 남아야 시나리오가 성립 (top {top} rem {rem})"
+        );
         let rows = ((120 - 12) / lh) as usize;
         // 잔여만큼 아래로 들어온 행 = top + rows(줄 단위로는 "안 보이는" 행) — 바닥 안에 온전히 있다.
         let last = top + rows;
-        assert!((rows as i32 + 1) * lh - rem <= 120 - 12, "마지막 행이 온전히 보인다");
+        assert!(
+            (rows as i32 + 1) * lh - rem <= 120 - 12,
+            "마지막 행이 온전히 보인다"
+        );
         let y = 8 + (rows as i32) * lh - rem + lh / 2;
         t.on_event(
             &InputEvent::MouseDown {
