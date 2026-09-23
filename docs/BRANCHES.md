@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/win-65-gutter-hit | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 65차(win): `TextBox::in_gutter(p)`(본문 왼쪽 거터 판정 · 마지막 그리기 폭) · `line_at_point(p)`(캐럿 히트와 같은 규칙 → 논리 줄) — nexa-sql 거터 우클릭 북마크 메뉴용 |
 | feat/win-64-gutter-bookmark-zone | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 64차(win): `TextBox` 거터 배치 = **북마크 영역(띠·니모닉 상자) → 줄 번호 → 본문**(`bm_extra` 12 · 줄 변경 표시는 줄 번호 오른쪽 그대로 · 줄 번호 꺼도 북마크 영역 유지 · 글자만 안 그림) · push `aca1533` ci ✓ |
 | feat/win-63-tab-color-accessor | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 63차(win): `TabBar::tab_color(i)` 접근자(호스트 시험용 — nexa-sql 묶인 탭 유형 색 시험) · push `a6d8f50` ci ✓ |
 | feat/win-62-tabbar-tree-filter | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 62차(win): `fallback_file_icon` · `TreeGrid` 선택 없음/캐럿 테두리 · nexa-dlg 빈 곳 클릭 해제 · `TextBox` 미니맵 표식·줄 끝 라벨 · `TabBar::set_tab_colors` |

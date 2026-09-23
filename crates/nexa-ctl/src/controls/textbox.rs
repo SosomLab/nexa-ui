@@ -1799,6 +1799,23 @@ impl TextBox {
         self.gutter_px.get()
     }
 
+    /// 점이 **거터**(북마크 영역 + 줄번호 · 본문 왼쪽) 안인가 — 마지막 그리기의 거터 폭 기준(멀티라인만).
+    #[must_use]
+    pub fn in_gutter(&self, p: Point) -> bool {
+        let b = self.base.bounds;
+        self.multiline && b.contains(p) && p.x < b.x + self.s(10) + self.gutter_px.get()
+    }
+
+    /// 점 아래의 **논리 줄**(0 기준 · 캐럿 히트와 같은 규칙 · 본문 밖이면 None) — 거터 우클릭 메뉴(nexa-sql 북마크)용.
+    #[must_use]
+    pub fn line_at_point(&self, p: Point) -> Option<usize> {
+        if !self.multiline || !self.base.bounds.contains(p) {
+            return None;
+        }
+        let idx = self.ml_caret_at(p.x, p.y);
+        Some(self.edit.buf().line_of(idx))
+    }
+
     /// 멀티라인 오버레이 스크롤바가 지금 보이는가 — 호스트가 페이드 타이머(≈30ms)를 돌릴지 정하는 근거(09-14).
     #[must_use]
     pub fn scrollbars_visible(&self) -> bool {
