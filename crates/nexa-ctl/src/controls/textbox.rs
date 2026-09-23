@@ -3105,14 +3105,25 @@ impl TextBox {
         // 줄번호 거터 폭 — 논리 줄 수의 자릿수 × 숫자 폭 + 여백(줄 수가 변해도 자릿수가 같으면 폭 불변).
         let logical_count = tbuf.line_count().max(1);
         // 표시 띠(4px) + 첫 글자 앞 여백(2px) = 거터에 6px 더(줄번호는 그만큼 왼쪽에 머문다).
-        let mark_extra = if self.gutter_marks && self.line_numbers && self.multiline {
+        // ★ 거터 배치(사용자 09-23) = **[북마크 영역][줄번호 영역][편집 영역][미니맵]** — 북마크 띠(3px)·니모닉 상자(12px)는 맨 왼쪽
+        //   영역에, 줄 변경 표시(Golden식 3px)는 종전대로 줄번호 오른쪽 띠(`mark_extra`)에. 줄번호를 꺼도 북마크 영역은 남는다
+        //   (VS Code glyph margin처럼 줄번호와 독립 · 폭 고정 → 표식이 생겨도 본문이 안 밀린다).
+        let mark_extra = if self.gutter_marks && self.multiline {
             self.s(6)
+        } else {
+            0
+        };
+        // 북마크 영역 = 왼쪽 여백(10 · `tx` 계산의 고정분) 안에 띠(2~5)와 상자(7~19)가 들어가므로 12만 더 벌린다.
+        let bm_extra = if self.gutter_marks && self.multiline {
+            self.s(12)
         } else {
             0
         };
         let gw = if self.line_numbers && self.multiline {
             let digits = logical_count.to_string().len().max(2) as i32;
-            digits * ctx.text_width("0") + self.s(14) + mark_extra
+            bm_extra + digits * ctx.text_width("0") + self.s(14) + mark_extra
+        } else if mark_extra > 0 {
+            bm_extra + self.s(6) + mark_extra
         } else {
             0
         };
@@ -3516,16 +3527,20 @@ impl TextBox {
                                     }
                                 }
                             }
-                        } else if let Some((_, c)) = self.line_marks.iter().find(|(l, _)| *l == n) {
-                            if let Some(r) = clipv(Rect::new(mx, y + 1, self.s(3), lh - 2)) {
+                        }
+                        // 북마크 색 띠 — **북마크 영역**(맨 왼쪽 · 줄번호 왼쪽 · 사용자 09-23 배치).
+                        if let Some((_, c)) = self.line_marks.iter().find(|(l, _)| *l == n) {
+                            if let Some(r) =
+                                clipv(Rect::new(b.x + self.s(2), y + 1, self.s(3), lh - 2))
+                            {
                                 ctx.fill_rect(r, *c);
                             }
                         }
                     }
-                    // 거터 라벨(니모닉 숫자 상자) — 거터 맨 왼쪽.
+                    // 거터 라벨(니모닉 숫자 상자) — 북마크 영역 · 띠 오른쪽.
                     if let Some((_, lab)) = self.gutter_labels.iter().find(|(l, _)| *l == n) {
                         let bw = self.s(12);
-                        let bx = b.x + self.s(1);
+                        let bx = b.x + self.s(7);
                         if let Some(r) =
                             clipv(Rect::new(bx, y + self.s(2), bw, (lh - self.s(4)).max(2)))
                         {
@@ -3534,18 +3549,21 @@ impl TextBox {
                             ctx.text(bx + (bw - tw) / 2, y, r, lab, theme.window_bg);
                         }
                     }
-                    let is_caret_line = li == caret_line || row_selected;
-                    ctx.text(
-                        gx,
-                        y,
-                        Rect::new(b.x, vy0, self.s(10) + gw, vy1 - vy0),
-                        &num,
-                        if is_caret_line {
-                            theme.text
-                        } else {
-                            theme.text_dim
-                        },
-                    );
+                    // 줄번호 글자 자체는 줄번호가 켜져 있을 때만(꺼도 위의 띠·니모닉 상자는 슬림 거터에 남는다).
+                    if self.line_numbers {
+                        let is_caret_line = li == caret_line || row_selected;
+                        ctx.text(
+                            gx,
+                            y,
+                            Rect::new(b.x, vy0, self.s(10) + gw, vy1 - vy0),
+                            &num,
+                            if is_caret_line {
+                                theme.text
+                            } else {
+                                theme.text_dim
+                            },
+                        );
+                    }
                 }
             }
             let view = clipv(Rect::new(tx, y, avail, lh)).unwrap_or(Rect::new(tx, y, avail, 0));
