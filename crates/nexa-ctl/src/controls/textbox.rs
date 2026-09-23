@@ -3317,6 +3317,15 @@ impl TextBox {
         let mut top = self.vscroll.get();
         // 캐럿 추종이 **실제로** 첫 줄을 옮겼는가 — 옮기지 않았으면(캐럿이 이미 보임 · 클릭으로 캐럿만 옮긴 경우) 화면은 그대로다.
         let mut followed = false;
+        // ★ 잔여 px(휠로 부분 줄이 위에 걸린 상태)를 그대로 둘 때 **바닥까지 온전히 보이는 행 수** — 위로 밀린 만큼 아래에
+        //   한 행이 더 들어온다. 캐럿이 그 행에 있으면 이미 보이는 것이라 화면을 옮기지 않는다(nexa-sql 사용자 09-23: 스크롤 끝에서
+        //   다 보이는 마지막 줄을 클릭하면 줄 경계로 튀며 다시 그렸다 — 종전 = `rows`(줄 단위)로만 판정).
+        let rem_kept = if top < max_top && !self.scroll_snap {
+            self.ml_wheel_rem.get().clamp(0, lh - 1)
+        } else {
+            0
+        };
+        let vis = (((b.h - self.s(12) + rem_kept) / lh).max(1) as usize).max(rows);
         if self.ml_user_scrolled {
             top = top.min(max_top);
         } else {
@@ -3331,14 +3340,14 @@ impl TextBox {
                     .map(|&(_, e)| rows_src.row_of(e.min(tbuf.len())))
                     .collect();
                 rs.push(caret_line);
-                if rs.iter().any(|&r| r >= top && r < top + rows) {
+                if rs.iter().any(|&r| r >= top && r < top + vis) {
                     None
                 } else {
                     rs.into_iter().min_by_key(|&r| {
                         if r < top {
                             top - r
                         } else {
-                            r + 1 - (top + rows)
+                            r + 1 - (top + vis)
                         }
                     })
                 }
@@ -3348,7 +3357,7 @@ impl TextBox {
             if let Some(cl) = target {
                 if cl < top {
                     top = cl;
-                } else if cl >= top + rows {
+                } else if cl >= top + vis {
                     top = cl + 1 - rows;
                 }
             }
@@ -6348,6 +6357,53 @@ mod minimap_tests {
         t.ml_user_scrolled = false;
         paint(&t);
         assert_eq!(t.vscroll.get(), 0);
+    }
+
+    /// 휠로 **끝까지** 내려 잔여 px가 남은 상태(첫 행이 반쯤 위로 밀리고 그만큼 아래 한 행이 더 들어옴)에서 온전히 보이는
+    /// **마지막 줄을 클릭**하면 캐럿만 옮기고 화면은 그대로 — 줄 단위 판정으로 줄 경계에 맞추며 다시 그리지 않는다
+    /// (nexa-sql 사용자 09-23 "굳이 다시 그릴 필요 없다").
+    #[test]
+    fn click_on_last_line_at_scroll_end_keeps_pixel_scroll() {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 300, 120), &mut inv);
+        let text: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+        t.set_text(&text);
+        paint(&t);
+        let lh = t.line_h();
+        // 줄 수 = 201(마지막 빈 줄) · 콘텐츠 높이 = 201·lh + 16 · 뷰포트 120 → 끝 오프셋이 줄 경계에 안 떨어진다.
+        t.on_event(&InputEvent::Wheel { delta: -lh * 3 * 400 }, &mut inv);
+        paint(&t);
+        let (top, rem) = (t.vscroll.get(), t.ml_wheel_rem.get());
+        assert!(rem > 0, "끝에서 잔여 px가 남아야 시나리오가 성립 (top {top} rem {rem})");
+        let rows = ((120 - 12) / lh) as usize;
+        // 잔여만큼 아래로 들어온 행 = top + rows(줄 단위로는 "안 보이는" 행) — 바닥 안에 온전히 있다.
+        let last = top + rows;
+        assert!((rows as i32 + 1) * lh - rem <= 120 - 12, "마지막 행이 온전히 보인다");
+        let y = 8 + (rows as i32) * lh - rem + lh / 2;
+        t.on_event(
+            &InputEvent::MouseDown {
+                x: 40,
+                y,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        t.on_event(&InputEvent::MouseUp { x: 40, y }, &mut inv);
+        paint(&t);
+        assert_eq!(t.buf().line_of(t.edit.caret()), last, "클릭한 줄로 캐럿");
+        assert_eq!(
+            (t.vscroll.get(), t.ml_wheel_rem.get()),
+            (top, rem),
+            "이미 보이는 줄 = 화면을 옮기지 않는다"
+        );
+        paint(&t);
+        assert_eq!((t.vscroll.get(), t.ml_wheel_rem.get()), (top, rem));
+        // 캐럿이 화면 밖(맨 위)으로 가면 그때는 따라간다(줄 경계 · 잔여 0).
+        t.edit.set_caret(0, false);
+        paint(&t);
+        assert_eq!((t.vscroll.get(), t.ml_wheel_rem.get()), (0, 0));
     }
 
     /// 멀티라인(편집기): 줄바꿈이 꺼진 긴 줄은 HWheel로 가로 이동하고 **다음 그리기에서 되돌아오지 않는다**
