@@ -173,6 +173,8 @@ impl PairTable {
         let mut state = 0u32;
         let mut spans: Vec<(usize, TokenKind)> = Vec::new();
         let mut base = 0usize;
+        // ★ 구문이 "같은 인용부호 두 번 = 이스케이프"(SQL `'O''Neil'`)이면 열린 문자열 안의 `''`는 시작/끝이 아니다(사용자 09-23).
+        let doubled = hl.is_some_and(Highlighter::doubled_quote_escapes);
         for line in text.split('\n') {
             let chars: Vec<char> = line.chars().collect();
             spans.clear();
@@ -213,6 +215,11 @@ impl PairTable {
                             continue;
                         }
                         match floors.iter().rposition(|&f| stack[f].1 == k) {
+                            // 같은 인용부호로 열린 문자열 안에서 그 인용부호가 두 번 = 이스케이프 → 둘 다 건너뛴다.
+                            Some(_) if doubled && chars.get(i + 1) == Some(&c) => {
+                                i += 2;
+                                continue;
+                            }
                             Some(fi) => {
                                 let f = floors[fi];
                                 stack.truncate(f + 1);
@@ -517,5 +524,34 @@ mod tests {
         assert_eq!(e.pairs.len(), 1);
         assert_eq!((e.pairs[0].open, e.pairs[0].close), (0, 5));
         assert_eq!(e.unmatched, vec![(7, PairKind::Round)]);
+    }
+
+    /// SQL처럼 "같은 인용부호 두 번 = 이스케이프"인 구문에서는 문자열 안의 `''`가 시작/끝이 아니다(사용자 09-23
+    /// "`'O''Neil'`의 `''`는 `'` 하나를 전달하는 이스케이프 · 쌍 대상에서 제외"). 빈 문자열 `''`과 `'a'''`(= a')는 그대로 쌍.
+    #[test]
+    fn doubled_quote_is_escape_in_sql() {
+        let sql = crate::highlight::SyntaxSpec::sql();
+        assert!(sql.doubled_quote_escapes());
+        //          0         1         2
+        //          012345678901234567890123456
+        let text = "DEFINE who = 'O''Neil' ('')";
+        let t = PairTable::build(text, Some(&sql), PairOpts::default());
+        let quotes: Vec<(usize, usize)> = t
+            .pairs
+            .iter()
+            .filter(|p| p.kind == PairKind::SQuote)
+            .map(|p| (p.open, p.close))
+            .collect();
+        assert_eq!(quotes, vec![(13, 21), (24, 25)], "'O''Neil' 하나 · 빈 문자열 하나");
+        let round = t.pairs.iter().find(|p| p.kind == PairKind::Round).expect("( )");
+        assert_eq!((round.open, round.close), (23, 26));
+        // `'a'''` = a' — 끝의 `''`가 이스케이프고 마지막 `'`가 닫는다.
+        let t = PairTable::build("x 'a''' y", Some(&sql), PairOpts::default());
+        assert_eq!(t.pairs.len(), 1);
+        assert_eq!((t.pairs[0].open, t.pairs[0].close), (2, 6));
+        // 평문(구문 없음)은 종전대로 — `''`는 열고 닫는 빈 쌍.
+        let p = PairTable::build("'O''Neil'", None, PairOpts::default());
+        let opens: Vec<usize> = p.pairs.iter().map(|p| p.open).collect();
+        assert_eq!(opens, vec![0, 3]);
     }
 }

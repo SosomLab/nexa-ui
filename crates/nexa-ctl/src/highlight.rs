@@ -52,6 +52,11 @@ impl TokenKind {
 pub trait Highlighter: std::fmt::Debug {
     fn line_spans(&self, line: &str, state: &mut u32, out: &mut Vec<(usize, TokenKind)>);
     fn name(&self) -> &str;
+    /// 이 구문에서 문자열 안의 **같은 인용부호 두 번**(`'O''Neil'` · `"a""b"`)이 한 글자 이스케이프인가 — 쌍 표([`super::PairTable`])가
+    /// 그 자리를 문자열의 시작/끝으로 잡지 않게(nexa-sql 사용자 09-23 "SQL의 `''`는 `'` 하나를 전달하는 이스케이프 · 쌍 대상에서 제외").
+    fn doubled_quote_escapes(&self) -> bool {
+        false
+    }
 }
 
 /// 강조 규격(데이터) — [`Highlighter`] 구현.
@@ -216,6 +221,11 @@ fn push_span(out: &mut Vec<(usize, TokenKind)>, n: usize, k: TokenKind) {
 impl Highlighter for SyntaxSpec {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    /// 규격이 문자열 구분자를 정의하면 두 번 = 이스케이프(`strings` 필드 규약 · SQL `''` · `""`).
+    fn doubled_quote_escapes(&self) -> bool {
+        !self.strings.is_empty()
     }
 
     fn line_spans(&self, line: &str, state: &mut u32, out: &mut Vec<(usize, TokenKind)>) {

@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/win-69-doubled-quote-escape | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 69차(win): `Highlighter::doubled_quote_escapes()`(기본 false · `SyntaxSpec` = 문자열 구분자가 있으면 true) + `PairTable::build` = 그 구문에서 같은 인용부호로 열린 문자열 안의 **같은 인용부호 두 번은 이스케이프**(`'O''Neil'` 쌍 하나 · `''` 빈 문자열 · `'a'''` · 평문은 종전) · 시험 `doubled_quote_is_escape_in_sql` · 327 통과 |
 | feat/win-68-caret-follow-pixel-rows | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 68차(win): 🔧 멀티라인 캐럿 추종의 "보임" 판정을 줄 단위 `rows`에서 **잔여 px를 포함한 픽셀 기준 온전한 행 수 `vis`**로 — 휠로 끝까지 내려 첫 행이 반쯤 걸린 상태에서 온전히 보이는 마지막 줄을 클릭해도 줄 경계로 튀며 다시 그리지 않는다(nexa-sql 사용자 09-23) · 다중 캐럿 판정도 같은 값 · 시험 `click_on_last_line_at_scroll_end_keeps_pixel_scroll` · 326 통과 |
 | feat/win-67-textbox-rev-caret-point | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 67차(win): `TextBox::rev()`(본문 세대 · 호스트 캐시 열쇠) · `caret_point()`(캐럿 아래 기준선 화면 좌표 · 마지막 줄 배치 기준 · 안 보이면 None) — nexa-sql 코드 완성 팝업·아웃라인 캐시(docs/76) |
 | feat/win-66-pairs-in-strings-diff-hint | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 66차(win): `TextBox::below_text(p)`(마지막 그린 줄 아래 빈 영역) · ★ `PairTable` 문자열 안 스캔(열린 인용부호 = 바닥 스택 · 안의 괄호는 그 문자열 안에서만 · 안에 남은 짝 없음은 조용히 · `\"` · 같은 인용부호 안쪽부터) · `PairOpts { kinds: u8(비트 집합 · `PairKind::bit`/`ALL`) · in_strings }` + `kinds_from_spec` · 자동 닫기도 같은 집합 · `diff_lines_hint`(순수 삽입/삭제 창을 캐럿 줄까지 위로 · git slider) · 🔧 명령 편집도 페인트 때 본문 세대(`rev`)로 줄 변경 표시·쌍 표 재계산(`diff_rev`/`pairs_rev`) · 테스트 325 |
