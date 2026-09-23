@@ -1846,6 +1846,30 @@ impl TextBox {
         self.multiline && b.contains(p) && p.x < b.x + self.s(10) + self.gutter_px.get()
     }
 
+    /// 본문 변경 세대(`EditState::rev` · 같은 값 = 같은 본문 · 호스트 캐시 열쇠).
+    #[must_use]
+    pub fn rev(&self) -> u64 {
+        self.edit.rev()
+    }
+
+    /// 캐럿의 화면 위치(**캐럿 아래 줄 기준선** = 팝업을 붙일 자리 · 마지막 그리기의 줄 배치 기준 · 보이지 않으면 None) —
+    /// 자동 완성 팝업(nexa-sql `intel` · docs/76)이 캐럿 아래에 뜨게.
+    #[must_use]
+    pub fn caret_point(&self) -> Option<Point> {
+        if !self.multiline {
+            return None;
+        }
+        let caret = self.edit.caret();
+        let lay = self.line_lay.borrow();
+        let l = lay
+            .iter()
+            .find(|l| caret >= l.start_idx && caret < l.start_idx + l.xs.len())?;
+        Some(Point {
+            x: l.xs[caret - l.start_idx],
+            y: l.top + self.line_h(),
+        })
+    }
+
     /// 점이 **마지막 그린 줄 아래의 빈 영역**인가(멀티라인 · bounds 안이지만 어느 줄에도 닿지 않음).
     /// 거터 우클릭 메뉴가 그 영역에서는 줄 단위 항목(토글·니모닉)을 내지 않게(nexa-sql · 사용자 09-23).
     #[must_use]
