@@ -258,6 +258,10 @@ pub struct ContextMenu {
     last_pos: Option<Point>,
     /// 하위 메뉴가 열린 채 다른 부모 행 위에 머문 시각 — 유예([`SUBMENU_GRACE_MS`]) 안이면 자식을 유지한다.
     pending_since: Option<std::time::Instant>,
+    /// ★ 보이는 행 수 상한(nexa-sql 사용자 09-23 "최대 N개 미리보기 + 스크롤" — 검색어 이력 드롭다운 · 완성 팝업) · `None` = 전부.
+    /// 넘치면 `first`부터 그 수만큼만 그리고 휠·↑/↓/PgUp/PgDn/Home/End로 스크롤한다(오른쪽에 가는 스크롤 표시).
+    max_rows: Option<usize>,
+    first: usize,
 }
 
 /// 하위 메뉴 유예(ms) — 자식이 화면 안에 맞추느라 부모 행과 세로가 어긋나면 대각선 이동 중 다른 부모 행을 지난다.
@@ -284,6 +288,46 @@ impl ContextMenu {
     /// 배율(고DPI).
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
+    }
+
+    /// 보이는 행 수 상한(`None` = 전부 · `open_at` 뒤에도 유지) — 넘치면 스크롤(휠 · 키 · 오른쪽 표시).
+    pub fn set_max_rows(&mut self, n: Option<usize>) {
+        self.max_rows = n.filter(|&n| n > 0);
+        self.first = 0;
+    }
+
+    /// 지금 hover(키보드 이동 포함) 행 — 호스트가 "Enter를 메뉴가 먹을지"를 가르는 데 쓴다(hover 없으면 Enter는 기본 항목/닫기).
+    #[must_use]
+    pub fn hovered(&self) -> Option<usize> {
+        self.hover
+    }
+
+    /// 보이는 행 수(상한 적용).
+    fn vis_count(&self) -> usize {
+        self.max_rows
+            .map_or(self.items.len(), |m| m.min(self.items.len()))
+    }
+
+    fn scrollable(&self) -> bool {
+        self.vis_count() < self.items.len()
+    }
+
+    /// `i`가 보이게 `first`를 옮긴다.
+    fn ensure_visible(&mut self, i: usize) {
+        let n = self.vis_count().max(1);
+        if i < self.first {
+            self.first = i;
+        } else if i >= self.first + n {
+            self.first = i + 1 - n;
+        }
+        self.first = self.first.min(self.items.len().saturating_sub(n));
+    }
+
+    /// 휠/키로 `rows`행 스크롤(음수 = 위).
+    fn scroll_rows(&mut self, rows: i32) {
+        let n = self.vis_count().max(1);
+        let max_first = self.items.len().saturating_sub(n) as i32;
+        self.first = (self.first as i32 + rows).clamp(0, max_first) as usize;
     }
 
     fn s(&self, v: i32) -> i32 {
@@ -342,6 +386,7 @@ impl ContextMenu {
             return;
         }
         self.items = items;
+        self.first = 0;
         self.default_idx = None;
         self.fit_w.set(text_w);
         self.sc_w.set(0);
@@ -420,9 +465,16 @@ impl ContextMenu {
         }
     }
 
+    /// 보이는 항목 범위(`first..first+vis_count`).
+    fn vis_range(&self) -> std::ops::Range<usize> {
+        let n = self.vis_count();
+        let first = self.first.min(self.items.len().saturating_sub(n));
+        first..first + n
+    }
+
     fn size_px(&self) -> (i32, i32) {
         let mut h = self.s(PAD_V) * 2;
-        for it in &self.items {
+        for it in &self.items[self.vis_range()] {
             h += match it {
                 CtxItem::Item { .. } => self.row_h(),
                 CtxItem::Separator => self.s(SEP_H),
@@ -443,7 +495,17 @@ impl ContextMenu {
     fn row_rect(&self, idx: usize) -> Option<Rect> {
         let at = self.at.get()?;
         let mut y = at.y + self.s(PAD_V);
-        for (i, it) in self.items.iter().enumerate() {
+        let range = self.vis_range();
+        if !range.contains(&idx) {
+            return None; // 스크롤로 가려진 행
+        }
+        for (i, it) in self
+            .items
+            .iter()
+            .enumerate()
+            .take(range.end)
+            .skip(range.start)
+        {
             let h = match it {
                 CtxItem::Item { .. } => self.row_h(),
                 CtxItem::Separator => self.s(SEP_H),
@@ -495,6 +557,32 @@ impl ContextMenu {
             }
         };
         self.hover = Some(sel[next]);
+        self.ensure_visible(sel[next]);
+    }
+
+    /// PgUp/PgDn(한 화면) · Home/End(처음/끝) — 활성 항목 기준 · 보이게 스크롤.
+    fn move_hover_by(&mut self, step: i32, edge: bool) {
+        let sel: Vec<usize> = (0..self.items.len())
+            .filter(|&i| matches!(self.items[i], CtxItem::Item { enabled: true, .. }))
+            .collect();
+        if sel.is_empty() {
+            return;
+        }
+        let cur = self
+            .hover
+            .and_then(|h| sel.iter().position(|&i| i == h))
+            .map_or(if step < 0 { 0 } else { -1 }, |p| p as i32);
+        let next = if edge {
+            if step < 0 {
+                0
+            } else {
+                sel.len() as i32 - 1
+            }
+        } else {
+            (cur + step).clamp(0, sel.len() as i32 - 1)
+        } as usize;
+        self.hover = Some(sel[next]);
+        self.ensure_visible(sel[next]);
     }
 
     /// 항목 `i`의 하위 메뉴를 연다(오른쪽 · 넘치면 왼쪽). 이미 그 항목의 것이 열려 있으면 그대로.
@@ -685,14 +773,27 @@ impl ContextMenu {
                 }
                 true
             }
-            InputEvent::MouseUp { .. } | InputEvent::Wheel { .. } | InputEvent::HWheel { .. } => {
+            // 휠 = 스크롤(행 수 상한이 있을 때 · 120 = 한 칸 = 한 행 · 음수 = 아래) · 커서 아래 행을 다시 hover.
+            InputEvent::Wheel { delta } => {
+                if self.scrollable() {
+                    let rows = if delta < 0 { 1 } else { -1 } * ((delta.abs() / 120).max(1));
+                    self.scroll_rows(rows);
+                    if let Some(p) = self.last_pos {
+                        self.hover = self.hit(p);
+                    }
+                }
                 true
             }
-            // 키보드 — ↑/↓ 이동 · → 하위 열기 · Enter 선택(하위 있으면 열기) · 그 외(Esc 포함)는 메뉴만 닫는다.
+            InputEvent::MouseUp { .. } | InputEvent::HWheel { .. } => true,
+            // 키보드 — ↑/↓ 이동 · PgUp/PgDn/Home/End(스크롤 목록) · → 하위 열기 · Enter 선택(하위 있으면 열기) · 그 외(Esc 포함)는 메뉴만 닫는다.
             InputEvent::Key { key, .. } => {
                 match key {
                     Key::Down => self.move_hover(true),
                     Key::Up => self.move_hover(false),
+                    Key::PageDown => self.move_hover_by(self.vis_count().max(1) as i32, false),
+                    Key::PageUp => self.move_hover_by(-(self.vis_count().max(1) as i32), false),
+                    Key::Home => self.move_hover_by(-1, true),
+                    Key::End => self.move_hover_by(1, true),
                     Key::Right => {
                         if let Some(i) = self.hover {
                             if self.items[i].has_children() {
@@ -826,7 +927,30 @@ impl ContextMenu {
         let icon_col = self.icon_col();
         let arrows = self.has_arrows();
         let mut y = at.y + self.s(PAD_V);
-        for (i, it) in self.items.iter().enumerate() {
+        let range = self.vis_range();
+        // 스크롤 표시(행 수 상한을 넘을 때) — 오른쪽 안쪽에 가는 트랙 + 썸(비율).
+        if self.scrollable() {
+            let tw = self.s(3);
+            let track = Rect::new(
+                r.right() - self.s(3) - tw,
+                r.y + self.s(PAD_V),
+                tw,
+                r.h - self.s(PAD_V) * 2,
+            );
+            ctx.fill_rect_alpha(track, theme.text_dim, 0.15);
+            let n = self.items.len().max(1) as f32;
+            let th_h = ((range.len() as f32 / n) * track.h as f32).max(self.s(8) as f32) as i32;
+            let off = ((range.start as f32 / n) * track.h as f32) as i32;
+            let th_y = track.y + off.min(track.h - th_h).max(0);
+            ctx.fill_round_rect(Rect::new(track.x, th_y, tw, th_h), tw / 2, theme.text_dim);
+        }
+        for (i, it) in self
+            .items
+            .iter()
+            .enumerate()
+            .take(range.end)
+            .skip(range.start)
+        {
             match it {
                 CtxItem::Item {
                     label,
@@ -1061,6 +1185,57 @@ mod tests {
     }
 
     /// 기본 항목: hover 없이 Enter = 기본 항목 · 키보드로 옮기면 hover가 우선 · 비활성은 기본이 될 수 없다.
+    #[test]
+    fn scrolls_with_max_rows_keys_and_wheel() {
+        // 행 수 상한 3 · 항목 8: 높이는 3행 · ↓로 넘어가면 first가 따라오고 · PgDn/End/Home · 휠 · 가려진 행은 rect 없음.
+        let mut m = ContextMenu::new();
+        m.set_max_rows(Some(3));
+        let items: Vec<CtxItem> = (0..8)
+            .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+            .collect();
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 80);
+        let h3 = m.rect.get().h;
+        m.set_max_rows(None);
+        let items: Vec<CtxItem> = (0..8)
+            .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+            .collect();
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 80);
+        let h8 = m.rect.get().h;
+        assert!(h3 < h8, "상한 3 = 3행 높이 {h3} < 전부 {h8}");
+        m.set_max_rows(Some(3));
+        let items: Vec<CtxItem> = (0..8)
+            .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+            .collect();
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 80);
+        assert!(m.row_rect_of(3).is_none(), "4번째는 가려짐");
+        for _ in 0..4 {
+            m.on_event(&key(Key::Down));
+        }
+        assert_eq!(m.hovered(), Some(3));
+        assert_eq!(m.vis_range(), 1..4, "hover가 보이게 first가 1로");
+        m.on_event(&key(Key::PageDown));
+        assert_eq!(m.hovered(), Some(6));
+        m.on_event(&key(Key::End));
+        assert_eq!(m.hovered(), Some(7));
+        assert_eq!(m.vis_range(), 5..8);
+        m.on_event(&key(Key::Home));
+        assert_eq!((m.hovered(), m.vis_range()), (Some(0), 0..3));
+        // 휠 아래(음수) 2칸 → first 2 · 위로 한 칸 → 1.
+        m.on_event(&InputEvent::Wheel { delta: -240 });
+        assert_eq!(m.vis_range(), 2..5);
+        m.on_event(&InputEvent::Wheel { delta: 120 });
+        assert_eq!(m.vis_range(), 1..4);
+        // 보이는 행 클릭 = 선택.
+        let r = m.row_rect_of(2).expect("보이는 행");
+        m.on_event(&InputEvent::MouseDown {
+            x: r.x + 5,
+            y: r.y + 5,
+            shift: false,
+            primary: false,
+        });
+        assert_eq!(m.take_picked().as_deref(), Some("h2"));
+    }
+
     #[test]
     fn default_item_is_picked_by_enter_without_hover() {
         let mut m = ContextMenu::new();
