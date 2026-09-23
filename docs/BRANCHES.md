@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/win-66-pairs-in-strings-diff-hint | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 66차(win): `TextBox::below_text(p)`(마지막 그린 줄 아래 빈 영역) · ★ `PairTable` 문자열 안 스캔(열린 인용부호 = 바닥 스택 · 안의 괄호는 그 문자열 안에서만 · 안에 남은 짝 없음은 조용히 · `\"` · 같은 인용부호 안쪽부터) · `PairOpts { kinds: u8(비트 집합 · `PairKind::bit`/`ALL`) · in_strings }` + `kinds_from_spec` · 자동 닫기도 같은 집합 · `diff_lines_hint`(순수 삽입/삭제 창을 캐럿 줄까지 위로 · git slider) · 🔧 명령 편집도 페인트 때 본문 세대(`rev`)로 줄 변경 표시·쌍 표 재계산(`diff_rev`/`pairs_rev`) · 테스트 325 |
 | feat/win-65-gutter-hit | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 65차(win): `TextBox::in_gutter(p)`(본문 왼쪽 거터 판정 · 마지막 그리기 폭) · `line_at_point(p)`(캐럿 히트와 같은 규칙 → 논리 줄) — nexa-sql 거터 우클릭 북마크 메뉴용 |
 | feat/win-64-gutter-bookmark-zone | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 64차(win): `TextBox` 거터 배치 = **북마크 영역(띠·니모닉 상자) → 줄 번호 → 본문**(`bm_extra` 12 · 줄 변경 표시는 줄 번호 오른쪽 그대로 · 줄 번호 꺼도 북마크 영역 유지 · 글자만 안 그림) · push `aca1533` ci ✓ |
 | feat/win-63-tab-color-accessor | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 63차(win): `TabBar::tab_color(i)` 접근자(호스트 시험용 — nexa-sql 묶인 탭 유형 색 시험) · push `a6d8f50` ci ✓ |

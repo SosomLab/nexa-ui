@@ -8,6 +8,7 @@ use crate::highlight::{Highlighter, TokenKind};
 
 /// 쌍 종류.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum PairKind {
     Round,
     Square,
@@ -70,6 +71,21 @@ impl PairKind {
     pub fn is_quote(self) -> bool {
         matches!(self, PairKind::DQuote | PairKind::SQuote | PairKind::BQuote)
     }
+    /// [`PairOpts::kinds`]의 비트.
+    #[must_use]
+    pub fn bit(self) -> u8 {
+        1 << (self as u8)
+    }
+    /// 일곱 종류 전부(열림 글자 순).
+    pub const ALL: [PairKind; 7] = [
+        PairKind::Round,
+        PairKind::Square,
+        PairKind::Curly,
+        PairKind::Angle,
+        PairKind::DQuote,
+        PairKind::SQuote,
+        PairKind::BQuote,
+    ];
 }
 
 /// 쌍 하나(문자 인덱스).
@@ -83,19 +99,49 @@ pub struct Pair {
     pub parent: Option<u32>,
 }
 
-/// 스캔 옵션(설정 `rainbow.quotes` · `rainbow.angle`).
+/// 스캔 옵션 — **편집 코어 설정**(nexa-sql `editor.pair_kinds` · `editor.pair_in_strings` · 사용자 09-23 "Rainbow 확장이 아니라
+/// 기본 기능 설정으로 · 강조 대상을 지정해서").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PairOpts {
-    pub quotes: bool,
-    pub angle: bool,
+    /// 쌍으로 다룰 종류의 비트 집합([`PairKind::bit`]) — 기본 = `< >` 빼고 전부.
+    pub kinds: u8,
+    /// 문자열 **안**의 `{ ( [` 와 다른 인용부호도 쌍으로(그 문자열 안에서만 · 기본 켬). 끄면 문자열 안에서는
+    /// 그 문자열의 인용부호 쌍만 보이고 안쪽은 보지 않는다.
+    pub in_strings: bool,
 }
 
 impl Default for PairOpts {
     fn default() -> Self {
         PairOpts {
-            quotes: true,
-            angle: false,
+            kinds: PairOpts::ALL & !PairKind::Angle.bit(),
+            in_strings: true,
         }
+    }
+}
+
+impl PairOpts {
+    /// 일곱 종류 전부.
+    pub const ALL: u8 = 0x7F;
+
+    /// 이 종류를 쌍으로 다루는가.
+    #[must_use]
+    pub fn has(self, k: PairKind) -> bool {
+        self.kinds & k.bit() != 0
+    }
+
+    /// 인용부호 종류가 하나라도 켜져 있는가.
+    #[must_use]
+    pub fn any_quote(self) -> bool {
+        PairKind::ALL.iter().any(|k| k.is_quote() && self.has(*k))
+    }
+
+    /// 설정 문자열(`() [] {} <> "" '' ``` · 공백/콤마 구분 · 토큰의 첫 글자 = 열림 글자) → 비트 집합. 모르는 토큰은 무시.
+    #[must_use]
+    pub fn kinds_from_spec(spec: &str) -> u8 {
+        spec.split(|c: char| c.is_whitespace() || c == ',')
+            .filter_map(|t| t.chars().next())
+            .filter_map(PairKind::from_open)
+            .fold(0, |acc, k| acc | k.bit())
     }
 }
 
@@ -115,14 +161,18 @@ impl PairTable {
     /// 텍스트 전체 스캔. `hl`이 없으면 전부 평문으로 본다(인용부호는 문자열 시작/끝으로 직접 판정).
     #[must_use]
     pub fn build(text: &str, hl: Option<&dyn Highlighter>, opts: PairOpts) -> PairTable {
-        // (열림, 종류, 깊이)
+        // (열림, 종류)
         let mut stack: Vec<(usize, PairKind)> = Vec::new();
+        // ★ 문자열 안도 스캔한다(사용자 09-23 "' 안이라도 { " 등의 쌍을 보여 달라"): 열린 인용부호를 스택에 올려 **바닥**으로
+        //   삼는다 — 문자열 안의 괄호는 그 문자열 안에서만 짝이 되고(바닥 아래로는 내려가지 않음), 문자열이 닫힐 때
+        //   안에 남은 열림은 **조용히 버린다**(짝 없음 표시는 코드 층에서만 · `'('` 같은 문자열이 빨갛게 되지 않게).
+        //   같은 인용부호가 겹치면 가장 안쪽부터 닫는다 · `\"` 이스케이프는 닫지 않는다.
+        let mut floors: Vec<usize> = Vec::new(); // 열린 인용부호의 스택 인덱스(안쪽이 뒤)
         let mut done: Vec<(usize, usize, PairKind, Option<usize>)> = Vec::new(); // open, close, kind, parent_open
         let mut unmatched: Vec<(usize, PairKind)> = Vec::new();
         let mut state = 0u32;
         let mut spans: Vec<(usize, TokenKind)> = Vec::new();
         let mut base = 0usize;
-        let mut in_plain_string: Option<(usize, char)> = None; // hl 없을 때 인용부호 추적
         for line in text.split('\n') {
             let chars: Vec<char> = line.chars().collect();
             spans.clear();
@@ -134,81 +184,104 @@ impl PairTable {
             let mut ci = 0usize;
             for &(n, kind) in &spans {
                 let end = (ci + n).min(chars.len());
-                match kind {
-                    TokenKind::Comment => {}
-                    TokenKind::Str => {
-                        // 양 끝이 같은 인용부호면 쌍(안쪽은 보지 않는다).
-                        if opts.quotes && end > ci + 1 {
-                            let a = chars[ci];
-                            let b = chars[end - 1];
-                            if a == b {
-                                if let Some(k) = PairKind::from_open(a).filter(|k| k.is_quote()) {
-                                    done.push((
-                                        base + ci,
-                                        base + end - 1,
-                                        k,
-                                        stack.last().map(|s| s.0),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        let mut i = ci;
-                        while i < end {
-                            let c = chars[i];
-                            let pos = base + i;
-                            if hl.is_none() && opts.quotes {
-                                // 평문 모드: 인용부호를 직접 짝짓는다(같은 줄 안에서만).
-                                if let Some((qpos, q)) = in_plain_string {
-                                    if c == q {
-                                        if let Some(k) = PairKind::from_open(q) {
-                                            done.push((qpos, pos, k, stack.last().map(|s| s.0)));
-                                        }
-                                        in_plain_string = None;
-                                    }
-                                    i += 1;
-                                    continue;
-                                }
-                                if matches!(c, '"' | '\'' | '`') {
-                                    in_plain_string = Some((pos, c));
-                                    i += 1;
-                                    continue;
-                                }
-                            }
-                            if let Some(k) = PairKind::from_open(c).filter(|k| !k.is_quote()) {
-                                if k != PairKind::Angle || opts.angle {
-                                    stack.push((pos, k));
-                                }
-                            } else if let Some(k) = PairKind::from_close(c) {
-                                if k == PairKind::Angle && !opts.angle {
-                                    i += 1;
-                                    continue;
-                                }
-                                match stack.iter().rposition(|(_, sk)| *sk == k) {
-                                    Some(si) if si + 1 == stack.len() => {
-                                        let (o, _) = stack.pop().expect("top");
-                                        done.push((o, pos, k, stack.last().map(|s| s.0)));
-                                    }
-                                    Some(si) => {
-                                        // 사이에 닫히지 않은 열림들 = 짝 없음.
-                                        for (o, ok) in stack.drain(si + 1..) {
-                                            unmatched.push((o, ok));
-                                        }
-                                        let (o, _) = stack.pop().expect("top");
-                                        done.push((o, pos, k, stack.last().map(|s| s.0)));
-                                    }
-                                    None => unmatched.push((pos, k)),
-                                }
-                            }
+                if matches!(kind, TokenKind::Comment) {
+                    ci = end;
+                    continue;
+                }
+                // 인용부호가 구분자로 작동하는 곳 = 강조기의 문자열 토큰 · 평문 모드 전부.
+                let quotes_here = hl.is_none() || matches!(kind, TokenKind::Str);
+                let mut i = ci;
+                while i < end {
+                    let c = chars[i];
+                    let pos = base + i;
+                    let in_string = !floors.is_empty();
+                    if quotes_here
+                        && matches!(c, '"' | '\'' | '`')
+                        && !(i > 0 && chars[i - 1] == '\\')
+                    {
+                        let k = PairKind::from_open(c).expect("quote kind");
+                        if !opts.has(k) {
                             i += 1;
+                            continue;
+                        }
+                        // 안쪽을 보지 않는 모드(`in_strings` 끔)에서는 지금 열린 인용부호와 같은 것만 닫는다.
+                        if !opts.in_strings
+                            && in_string
+                            && floors.last().is_some_and(|&f| stack[f].1 != k)
+                        {
+                            i += 1;
+                            continue;
+                        }
+                        match floors.iter().rposition(|&f| stack[f].1 == k) {
+                            Some(fi) => {
+                                let f = floors[fi];
+                                stack.truncate(f + 1);
+                                floors.truncate(fi);
+                                let (o, _) = stack.pop().expect("quote open");
+                                done.push((o, pos, k, stack.last().map(|s| s.0)));
+                            }
+                            None => {
+                                floors.push(stack.len());
+                                stack.push((pos, k));
+                            }
+                        }
+                        i += 1;
+                        continue;
+                    }
+                    if in_string && !opts.in_strings {
+                        // 종전 동작: 문자열 안쪽의 괄호는 보지 않는다.
+                        i += 1;
+                        continue;
+                    }
+                    if let Some(k) = PairKind::from_open(c).filter(|k| !k.is_quote()) {
+                        if opts.has(k) {
+                            stack.push((pos, k));
+                        }
+                    } else if let Some(k) = PairKind::from_close(c) {
+                        if !opts.has(k) {
+                            i += 1;
+                            continue;
+                        }
+                        let floor = floors.last().map_or(0, |&f| f + 1);
+                        match stack[floor..]
+                            .iter()
+                            .rposition(|(_, sk)| *sk == k)
+                            .map(|si| si + floor)
+                        {
+                            Some(si) if si + 1 == stack.len() => {
+                                let (o, _) = stack.pop().expect("top");
+                                done.push((o, pos, k, stack.last().map(|s| s.0)));
+                            }
+                            Some(si) => {
+                                // 사이에 닫히지 않은 열림들 = 짝 없음(문자열 안이면 조용히).
+                                for (o, ok) in stack.drain(si + 1..) {
+                                    if floor == 0 {
+                                        unmatched.push((o, ok));
+                                    }
+                                }
+                                let (o, _) = stack.pop().expect("top");
+                                done.push((o, pos, k, stack.last().map(|s| s.0)));
+                            }
+                            None if floor == 0 => unmatched.push((pos, k)),
+                            None => {}
                         }
                     }
+                    i += 1;
                 }
                 ci = end;
             }
-            in_plain_string = None; // 평문 문자열은 줄을 넘지 않는다
+            if hl.is_none() {
+                // 평문 문자열은 줄을 넘지 않는다 — 열린 인용부호와 그 안은 버린다.
+                if let Some(&f) = floors.first() {
+                    stack.truncate(f);
+                }
+                floors.clear();
+            }
             base += chars.len() + 1;
+        }
+        // 끝까지 안 닫힌 문자열과 그 안은 버리고, 코드 층에 남은 열림만 짝 없음.
+        if let Some(&f) = floors.first() {
+            stack.truncate(f);
         }
         for (o, k) in stack {
             unmatched.push((o, k));
@@ -367,10 +440,82 @@ mod tests {
             "a < b > c",
             None,
             PairOpts {
-                quotes: true,
-                angle: true,
+                kinds: PairOpts::ALL,
+                in_strings: true,
             },
         );
         assert_eq!(b.len(), 1);
+    }
+
+    /// 종류 지정(설정 문자열) — 고른 종류만 쌍 · 나머지 글자는 없는 것처럼.
+    #[test]
+    fn kinds_spec_selects_pairs() {
+        assert_eq!(
+            PairOpts::kinds_from_spec("() [] {} \"\" '' ``"),
+            PairOpts::default().kinds
+        );
+        assert_eq!(
+            PairOpts::kinds_from_spec("(),{}, <>"),
+            PairKind::Round.bit() | PairKind::Curly.bit() | PairKind::Angle.bit()
+        );
+        assert_eq!(PairOpts::kinds_from_spec("zz"), 0);
+        let only_round = PairOpts {
+            kinds: PairKind::Round.bit(),
+            in_strings: true,
+        };
+        let t = PairTable::build("f([a], 'b', {c})", None, only_round);
+        assert_eq!(t.pairs.len(), 1);
+        assert_eq!((t.pairs[0].open, t.pairs[0].close), (1, 15));
+        assert!(
+            t.unmatched.is_empty(),
+            "고르지 않은 종류는 짝 없음으로도 세지 않는다"
+        );
+        assert!(!only_round.any_quote());
+    }
+
+    /// `in_strings` 끔 = 종전 동작(문자열은 양 끝 인용부호만 · 안쪽 괄호·인용부호 무시).
+    #[test]
+    fn in_strings_off_keeps_legacy_behaviour() {
+        let text = "awk '{printf \"%s\", $1}' (x)";
+        let t = PairTable::build(
+            text,
+            None,
+            PairOpts {
+                in_strings: false,
+                ..PairOpts::default()
+            },
+        );
+        let opens: Vec<usize> = t.pairs.iter().map(|p| p.open).collect();
+        assert_eq!(opens, vec![4, 24], "'…' 와 바깥 ( ) 만");
+        assert!(t.unmatched.is_empty());
+    }
+
+    /// 문자열 안의 괄호·다른 인용부호도 쌍(그 문자열 안에서만) · 안에 남은 짝 없음은 조용히(사용자 09-23).
+    #[test]
+    fn pairs_inside_strings_are_scoped_and_quiet() {
+        //           0         1         2         3
+        //           0123456789012345678901234567890123
+        let text = "awk '{printf \"%s_%s\", $1}' x ( '(' )";
+        let t = PairTable::build(text, None, PairOpts::default());
+        let find = |open: usize| t.pairs.iter().find(|p| p.open == open).copied();
+        let sq = find(4).expect("'…' 쌍");
+        assert_eq!((sq.close, sq.kind), (25, PairKind::SQuote));
+        let curly = find(5).expect("문자열 안 { }");
+        assert_eq!(
+            (curly.close, curly.parent),
+            (24, Some(0)),
+            "부모 = 인용부호 쌍"
+        );
+        let dq = find(13).expect("문자열 안 \" \"");
+        assert_eq!((dq.close, dq.kind, dq.depth), (19, PairKind::DQuote, 2));
+        // 바깥 ( … ) 는 문자열 안의 `(`와 짝짓지 않는다 · 안의 `(`는 짝 없음으로 표시하지 않는다.
+        let round = find(29).expect("바깥 괄호");
+        assert_eq!(round.close, 35);
+        assert!(t.unmatched.is_empty(), "문자열 안의 짝 없음은 조용히");
+        // 이스케이프 `\"`는 닫지 않는다.
+        let e = PairTable::build("\"a\\\"b\" (", None, PairOpts::default());
+        assert_eq!(e.pairs.len(), 1);
+        assert_eq!((e.pairs[0].open, e.pairs[0].close), (0, 5));
+        assert_eq!(e.unmatched, vec![(7, PairKind::Round)]);
     }
 }

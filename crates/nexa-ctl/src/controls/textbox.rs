@@ -190,6 +190,17 @@ pub enum DiffKind {
 /// 줄 단위 디프(nexa-sql 사용자 09-17 "수정/추가 식별"): 공통 앞·뒤 제거 → 가운데는 LCS(상한 `LCS_CAP`) → 정렬 정합에서
 /// (옛 줄 소비 + 새 줄 소비) 쌍 = `Modified` · 새 줄만 = `Added` · 옛 줄만 = 다음 새 줄에 `DeletedAbove`. 상한을 넘으면 가운데 전부 `Modified`.
 pub fn diff_lines(base: &[String], cur: &[&str]) -> Vec<(usize, DiffKind)> {
+    diff_lines_hint(base, cur, None)
+}
+
+/// [`diff_lines`] + **편집 위치 힌트**(현재 줄 · 0 기준): 같은 줄이 이어진 곳(빈 줄 묶음 · 반복 줄)에 넣거나 지우면 diff는 어느
+/// 자리를 골라도 같으므로, 공통 앞부분을 최대로 잘라내면 표시가 묶음의 **끝**에 붙는다(사용자 09-23: 123행 뒤에 Enter → 표시가
+/// 129행). 순수 삽입/삭제일 때 변경 창을 힌트 줄까지 **위로 밀어**(git의 slider 휴리스틱) 편집한 자리에 표시가 붙게 한다.
+pub fn diff_lines_hint(
+    base: &[String],
+    cur: &[&str],
+    hint: Option<usize>,
+) -> Vec<(usize, DiffKind)> {
     const LCS_CAP: usize = 1500;
     let mut out: Vec<(usize, DiffKind)> = Vec::new();
     let n = base.len();
@@ -201,6 +212,21 @@ pub fn diff_lines(base: &[String], cur: &[&str]) -> Vec<(usize, DiffKind)> {
     let mut suf = 0;
     while suf < n - pre && suf < m - pre && base[n - 1 - suf] == cur[m - 1 - suf] {
         suf += 1;
+    }
+    if let Some(h) = hint {
+        // 순수 삽입(cur만 남음) 또는 순수 삭제(base만 남음): 창을 한 줄 위로 옮겨도 diff가 같은 동안(창 바로 앞 줄 == 창 마지막 줄) 민다.
+        let (la, lb) = (n - suf - pre, m - suf - pre);
+        if la == 0 && lb > 0 {
+            while pre > h && pre > 0 && cur[pre - 1] == cur[pre + lb - 1] {
+                pre -= 1;
+                suf += 1;
+            }
+        } else if lb == 0 && la > 0 {
+            while pre > h && pre > 0 && base[pre - 1] == base[pre + la - 1] {
+                pre -= 1;
+                suf += 1;
+            }
+        }
     }
     let (a0, a1, b0, b1) = (pre, n - suf, pre, m - suf);
     if a0 == a1 && b0 == b1 {
@@ -393,10 +419,15 @@ pub struct TextBox {
     baseline: Option<Vec<String>>,
     /// 기준선 대비 줄 변경(논리 줄 0 기준 · 정렬) — `DiffKind`. 편집 때마다 `diff_dirty`로 다시 계산(페인트에서).
     diff_marks: std::cell::RefCell<Vec<(usize, DiffKind)>>,
+    /// 줄 변경 표시를 마지막으로 계산한 본문 세대(`EditState::rev`) — 사건 경로를 지나지 않는 편집(명령·호스트 호출)도
+    /// 페인트 때 세대 비교로 잡는다(사용자 09-23: 줄 복제 명령 뒤 표시가 안 뜸).
+    diff_rev: std::cell::Cell<u64>,
     diff_dirty: std::cell::Cell<bool>,
     /// 괄호 쌍 표(docs/51 · 편집마다 무효 · 페인트/명령에서 재계산) + 옵션 + 우클릭 메뉴 추가 항목(호스트).
     pair_table: std::cell::RefCell<Option<super::pairs::PairTable>>,
     pairs_dirty: std::cell::Cell<bool>,
+    /// 쌍 표를 마지막으로 만든 본문 세대(`diff_rev`와 같은 뜻).
+    pairs_rev: std::cell::Cell<u64>,
     bracket_opts: BracketOpts,
     menu_extras: Vec<super::ctxmenu::CtxItem>,
     /// 들여쓰기(nexa-sql 09-15 · docs/31): 탭 폭(칸) · Tab 키 = 공백(다음 탭 정지까지) 여부.
@@ -784,9 +815,11 @@ impl TextBox {
             inline_labels: Vec::new(),
             baseline: None,
             diff_marks: std::cell::RefCell::new(Vec::new()),
+            diff_rev: std::cell::Cell::new(u64::MAX),
             diff_dirty: std::cell::Cell::new(false),
             pair_table: std::cell::RefCell::new(None),
             pairs_dirty: std::cell::Cell::new(true),
+            pairs_rev: std::cell::Cell::new(u64::MAX),
             bracket_opts: BracketOpts::default(),
             menu_extras: Vec::new(),
             tab_size: 4,
@@ -1556,7 +1589,9 @@ impl TextBox {
     /// 기준선 대비 줄 변경 목록(테스트·호스트 조회용 · 페인트 전에는 비어 있을 수 있어 강제 계산).
     #[must_use]
     pub fn diff_marks(&self) -> Vec<(usize, DiffKind)> {
-        if self.diff_dirty.get() {
+        if self.diff_dirty.get()
+            || (self.baseline.is_some() && self.diff_rev.get() != self.edit.rev())
+        {
             self.recompute_diff();
         }
         self.diff_marks.borrow().clone()
@@ -1565,6 +1600,7 @@ impl TextBox {
     /// 기준선 vs 현재 줄 — 공통 앞/뒤를 잘라내고 가운데만 LCS(상한 안) · 넘치면 가운데 전부 `Modified`.
     fn recompute_diff(&self) {
         self.diff_dirty.set(false);
+        self.diff_rev.set(self.edit.rev());
         let Some(base) = self.baseline.as_ref() else {
             self.diff_marks.borrow_mut().clear();
             return;
@@ -1573,7 +1609,9 @@ impl TextBox {
             .ml_text_snapshot()
             .unwrap_or_else(|| Rc::new(self.edit.text()));
         let cur: Vec<&str> = text.lines().collect();
-        *self.diff_marks.borrow_mut() = diff_lines(base, &cur);
+        // 힌트 = 캐럿 줄(마지막 편집 자리의 근사) — 빈 줄 묶음 안 삽입/삭제 표시가 편집한 줄에 붙게(사용자 09-23).
+        let hint = self.edit.buf().line_of(self.edit.caret());
+        *self.diff_marks.borrow_mut() = diff_lines_hint(base, &cur, Some(hint));
     }
 
     /// 레인보우 괄호·자동 닫기 옵션(nexa-sql `rainbow.*`).
@@ -1591,10 +1629,12 @@ impl TextBox {
 
     /// 쌍 표(필요하면 재계산 · 상한 초과면 None).
     fn ensure_pairs(&self) {
-        if !self.pairs_dirty.get() {
+        // 사건 경로 밖의 편집(명령·호스트 호출)도 본문 세대로 잡는다(줄 변경 표시와 같은 규칙 · 09-23).
+        if !self.pairs_dirty.get() && self.pairs_rev.get() == self.edit.rev() {
             return;
         }
         self.pairs_dirty.set(false);
+        self.pairs_rev.set(self.edit.rev());
         let table = if self.edit.len() > self.bracket_opts.max_chars {
             None
         } else {
@@ -1696,7 +1736,7 @@ impl TextBox {
         use super::pairs::PairKind;
         let opts = self.bracket_opts.pairs;
         let is_quote = matches!(c, '"' | '\'' | '`');
-        if is_quote && !opts.quotes {
+        if is_quote && !PairKind::from_open(c).is_some_and(|k| opts.has(k)) {
             return false;
         }
         // ★ 키 하나마다 도는 경로 — 본문을 복사하지 않는다(종전 = 전체를 String으로 모았다가 다시 Vec<char>로 · 4만 줄에서 키당 15 ms).
@@ -1705,7 +1745,7 @@ impl TextBox {
         let next = buf.get(caret);
         let prev = caret.checked_sub(1).and_then(|i| buf.get(i));
         // 닫힘 건너뛰기: 다음 글자가 지금 친 닫힘/인용부호와 같으면 캐럿만 넘긴다.
-        let is_closer = PairKind::from_close(c).is_some_and(|k| k != PairKind::Angle || opts.angle);
+        let is_closer = PairKind::from_close(c).is_some_and(|k| opts.has(k));
         if (is_closer || is_quote) && next == Some(c) && self.edit.selection().is_none() {
             self.edit.set_caret(caret + 1, false);
             return true;
@@ -1713,7 +1753,7 @@ impl TextBox {
         let Some(k) = PairKind::from_open(c) else {
             return false;
         };
-        if k == PairKind::Angle && !opts.angle {
+        if !opts.has(k) {
             return false;
         }
         let close = k.close_char();
@@ -1804,6 +1844,17 @@ impl TextBox {
     pub fn in_gutter(&self, p: Point) -> bool {
         let b = self.base.bounds;
         self.multiline && b.contains(p) && p.x < b.x + self.s(10) + self.gutter_px.get()
+    }
+
+    /// 점이 **마지막 그린 줄 아래의 빈 영역**인가(멀티라인 · bounds 안이지만 어느 줄에도 닿지 않음).
+    /// 거터 우클릭 메뉴가 그 영역에서는 줄 단위 항목(토글·니모닉)을 내지 않게(nexa-sql · 사용자 09-23).
+    #[must_use]
+    pub fn below_text(&self, p: Point) -> bool {
+        if !self.multiline || !self.base.bounds.contains(p) {
+            return false;
+        }
+        let lay = self.line_lay.borrow();
+        lay.last().is_none_or(|l| p.y >= l.top + self.line_h())
     }
 
     /// 점 아래의 **논리 줄**(0 기준 · 캐럿 히트와 같은 규칙 · 본문 밖이면 None) — 거터 우클릭 메뉴(nexa-sql 북마크)용.
@@ -3369,7 +3420,9 @@ impl TextBox {
             ctx.fill_rect(Rect::new(gr.right(), b.y + 1, 1, b.h - 2), theme.border);
         }
         // 소프트 행 → 논리 줄 번호(행 시작이 논리 줄 시작이면 번호 · 접힌 나머지 행은 빈칸).
-        if self.diff_dirty.get() {
+        if self.diff_dirty.get()
+            || (self.baseline.is_some() && self.diff_rev.get() != self.edit.rev())
+        {
             self.recompute_diff();
         }
         let diff_marks = self.diff_marks.borrow();
@@ -5775,6 +5828,31 @@ c  d",
         assert_eq!(d, vec![(1, DiffKind::Modified), (3, DiffKind::Added)]);
         let cur2 = ["a", "d"];
         assert_eq!(diff_lines(&base, &cur2), vec![(1, DiffKind::DeletedAbove)]);
+        // 빈 줄 묶음 안 삽입(사용자 09-23): 힌트 없이는 묶음 끝(4), 힌트(캐럿 1)면 편집한 자리(1).
+        let base2: Vec<String> = ["x", "", "", "", "y"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let cur3 = ["x", "", "", "", "", "y"];
+        assert_eq!(diff_lines(&base2, &cur3), vec![(4, DiffKind::Added)]);
+        assert_eq!(
+            diff_lines_hint(&base2, &cur3, Some(1)),
+            vec![(1, DiffKind::Added)]
+        );
+        assert_eq!(
+            diff_lines_hint(&base2, &cur3, Some(2)),
+            vec![(2, DiffKind::Added)]
+        );
+        assert_eq!(
+            diff_lines_hint(&base2, &cur3, Some(9)),
+            vec![(4, DiffKind::Added)],
+            "힌트가 뒤면 그대로"
+        );
+        let cur4 = ["x", "", "", "y"];
+        assert_eq!(
+            diff_lines_hint(&base2, &cur4, Some(1)),
+            vec![(1, DiffKind::DeletedAbove)]
+        );
         let mut t = TextBox::new("p").with_multiline().with_text("a\nb");
         t.set_baseline(Some("a\nb"));
         assert!(t.diff_marks().is_empty());
@@ -5793,6 +5871,14 @@ c  d",
         assert_eq!(t.diff_marks(), vec![(2, DiffKind::Added)]);
         t.set_baseline(Some(&t.text()));
         assert!(t.diff_marks().is_empty(), "저장 = 기준선 갱신 → 표시 없음");
+        // 사건 경로를 지나지 않는 편집(명령 · 사용자 09-23 줄 복제)도 본문 세대로 잡는다.
+        t.edit.set_caret(0, false);
+        assert!(t.edit_command(crate::edit::EditCommand::DuplicateLines));
+        assert_eq!(
+            t.diff_marks(),
+            vec![(1, DiffKind::Added)],
+            "복제한 줄에 표시"
+        );
     }
 
     /// Ctrl+M 괄호 짝 이동 · Ctrl+Shift+M 괄호 안 → 괄호 포함 확장(Sublime · T-114) · 주석 뒤 키워드는 들여쓰기 규칙에서 제외.
