@@ -57,6 +57,11 @@ pub trait Highlighter: std::fmt::Debug {
     fn doubled_quote_escapes(&self) -> bool {
         false
     }
+    /// 이 구문의 문자열이 줄을 넘는가 — `false`면 쌍 표가 **줄 끝에서 열린 인용부호를 버리고 다시 시작**한다(짝 찾기 fail-over ·
+    /// JetBrains 렉서·Sublime 구문의 "문자열은 줄 끝에서 끝난다" 규칙 · nexa-sql 사용자 09-23 "`'` 하나가 전체 짝 찾기를 오염").
+    fn strings_span_lines(&self) -> bool {
+        true
+    }
 }
 
 /// 강조 규격(데이터) — [`Highlighter`] 구현.
@@ -226,6 +231,10 @@ impl Highlighter for SyntaxSpec {
     /// 규격이 문자열 구분자를 정의하면 두 번 = 이스케이프(`strings` 필드 규약 · SQL `''` · `""`).
     fn doubled_quote_escapes(&self) -> bool {
         !self.strings.is_empty()
+    }
+    /// 규격의 문자열 토큰은 줄 단위(`line_spans`가 줄마다 새로 시작 · 상태는 블록 주석만 이어진다).
+    fn strings_span_lines(&self) -> bool {
+        false
     }
 
     fn line_spans(&self, line: &str, state: &mut u32, out: &mut Vec<(usize, TokenKind)>) {
@@ -418,13 +427,13 @@ pub fn to_html(
 }
 
 /// 내장 SQL 규격 — 앱은 같은 형식의 파일을 `Packages/`에 두어 확장한다.
-pub const SQL_SPEC: &str = r"
+pub const SQL_SPEC: &str = r#"
 name = SQL
 extensions = sql, ddl, dml, pks, pkb, pls, plsql, prc, fnc, trg, vw, tsql, psql
 case_insensitive = true
 line_comment = --
 block_comment = /* */
-string = ' \x22
+string = ' "
 escape_backslash = false
 ident_extra = _$#@
 keywords = SELECT FROM WHERE AND OR NOT IN IS NULL LIKE BETWEEN EXISTS AS ON JOIN INNER LEFT RIGHT FULL OUTER CROSS NATURAL USING
@@ -437,7 +446,7 @@ keywords = CAST CONVERT COALESCE NVL NVL2 DECODE NULLIF IFNULL ISNULL COUNT SUM 
 keywords = TO_CHAR TO_DATE TO_NUMBER SYSDATE SYSTIMESTAMP GETDATE NOW CURRENT_DATE CURRENT_TIMESTAMP EXTRACT DATEADD DATEDIFF
 keywords = INT INTEGER BIGINT SMALLINT NUMBER NUMERIC DECIMAL FLOAT REAL DOUBLE PRECISION VARCHAR VARCHAR2 NVARCHAR NVARCHAR2 CHAR NCHAR TEXT CLOB BLOB DATE TIMESTAMP TIME BOOLEAN BOOL BIT SERIAL
 keywords = TRUE FALSE EXEC EXECUTE IMMEDIATE CURSOR OPEN CLOSE INTO OUT INOUT ROWTYPE PRAGMA AUTONOMOUS_TRANSACTION GO
-";
+"#;
 
 #[cfg(test)]
 mod tests {

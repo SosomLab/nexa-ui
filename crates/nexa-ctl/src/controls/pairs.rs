@@ -277,8 +277,10 @@ impl PairTable {
                 }
                 ci = end;
             }
-            if hl.is_none() {
-                // 평문 문자열은 줄을 넘지 않는다 — 열린 인용부호와 그 안은 버린다.
+            // ★ 줄 끝 재동기화(fail-over · 사용자 09-23): 평문, 그리고 문자열이 줄을 넘지 않는 구문(`strings_span_lines` = false ·
+            //   SQL 규격)에서는 줄 끝에 남은 열린 인용부호와 그 안을 버리고 다음 줄은 코드 층에서 다시 시작한다 — 짝 없는 `'` 하나가
+            //   파일 끝까지 짝을 뒤집어 놓지 않는다(JetBrains 렉서·Sublime 구문의 "문자열은 줄 끝에서 끝난다" 규칙).
+            if hl.is_none_or(|h| !h.strings_span_lines()) {
                 if let Some(&f) = floors.first() {
                     stack.truncate(f);
                 }
@@ -561,5 +563,44 @@ mod tests {
         let p = PairTable::build("'O''Neil'", None, PairOpts::default());
         let opens: Vec<usize> = p.pairs.iter().map(|p| p.open).collect();
         assert_eq!(opens, vec![0, 3]);
+    }
+
+    /// `"O'Neil"` — SQL 규격에서 `"`도 문자열이라 안의 `'`는 그 문자열이 닫히며 조용히 버려진다 · 짝 없는 `'`가 남은 줄은 **줄 끝에서
+    /// 재동기화**되어 다음 줄의 짝이 뒤집히지 않는다(사용자 09-23 "`'` 하나가 전체 짝 찾기를 오염" · fail-over).
+    #[test]
+    fn dq_string_apostrophe_and_eol_resync() {
+        let sql = crate::highlight::SyntaxSpec::sql();
+        assert!(!sql.strings_span_lines());
+        //          0         1         2         3
+        //          0123456789012345678901234567890123456
+        let text = "DEFINE who = \"O'Neil\"\nSELECT 'a' || 'b';";
+        let t = PairTable::build(text, Some(&sql), PairOpts::default());
+        let q: Vec<(usize, usize, PairKind)> = t
+            .pairs
+            .iter()
+            .filter(|p| p.kind.is_quote())
+            .map(|p| (p.open, p.close, p.kind))
+            .collect();
+        assert_eq!(
+            q,
+            vec![
+                (13, 20, PairKind::DQuote),
+                (29, 31, PairKind::SQuote),
+                (36, 38, PairKind::SQuote)
+            ]
+        );
+        // 짝 없는 `'`(첫 줄) → 그 줄에서 버려지고 둘째 줄의 `'y'`·`( )`는 정상.
+        let text2 = "x = 'broken\n('y')";
+        let t = PairTable::build(text2, Some(&sql), PairOpts::default());
+        let opens: Vec<(usize, PairKind)> = t.pairs.iter().map(|p| (p.open, p.kind)).collect();
+        assert_eq!(
+            opens,
+            vec![(12, PairKind::Round), (13, PairKind::SQuote)],
+            "둘째 줄부터 다시 코드 층"
+        );
+        assert!(
+            t.unmatched.is_empty(),
+            "버려진 `'`는 짝 없음으로도 세지 않는다"
+        );
     }
 }
