@@ -304,6 +304,8 @@ pub struct ContextMenu {
     /// 넘치면 `first`부터 그 수만큼만 그리고 휠·↑/↓/PgUp/PgDn/Home/End로 스크롤한다(오른쪽에 가는 스크롤 표시).
     max_rows: Option<usize>,
     first: usize,
+    /// 스크롤·이동 뒤 **마지막 항목이 보이는 범위에** 들어왔다 — 호스트가 다음 페이지를 이어 붙이는 신호(nexa-sql 완성 목록 T-196 · 09-24).
+    reached_end: bool,
     /// ★ 폭 상한(논리 px · nexa-sql 완성 팝업 사용자 09-23 "긴 이름") — 라벨이 넘치면 가로 스크롤(`hscroll`) · 0일 때는 가운데 ….
     max_w: Option<i32>,
     /// 가로 스크롤 오프셋(px · 0 = 처음) · paint가 잰 라벨 넘침 폭.
@@ -410,6 +412,7 @@ impl ContextMenu {
             self.first = i + 1 - n;
         }
         self.first = self.first.min(self.items.len().saturating_sub(n));
+        self.note_reach();
     }
 
     /// 휠/키로 `rows`행 스크롤(음수 = 위).
@@ -417,6 +420,42 @@ impl ContextMenu {
         let n = self.vis_count().max(1);
         let max_first = self.items.len().saturating_sub(n) as i32;
         self.first = (self.first as i32 + rows).clamp(0, max_first) as usize;
+        self.note_reach();
+    }
+
+    /// 마지막 **활성** 항목이 보이면 끝 도달 표시(페이지 로딩 신호) — 맨 끝의 비활성 안내 줄("N개 더")은 End가 건너뛰므로 그 앞 항목 기준.
+    fn note_reach(&mut self) {
+        let n = self.vis_count().max(1);
+        let last_enabled = self
+            .items
+            .iter()
+            .rposition(|it| matches!(it, CtxItem::Item { enabled: true, .. }));
+        if last_enabled.is_some_and(|li| self.first + n > li) {
+            self.reached_end = true;
+        }
+    }
+
+    /// 끝 도달 신호를 한 번 꺼낸다(스크롤·↓·PgDn·End로 마지막 항목이 보인 뒤 `true`).
+    pub fn take_reached_end(&mut self) -> bool {
+        std::mem::take(&mut self.reached_end)
+    }
+
+    /// ★ 열린 채 항목을 바꾼다(페이지 이어 붙이기 · nexa-sql T-196): `first`·`hover`·위치를 지키고 폭은 넓어질 때만 · 창 밖이면 밀어 넣기.
+    pub fn replace_items(&mut self, items: Vec<CtxItem>, text_w: i32) {
+        let Some(p) = self.at.get() else {
+            return;
+        };
+        self.items = items;
+        self.fit_w.set(self.fit_w.get().max(text_w));
+        let n = self.vis_count().max(1);
+        self.first = self.first.min(self.items.len().saturating_sub(n));
+        self.hover = self.hover.filter(|h| *h < self.items.len());
+        self.reached_end = false;
+        let (w, h) = self.size_px();
+        let area = crate::geom::popup_host(self.host, self.surface.get());
+        let r = crate::geom::nudge_into(Rect::new(p.x, p.y, w, h), area);
+        self.rect.set(r);
+        self.at.set(Some(Point { x: r.x, y: r.y }));
     }
 
     fn s(&self, v: i32) -> i32 {
@@ -496,6 +535,7 @@ impl ContextMenu {
         self.label_over.set(0);
         self.last_click = None;
         self.wheel_acc.set(0);
+        self.reached_end = false;
         let (w, h) = self.size_px();
         // 경계 접기 — 공용 배치 규칙([`crate::geom::place_popup`]: 정방향 → 반대쪽 → 밀어 넣기). 표면 크기를 이미 알면(앞선
         // paint) 그 안에서 · 모르면 첫 paint의 안전망이 맞춘다.
@@ -1519,6 +1559,41 @@ mod tests {
         });
         assert!(m.on_event(&InputEvent::Wheel { delta: 120 }));
         assert_eq!(m.vis_range(), 4..7, "안 = 스크롤");
+    }
+
+    /// ★ 페이지 이어 붙이기(nexa-sql T-196 · 09-24): End/스크롤로 마지막 항목이 보이면 `take_reached_end` · `replace_items`는
+    /// first·hover·위치를 지키고 신호를 비운다 · 열려 있지 않으면 무시.
+    #[test]
+    fn reached_end_signal_and_replace_items_keep_view() {
+        let mut m = ContextMenu::new();
+        m.set_max_rows(Some(3));
+        let mk = |n: usize| -> Vec<CtxItem> {
+            (0..n)
+                .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+                .collect()
+        };
+        m.open_at(10, 10, mk(8), Rect::new(0, 0, 800, 600), 80);
+        assert!(!m.take_reached_end(), "열자마자는 아님(8 > 3)");
+        let end = InputEvent::Key {
+            key: Key::End,
+            shift: false,
+            primary: false,
+        };
+        m.on_event(&end);
+        assert!(m.take_reached_end(), "End = 마지막 보임");
+        assert!(!m.take_reached_end(), "한 번만");
+        let (first, hover, at) = (m.vis_range().start, m.hovered(), m.bounds());
+        m.replace_items(mk(12), 80);
+        assert_eq!(m.vis_range().start, first, "first 유지");
+        assert_eq!(m.hovered(), hover, "hover 유지");
+        assert_eq!((m.bounds().x, m.bounds().y), (at.x, at.y), "자리 유지");
+        assert!(!m.take_reached_end(), "교체 뒤 신호 없음");
+        m.on_event(&end);
+        assert!(m.take_reached_end());
+        assert_eq!(m.hovered(), Some(11));
+        m.close();
+        m.replace_items(mk(3), 80);
+        assert!(!m.is_open());
     }
 
     /// 클릭 = 선택 모드(완성 팝업 · 09-24): 단일 클릭 = 강조만 · 같은 행 재클릭 = 확정 · ←/→ = 넘침이 있을 때만 가로 스크롤.

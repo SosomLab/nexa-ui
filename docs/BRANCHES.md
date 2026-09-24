@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/73-ctxmenu-paging | 2026-09-24 | 2026-09-24 → main(삭제) | 1 | 73차(mac) — ContextMenu `reached_end`/`take_reached_end`(마지막 활성 항목 보임) · `replace_items`(first·hover·자리 유지) · `item_ids` · 시험 (nexa-sql T-196 페이지 로딩) |
 | feat/72-mac-ctxmenu-textbox-mem | 2026-09-24 | 2026-09-24 → main(삭제) | 1 | 72차(mac) — ContextMenu 폭 상한·가로 스크롤·클릭 선택·min_rows·휠 누적·**휠 안/밖**(`wheel_inside`)·강조/표식(`emph`·`marks`)·`item_ids` · TextBox `point_at`/`lay_rev`·`mem_parts` · `ToggleBlockComment` · nexa-sys `app_active` (nexa-sql 100차) |
 | feat/win-71-ctxmenu-scroll | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 71차(win): `ContextMenu::set_max_rows(Some(n))` = 보이는 행 수 상한 + **스크롤**(휠 · ↑/↓가 보이게 따라옴 · PgUp/PgDn/Home/End · 오른쪽 가는 트랙+썸 표시 · 가려진 행은 히트 없음) · `hovered()` — nexa-sql 검색어 이력 드롭다운·완성 팝업용 · 시험 `scrolls_with_max_rows_keys_and_wheel` · 329 통과 |
 | feat/win-70-sql-dq-string-eol-resync | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 70차(win): 🔧 SQL 규격 `string = ' "`가 raw 문자열이라 `"`가 아니라 `\`가 구분자였던 것 → `r#"…"#` + `string = ' "`(`"O'Neil"`의 `'`가 문자열을 열어 다음 `'`까지 삼키던 오염) · ★ 짝 찾기 fail-over = `Highlighter::strings_span_lines()`(SyntaxSpec = false) → `PairTable`이 **줄 끝에서 열린 인용부호를 버리고 재동기화**(JetBrains 렉서·Sublime 구문 규칙) · 시험 `dq_string_apostrophe_and_eol_resync` · 328 통과 |
