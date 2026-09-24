@@ -21,6 +21,8 @@ pub enum EditCommand {
     SwapLinesDown,
     /// 줄 주석 토글(`Ctrl+/` · 접두는 문법이 준다).
     ToggleComment,
+    /// 블록 주석 토글(`Ctrl+Shift+/` · `/* … */` — 선택 영역, 없으면 현재 줄 · 이미 감싸져 있으면 벗김 · nexa-sql 09-24).
+    ToggleBlockComment,
     /// 들여쓰기 한 단계(`Ctrl+]` · 여러 줄 선택 + Tab).
     Indent,
     /// 내어쓰기 한 단계(`Ctrl+[` · `Shift+Tab`).
@@ -190,6 +192,7 @@ impl EditState {
             EditCommand::SwapLinesUp => self.swap_lines(true),
             EditCommand::SwapLinesDown => self.swap_lines(false),
             EditCommand::ToggleComment => comment.is_some_and(|c| self.toggle_comment(c)),
+            EditCommand::ToggleBlockComment => self.toggle_block_comment("/*", "*/"),
             EditCommand::Indent => self.indent_lines(indent_unit),
             EditCommand::Unindent => self.unindent_lines(tab_size),
             EditCommand::SelectLines => self.select_lines(),
@@ -492,6 +495,100 @@ impl EditState {
         self.apply_pieces(pieces)
     }
 
+    /// 블록 주석 토글: 영역마다(캐럿만이면 그 줄의 본문) 앞뒤 공백을 뺀 내용이 `open … close`로 감싸져 있으면 벗기고, 아니면
+    /// `open ` + 내용 + ` close`로 감싼다. 영역이 여럿이면 각각.
+    fn toggle_block_comment(&mut self, open: &str, close: &str) -> bool {
+        let o: Vec<char> = open.chars().collect();
+        let c: Vec<char> = close.chars().collect();
+        if o.is_empty() || c.is_empty() {
+            return false;
+        }
+        let ws = |ch: Option<char>| matches!(ch, Some(' ') | Some('\t') | Some('\n') | Some('\r'));
+        let mut pieces = Vec::new();
+        // 단일 선택이면 토글 뒤 선택을 감싼/벗긴 범위로 맞춘다(다음 토글이 되돌리게 · Sublime).
+        let regions = self.regions();
+        let mut resel: Option<(usize, usize)> = None;
+        for (a, b) in regions.iter().copied() {
+            // 캐럿만 = 그 줄(들여쓰기 뒤 본문).
+            let (mut s, mut e) = if a == b {
+                let line = self.buf.line_of(a);
+                let ls = self.buf.line_start(line);
+                let le = if line + 1 < self.buf.line_count() {
+                    self.buf.line_start(line + 1) - 1
+                } else {
+                    self.buf.len()
+                };
+                (ls, le)
+            } else {
+                (a, b)
+            };
+            // 앞뒤 공백은 밖에 둔다.
+            while s < e && ws(self.buf.get(s)) {
+                s += 1;
+            }
+            while e > s && ws(self.buf.get(e - 1)) {
+                e -= 1;
+            }
+            if s >= e {
+                continue;
+            }
+            let wrapped = e - s >= o.len() + c.len()
+                && self.buf.starts_with_at(s, &o)
+                && self.buf.starts_with_at(e - c.len(), &c);
+            if wrapped {
+                let mut del_o = o.len();
+                if ws(self.buf.get(s + del_o)) && s + del_o < e - c.len() {
+                    del_o += 1;
+                }
+                let mut ce = e - c.len();
+                let mut del_c = c.len();
+                if ce > s + del_o && ws(self.buf.get(ce - 1)) {
+                    ce -= 1;
+                    del_c += 1;
+                }
+                pieces.push(Piece {
+                    pos: s,
+                    del: del_o,
+                    ins: Vec::new(),
+                });
+                pieces.push(Piece {
+                    pos: ce,
+                    del: del_c,
+                    ins: Vec::new(),
+                });
+                if regions.len() == 1 && a != b {
+                    resel = Some((s, e - del_o - del_c));
+                }
+            } else {
+                let mut ins_o = o.clone();
+                ins_o.push(' ');
+                let mut ins_c = vec![' '];
+                ins_c.extend(c.iter().copied());
+                pieces.push(Piece {
+                    pos: s,
+                    del: 0,
+                    ins: ins_o,
+                });
+                pieces.push(Piece {
+                    pos: e,
+                    del: 0,
+                    ins: ins_c,
+                });
+                if regions.len() == 1 && a != b {
+                    resel = Some((s, e + o.len() + 1 + 1 + c.len()));
+                }
+            }
+        }
+        if pieces.is_empty() {
+            return false;
+        }
+        let ok = self.apply_pieces(pieces);
+        if let (true, Some((s, e))) = (ok, resel) {
+            self.set_selection(s, e);
+        }
+        ok
+    }
+
     fn indent_lines(&mut self, unit: &str) -> bool {
         let ins: Vec<char> = unit.chars().collect();
         if ins.is_empty() {
@@ -782,6 +879,83 @@ mod tests {
         assert!(run(&mut e, EditCommand::SwapLinesDown));
         assert_eq!(e.text(), "a\nd\nb\nc");
         assert_eq!(e.selection(), Some((4, 7)));
+    }
+
+    /// 블록 주석 자동 점검(nexa-sql 사용자 09-24 "로직 확인 자동화"): 여러 줄 선택 · 탭 들여쓰기 · 여러 영역 · 왕복 3회 · 부분 선택(중첩) ·
+    /// 끝 줄바꿈 포함 선택 · 빈 선택 여러 줄 · 이미 감싼 안쪽 공백 없는 꼴(`/*x*/`)도 벗김.
+    #[test]
+    fn toggle_block_comment_matrix() {
+        // 여러 줄 선택(탭 들여쓰기 · 선택이 줄바꿈까지 포함) — 앞뒤 공백은 밖.
+        let src = "SELECT\n\tA.*\nFROM\n\tT A\n";
+        let mut e = EditState::with_text(src, false);
+        e.set_selection(0, src.len());
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(e.text(), "/* SELECT\n\tA.*\nFROM\n\tT A */\n");
+        for _ in 0..3 {
+            assert!(run(&mut e, EditCommand::ToggleBlockComment));
+            assert_eq!(e.text(), src, "왕복 = 원문");
+            assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        }
+        assert_eq!(e.text(), "/* SELECT\n\tA.*\nFROM\n\tT A */\n");
+        // 여러 영역(캐럿 둘 · Ctrl+Alt+↓) = 각 줄을 따로.
+        let mut e = EditState::with_text("a = 1\nb = 2", false);
+        e.set_caret(1, false);
+        assert!(run(&mut e, EditCommand::AddCaretDown));
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(e.text(), "/* a = 1 */\n/* b = 2 */");
+        // 부분 선택은 그 조각만(중첩 허용 — SQL 블록 주석은 중첩되지 않으므로 사용자가 판단).
+        let mut e = EditState::with_text("x = 1 + 2", false);
+        e.set_selection(4, 9);
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(e.text(), "x = /* 1 + 2 */");
+        // 안쪽 공백 없는 기존 주석도 벗긴다.
+        let mut e = EditState::with_text("/*x*/", false);
+        e.set_selection(0, 5);
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(e.text(), "x");
+        // 공백만 선택 = 아무것도 안 함.
+        let mut e = EditState::with_text("a\n   \nb", false);
+        e.set_selection(2, 5);
+        assert!(!run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(e.text(), "a\n   \nb");
+    }
+
+    /// 블록 주석(nexa-sql 09-24 `Ctrl+Shift+/`): 선택 = 감싸기 → 다시 = 벗기기 · 캐럿만 = 그 줄 본문 · 앞뒤 공백은 밖.
+    #[test]
+    fn toggle_block_comment_wrap_and_unwrap() {
+        let mut e = EditState::with_text(
+            "SELECT 1
+FROM dual",
+            false,
+        );
+        e.set_selection(0, 8);
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(
+            e.text(),
+            "/* SELECT 1 */
+FROM dual"
+        );
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(
+            e.text(),
+            "SELECT 1
+FROM dual",
+            "다시 = 벗김"
+        );
+        let mut e = st("  x = 1  ", 3);
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(
+            e.text(),
+            "  /* x = 1 */  ",
+            "캐럿만 = 그 줄 본문 · 공백은 밖"
+        );
+        assert!(run(&mut e, EditCommand::ToggleBlockComment));
+        assert_eq!(e.text(), "  x = 1  ");
+        let mut e = st("   ", 1);
+        assert!(
+            !run(&mut e, EditCommand::ToggleBlockComment),
+            "빈 줄은 없음"
+        );
     }
 
     #[test]

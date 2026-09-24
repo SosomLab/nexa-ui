@@ -448,6 +448,8 @@ pub struct TextBox {
     sl_range: std::cell::Cell<(i32, i32)>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
+    /// `line_lay`를 만든 본문 세대(`EditState::rev`) — 낡은 배치로는 좌표를 주지 않는다(nexa-sql 09-24 자동/수동 팝업 위치 불일치).
+    lay_rev: std::cell::Cell<u64>,
     /// ★ 세로 이동의 **목표 x**(Sublime `xpos` · nexa-sql 사용자 09-19): ↑/↓를 연달아 누르는 동안 처음 출발한 시각 열을
     /// 기억해, 빈 줄·짧은 줄을 지나도 긴 줄에서 다시 그 열로 돌아온다. 다른 캐럿 이동·편집이면 비운다.
     goal_x: Option<i32>,
@@ -831,6 +833,7 @@ impl TextBox {
             ml_bars_w: std::cell::Cell::new(0),
             sl_range: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
+            lay_rev: std::cell::Cell::new(u64::MAX),
             goal_x: None,
             hangul: crate::hangul::Composer::new(),
             goal_col: None,
@@ -1856,11 +1859,24 @@ impl TextBox {
     /// 자동 완성 팝업(nexa-sql `intel` · docs/76)이 캐럿 아래에 뜨게.
     #[must_use]
     pub fn caret_point(&self) -> Option<Point> {
+        self.point_at(self.edit.caret())
+    }
+
+    /// 글자 인덱스 `idx`의 화면 위치(규칙은 [`Self::caret_point`]와 같다) — 완성 팝업을 **접두가 시작한 글자**에 붙여
+    /// 타이핑 중에도 자리가 고정되게(nexa-sql 09-23 "처음 자리 유지 · 필요할 때만 최소 이동").
+    #[must_use]
+    pub fn point_at(&self, idx: usize) -> Option<Point> {
         if !self.multiline {
             return None;
         }
-        let caret = self.edit.caret();
+        // ★ 배치가 본문 세대와 다르면(글자를 친 뒤 아직 안 그림) None — 옛 배치의 다음 행 시작이 캐럿과 같아 **다음 줄**에 붙던
+        //   결함(nexa-sql 09-24 "자동으로 뜬 위치 ≠ 수동 위치"). 호스트는 None이면 그린 뒤로 미룬다.
+        if self.lay_rev.get() != self.edit.rev() {
+            return None;
+        }
+        let caret = idx;
         let lay = self.line_lay.borrow();
+        // `xs`는 글자 경계(len = 글자수 + 1)라 행 끝(idx == start + 글자수)도 안에 든다.
         let l = lay
             .iter()
             .find(|l| caret >= l.start_idx && caret < l.start_idx + l.xs.len())?;
@@ -3008,6 +3024,13 @@ impl TextBox {
     /// 이 컨트롤이 쥔 메모리의 어림(바이트): 본문(4 B/글자) + 히스토리 + 그리기 캐시 — 진단·메모리 점검용.
     #[must_use]
     pub fn approx_bytes(&self) -> usize {
+        let (a, b, c) = self.mem_parts();
+        a + b + c
+    }
+
+    /// (본문, 히스토리, 그리기 캐시) 바이트 — 호스트의 메모리 맵이 카테고리별로 보고한다(nexa-sql docs/80).
+    #[must_use]
+    pub fn mem_parts(&self) -> (usize, usize, usize) {
         let text = self.edit.buf().approx_bytes();
         let hist = self.edit.history_bytes();
         let cache = self
@@ -3019,7 +3042,7 @@ impl TextBox {
             + self.row_width_cache.borrow().widths.len() * 4
             + self.line_hl_cache.borrow().states.len() * 4
             + self.hl_state_cache.borrow().states.len() * 12;
-        text + hist + cache
+        (text, hist, cache)
     }
 
     /// 진단·테스트: (구문 상태를 계산한 행 수, 폰트 엔진으로 폭을 잰 행 수) 누계 — 캐시가 듣는지 본다.
@@ -3903,6 +3926,7 @@ impl TextBox {
             });
         }
         drop(lay);
+        self.lay_rev.set(self.edit.rev());
         // ★ 미니맵(스크롤바 아래 · 팝업 아래) — 캐시 비트맵 블릿 + 선택/동일 출현 점 + 뷰포트 상자.
         if band.w > 0 {
             let mm_cw = self.s(1).max(1);
@@ -6740,6 +6764,36 @@ short
         assert!(t.minimap_hover.value() > 0.9, "hover 진행");
         t.on_event(&InputEvent::MouseMove { x: 5, y: 5 }, &mut inv);
         assert!(t.is_animating(), "띠를 벗어나면 꺼지는 중");
+    }
+
+    /// 캐럿 좌표는 마지막 그리기 뒤에 글자를 쳐도 그 줄에 남는다(nexa-sql 09-23 완성 팝업이 창 원점으로 튀던 결함).
+    #[test]
+    fn caret_point_survives_typing_between_paints() {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 300, 120), &mut inv);
+        let text = "SELECT\n  *\nFROM\n  M4S_";
+        t.set_text(text);
+        t.base.focused = true;
+        t.edit.set_caret(text.chars().count(), false);
+        paint(&t);
+        let before = t.caret_point().expect("그린 뒤 캐럿");
+        // 접두 시작 글자의 좌표(팝업 앵커 · nexa-sql 09-23 "처음 자리 유지")도 같은 줄이고 캐럿보다 왼쪽.
+        let start = t.point_at(text.chars().count() - 4).expect("접두 시작");
+        assert!(start.y == before.y && start.x < before.x);
+        // 글자를 친 뒤 다시 그리기 전 = 좌표 없음(옛 배치로 다음 줄에 붙지 않게 · 09-24) → 호스트가 그린 뒤로 미룬다.
+        for c in "2040".chars() {
+            t.on_event(&InputEvent::Char { c, now_ms: 0 }, &mut inv);
+            assert!(
+                t.caret_point().is_none(),
+                "낡은 배치로는 좌표를 주지 않는다"
+            );
+        }
+        paint(&t);
+        let after = t.caret_point().expect("그린 뒤");
+        assert!(after.x > before.x && after.y == before.y);
+        // 줄 끝(글자수 == 인덱스)도 배치 안(경계 배열).
+        assert!(t.point_at(t.buf().len()).is_some());
     }
 }
 

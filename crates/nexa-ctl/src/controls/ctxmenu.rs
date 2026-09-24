@@ -16,7 +16,7 @@
 use crate::draw::DrawCtx;
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
-use crate::theme::{IconImage, Theme};
+use crate::theme::{Color, IconImage, Theme};
 use crate::FontSlot;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -111,6 +111,12 @@ pub enum CtxItem {
         icon: Option<MenuIcon>,
         /// 단축키 문구(옵션 · 오른쪽 정렬 · 표시 전용 — 키 처리는 호스트 키맵 몫).
         shortcut: Option<String>,
+        /// 라벨 뒤 흐린 보조 글(완성 팝업 ` : 타입` · 사용자 09-24 "컬럼 이름이 더 잘 보이게").
+        sub: Option<String>,
+        /// 전체 일치 = 굵게 + 파랑(#0000FF · 완성 팝업 · 사용자 09-24).
+        emph: bool,
+        /// 라벨 안 일치 구간(바이트 범위 · 강조색으로 · 부분 일치).
+        marks: Vec<std::ops::Range<usize>>,
         /// 하위 메뉴(비면 없음).
         children: Vec<CtxItem>,
         /// 토글 상태(`Some` = 켜짐/꺼짐 아이콘을 아이콘 칸에 · 라벨은 다른 행과 같은 열에 정렬 · 09-15).
@@ -135,6 +141,9 @@ impl CtxItem {
             enabled: true,
             icon: None,
             shortcut: None,
+            sub: None,
+            emph: false,
+            marks: Vec::new(),
             children: Vec::new(),
             checked: None,
             active: false,
@@ -150,6 +159,9 @@ impl CtxItem {
             enabled,
             icon: None,
             shortcut: None,
+            sub: None,
+            emph: false,
+            marks: Vec::new(),
             children: Vec::new(),
             checked: None,
             active: false,
@@ -172,6 +184,9 @@ impl CtxItem {
             enabled,
             icon: None,
             shortcut: None,
+            sub: None,
+            emph: false,
+            marks: Vec::new(),
             children,
             checked: None,
             active: false,
@@ -186,6 +201,33 @@ impl CtxItem {
         }
         self
     }
+    /// 전체 일치 강조(굵게 + 파랑).
+    #[must_use]
+    pub fn with_emphasis(mut self, on: bool) -> Self {
+        if let Self::Item { emph, .. } = &mut self {
+            *emph = on;
+        }
+        self
+    }
+
+    /// 일치 구간(라벨 바이트 범위 · 오름차순 · 비겹침) — 강조색으로 그린다.
+    #[must_use]
+    pub fn with_marks(mut self, m: Vec<std::ops::Range<usize>>) -> Self {
+        if let Self::Item { marks, .. } = &mut self {
+            *marks = m;
+        }
+        self
+    }
+
+    /// 라벨 뒤 흐린 보조 글(` : 타입`).
+    pub fn with_sub(mut self, s: impl Into<String>) -> Self {
+        if let Self::Item { sub, .. } = &mut self {
+            let v: String = s.into();
+            *sub = (!v.is_empty()).then_some(v);
+        }
+        self
+    }
+
     /// 단축키 문구 붙이기(빌더 · 빈 문자열 = 없음).
     #[must_use]
     pub fn with_shortcut(mut self, sc: impl Into<String>) -> Self {
@@ -262,6 +304,19 @@ pub struct ContextMenu {
     /// 넘치면 `first`부터 그 수만큼만 그리고 휠·↑/↓/PgUp/PgDn/Home/End로 스크롤한다(오른쪽에 가는 스크롤 표시).
     max_rows: Option<usize>,
     first: usize,
+    /// ★ 폭 상한(논리 px · nexa-sql 완성 팝업 사용자 09-23 "긴 이름") — 라벨이 넘치면 가로 스크롤(`hscroll`) · 0일 때는 가운데 ….
+    max_w: Option<i32>,
+    /// 가로 스크롤 오프셋(px · 0 = 처음) · paint가 잰 라벨 넘침 폭.
+    hscroll: std::cell::Cell<i32>,
+    label_over: std::cell::Cell<i32>,
+    /// ★ 클릭 = 선택(강조·카드) · 같은 행을 400 ms 안에 다시 클릭 = 확정 · Enter = 확정(nexa-sql 완성 팝업 · 사용자 09-24
+    ///   "단일 클릭은 내용 표시 · 엔터/더블 클릭은 선택"). 기본(false) = 클릭이 곧 확정(우클릭 메뉴).
+    click_selects: bool,
+    last_click: Option<(usize, std::time::Instant)>,
+    /// 트랙패드 세로 휠 누적(px · 40마다 1행 · nexa-sql 09-24 "끝까지 내렸는데 한 칸 위로" = delta 0 사건이 위로 1행이던 결함).
+    wheel_acc: std::cell::Cell<i32>,
+    /// ★ 최소 행 수(완성 팝업 · 사용자 09-24 "항목이 1개여도 10칸 높이"): 항목이 적어도 이 높이를 유지한다(빈 자리는 바탕).
+    min_rows: Option<usize>,
 }
 
 /// 하위 메뉴 유예(ms) — 자식이 화면 안에 맞추느라 부모 행과 세로가 어긋나면 대각선 이동 중 다른 부모 행을 지난다.
@@ -285,6 +340,28 @@ impl ContextMenu {
         }
     }
 
+    /// 폭 상한(논리 px · `None` = 내용대로) — 넘치는 라벨은 Shift+휠/틸트 휠로 가로 스크롤 · 스크롤 0이면 가운데 …
+    /// (nexa-sql 완성 팝업 · 사용자 09-23 "세로·가로 스크롤 · 긴 이름").
+    pub fn set_max_width(&mut self, w: Option<i32>) {
+        self.max_w = w.filter(|&w| w > 0);
+    }
+
+    /// 최소 행 수(완성 팝업): 항목이 적어도 이 행 수만큼의 높이를 유지한다(옆 카드가 같은 높이를 쓴다 · 09-24).
+    pub fn set_min_rows(&mut self, n: Option<usize>) {
+        self.min_rows = n.filter(|&n| n > 0);
+    }
+
+    /// 클릭 = 선택 모드(완성 팝업): 단일 클릭은 강조만 · 더블 클릭/Enter = 확정.
+    pub fn set_click_selects(&mut self, on: bool) {
+        self.click_selects = on;
+    }
+
+    /// 가로로 넘친 라벨이 있는가(paint가 잰 값 · 호스트 안내용).
+    #[must_use]
+    pub fn label_overflow(&self) -> i32 {
+        self.label_over.get()
+    }
+
     /// 배율(고DPI).
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
@@ -300,6 +377,18 @@ impl ContextMenu {
     #[must_use]
     pub fn hovered(&self) -> Option<usize> {
         self.hover
+    }
+
+    /// 항목 id 목록(구분선 = 빈 문자열 · 열린 순서 그대로) — 호스트 시험이 "무엇이 떠 있나"를 확인하는 용도(09-24).
+    #[must_use]
+    pub fn item_ids(&self) -> Vec<&str> {
+        self.items
+            .iter()
+            .map(|it| match it {
+                CtxItem::Item { id, .. } => id.as_str(),
+                _ => "",
+            })
+            .collect()
     }
 
     /// 보이는 행 수(상한 적용).
@@ -353,6 +442,11 @@ impl ContextMenu {
         }
     }
 
+    /// 휠을 받을 자리인가 — 마지막 MouseMove 위치가 팝업(하위 포함) 안이면 참 · 위치를 모르면 참(종전 동작).
+    fn wheel_inside(&self) -> bool {
+        self.last_pos.is_none_or(|p| self.bounds().contains(p))
+    }
+
     /// **바깥 클릭**인가 — 열린 동안 좌/우 MouseDown이 팝업(하위 메뉴 포함) 밖. `on_event`는 바깥 클릭을 *닫고 소비*하므로
     /// 호스트는 이 판정으로 "닫힌 클릭"과 "메뉴가 먹은 클릭"을 갈라 **바깥 클릭은 그대로 아래로 흘린다**(팝업 UX 규칙 —
     /// nexa-sql 09-22: 탭 메뉴가 열린 채 편집기·결과 탭을 우클릭하면 닫히기만 하고 다시 눌러야 했다).
@@ -387,6 +481,8 @@ impl ContextMenu {
         }
         self.items = items;
         self.first = 0;
+        // 커서 위치는 이번 열림 동안 받은 MouseMove로만(이전 열림의 자리를 믿지 않는다 · 휠 안/밖 판정 · 09-24).
+        self.last_pos = None;
         self.default_idx = None;
         self.fit_w.set(text_w);
         self.sc_w.set(0);
@@ -396,6 +492,10 @@ impl ContextMenu {
         self.child = None;
         self.child_of = None;
         self.avoid = None;
+        self.hscroll.set(0);
+        self.label_over.set(0);
+        self.last_click = None;
+        self.wheel_acc.set(0);
         let (w, h) = self.size_px();
         // 경계 접기 — 공용 배치 규칙([`crate::geom::place_popup`]: 정방향 → 반대쪽 → 밀어 넣기). 표면 크기를 이미 알면(앞선
         // paint) 그 안에서 · 모르면 첫 paint의 안전망이 맞춘다.
@@ -480,6 +580,9 @@ impl ContextMenu {
                 CtxItem::Separator => self.s(SEP_H),
             };
         }
+        if let Some(n) = self.min_rows {
+            h = h.max(self.s(PAD_V) * 2 + self.row_h() * n as i32);
+        }
         let sc = self.sc_w.get();
         let extra = if sc > 0 { self.s(SC_GAP) + sc } else { 0 }
             + if self.has_arrows() {
@@ -487,7 +590,11 @@ impl ContextMenu {
             } else {
                 0
             };
-        let w = (self.icon_col() + self.fit_w.get() + extra + self.s(PAD_H) * 2).max(self.s(MIN_W));
+        let mut w =
+            (self.icon_col() + self.fit_w.get() + extra + self.s(PAD_H) * 2).max(self.s(MIN_W));
+        if let Some(m) = self.max_w {
+            w = w.min(self.s(m).max(self.s(MIN_W)));
+        }
         (w, h)
     }
 
@@ -754,15 +861,41 @@ impl ContextMenu {
                         self.open_child(i, false);
                         return true;
                     }
+                    // ★ 클릭 = 선택 모드: 첫 클릭은 강조만(호스트가 카드를 그린다) · 같은 행 400 ms 안 재클릭 = 확정.
+                    if self.click_selects {
+                        let now = std::time::Instant::now();
+                        let double = self.last_click.is_some_and(|(j, t)| {
+                            j == i && now.duration_since(t).as_millis() < 400
+                        });
+                        self.last_click = Some((i, now));
+                        self.hover = Some(i);
+                        if !double {
+                            return true;
+                        }
+                    }
                     if let CtxItem::Item { id, .. } = &self.items[i] {
                         self.picked = Some(id.clone());
                     }
                     self.close();
-                } else {
-                    // 팝업 안의 비활성 행/여백이면 그냥 무시, 바깥이면 닫는다.
-                    if !self.rect.get().contains(p) {
-                        self.close();
+                } else if self.rect.get().contains(p) {
+                    // 팝업 안 여백: 스크롤 트랙이면 한 쪽씩(세로 = 오른쪽 띠 · 가로 = 아래 띠 · 09-24) · 그 밖은 무시.
+                    let r = self.rect.get();
+                    if self.scrollable() && p.x >= r.right() - self.s(10) {
+                        let rows = self.vis_count().max(1) as i32;
+                        let mid = r.y + r.h / 2;
+                        self.scroll_rows(if p.y < mid { -rows } else { rows });
+                    } else if self.label_over.get() > 0 && p.y >= r.bottom() - self.s(10) {
+                        let step = (r.w / 2).max(self.s(24));
+                        let cur = self.hscroll.get();
+                        let next = if p.x < r.x + r.w / 2 {
+                            cur - step
+                        } else {
+                            cur + step
+                        };
+                        self.hscroll.set(next.clamp(0, self.label_over.get()));
                     }
+                } else {
+                    self.close();
                 }
                 true
             }
@@ -775,16 +908,47 @@ impl ContextMenu {
             }
             // 휠 = 스크롤(행 수 상한이 있을 때 · 120 = 한 칸 = 한 행 · 음수 = 아래) · 커서 아래 행을 다시 hover.
             InputEvent::Wheel { delta } => {
-                if self.scrollable() {
-                    let rows = if delta < 0 { 1 } else { -1 } * ((delta.abs() / 120).max(1));
-                    self.scroll_rows(rows);
-                    if let Some(p) = self.last_pos {
-                        self.hover = self.hit(p);
+                // ★ 휠은 커서가 팝업 **안**에 있을 때만(마우스 라우팅 규칙 · 사용자 09-24 "영역 밖 스크롤이 안으로 전달") — 위치를
+                //   알면(MouseMove를 받은 뒤) 밖이면 소비하지 않고 호스트로 흘린다 · 모르면 종전대로 팝업이.
+                if !self.wheel_inside() {
+                    return false;
+                }
+                // ★ 0 = 무시(트랙패드 제스처 끝의 빈 사건이 "위로 1행"이 되던 결함 · 09-24) · 노치(|delta| ≥ 120) = 노치당 1행 ·
+                //   트랙패드(작은 px delta)는 누적해 40px마다 1행(사건마다 1행이면 너무 빠르다).
+                if delta != 0 && self.scrollable() {
+                    let rows = if delta.abs() >= 120 {
+                        self.wheel_acc.set(0);
+                        -(delta / 120)
+                    } else {
+                        let acc = self.wheel_acc.get() + delta;
+                        let r = acc / 40;
+                        self.wheel_acc.set(acc - r * 40);
+                        -r
+                    };
+                    if rows != 0 {
+                        self.scroll_rows(rows);
+                        if let Some(p) = self.last_pos {
+                            self.hover = self.hit(p);
+                        }
                     }
                 }
                 true
             }
-            InputEvent::MouseUp { .. } | InputEvent::HWheel { .. } => true,
+            // 가로 휠(Shift+휠 · 트랙패드 틸트) = 넘친 라벨을 가로로(폭 상한이 있을 때만 · 09-23).
+            InputEvent::HWheel { delta } => {
+                if !self.wheel_inside() {
+                    return false;
+                }
+                let over = self.label_over.get();
+                if over > 0 {
+                    let step = self.s(24) * ((delta.abs() / 120).max(1));
+                    let cur = self.hscroll.get();
+                    let next = if delta < 0 { cur + step } else { cur - step };
+                    self.hscroll.set(next.clamp(0, over));
+                }
+                true
+            }
+            InputEvent::MouseUp { .. } => true,
             // 키보드 — ↑/↓ 이동 · PgUp/PgDn/Home/End(스크롤 목록) · → 하위 열기 · Enter 선택(하위 있으면 열기) · 그 외(Esc 포함)는 메뉴만 닫는다.
             InputEvent::Key { key, .. } => {
                 match key {
@@ -794,11 +958,24 @@ impl ContextMenu {
                     Key::PageUp => self.move_hover_by(-(self.vis_count().max(1) as i32), false),
                     Key::Home => self.move_hover_by(-1, true),
                     Key::End => self.move_hover_by(1, true),
+                    // ←/→ = 넘친 라벨 가로 스크롤(하위 메뉴가 없는 목록 · 09-24) · 하위 메뉴가 있으면 → 는 펼침.
                     Key::Right => {
                         if let Some(i) = self.hover {
                             if self.items[i].has_children() {
                                 self.open_child(i, true);
+                                return true;
                             }
+                        }
+                        if self.label_over.get() > 0 {
+                            let n = (self.hscroll.get() + self.s(24)).min(self.label_over.get());
+                            self.hscroll.set(n);
+                        }
+                    }
+                    Key::Left => {
+                        if self.label_over.get() > 0 {
+                            self.hscroll.set((self.hscroll.get() - self.s(24)).max(0));
+                        } else if !self.click_selects {
+                            self.close();
                         }
                     }
                     Key::Enter => {
@@ -883,10 +1060,14 @@ impl ContextMenu {
         let mut sc_real = 0;
         for it in &self.items {
             if let CtxItem::Item {
-                label, shortcut, ..
+                label,
+                shortcut,
+                sub,
+                ..
             } = it
             {
-                real = real.max(ctx.text_width(label));
+                let lw = ctx.text_width(label) + sub.as_deref().map_or(0, |s| ctx.text_width(s));
+                real = real.max(lw);
                 if let Some(sc) = shortcut {
                     sc_real = sc_real.max(ctx.text_width(sc));
                 }
@@ -928,6 +1109,24 @@ impl ContextMenu {
         let arrows = self.has_arrows();
         let mut y = at.y + self.s(PAD_V);
         let range = self.vis_range();
+        // ★ 라벨 열의 가용 폭과 넘침(폭 상한 때문에 실측보다 좁아진 만큼) — 가로 스크롤 범위.
+        let label_x0 = r.x + self.s(PAD_H) + icon_col;
+        let label_right = r.right()
+            - self.s(PAD_H)
+            - if arrows { self.s(ARROW_W) } else { 0 }
+            - if self.sc_w.get() > 0 {
+                self.sc_w.get() + self.s(PAD_H)
+            } else {
+                0
+            }
+            - if self.scrollable() { self.s(6) } else { 0 };
+        let label_avail = (label_right - label_x0).max(self.s(24));
+        let over = (real - label_avail).max(0);
+        self.label_over.set(over);
+        if self.hscroll.get() > over {
+            self.hscroll.set(over);
+        }
+        let hscroll = self.hscroll.get();
         // 스크롤 표시(행 수 상한을 넘을 때) — 오른쪽 안쪽에 가는 트랙 + 썸(비율).
         if self.scrollable() {
             let tw = self.s(3);
@@ -957,6 +1156,9 @@ impl ContextMenu {
                     enabled,
                     icon,
                     shortcut,
+                    sub,
+                    emph,
+                    marks,
                     children,
                     checked,
                     active,
@@ -1033,11 +1235,74 @@ impl ContextMenu {
                     let right =
                         r.right() - self.s(PAD_H) - if arrows { self.s(ARROW_W) } else { 0 };
                     // 긴 라벨(경로)은 가운데 … — 단축키 자리를 남기고(Alt = 전체 · 사용자 09-22).
+                    //   ★ 가로 스크롤 중(`hscroll` > 0)이면 자르지 않고 밀어서 라벨 열 안에 클립(09-23 "긴 이름").
                     let sc_room = shortcut
                         .as_deref()
                         .map_or(0, |sc| ctx.text_width(sc) + self.s(PAD_H));
-                    let shown = crate::draw::ellipsize_middle(ctx, label, right - sc_room - x);
-                    ctx.text(x, ty, row, &shown, fg);
+                    let avail = right - sc_room - x;
+                    // 보조 글(` : 타입`)은 라벨 뒤에 흐리게 — 라벨(이름)이 도드라진다(09-24).
+                    let subfg = if hot { fg } else { theme.text_dim };
+                    // 라벨 = 전체 일치면 굵게+파랑 · 부분 일치 구간은 강조색(hover 행은 본문색 그대로 · 09-24).
+                    let blue = Color::from_rgb(0, 0, 255);
+                    let draw_label = |ctx: &mut dyn DrawCtx, lx: i32, clip: Rect| -> i32 {
+                        if *emph {
+                            ctx.select_font(FontSlot::Base, true);
+                            let c = if hot { fg } else { blue };
+                            ctx.text(lx, ty, clip, label, c);
+                            let w = ctx.text_width(label);
+                            ctx.select_font(FontSlot::Base, false);
+                            return w;
+                        }
+                        if marks.is_empty() || hot {
+                            ctx.text(lx, ty, clip, label, fg);
+                            return ctx.text_width(label);
+                        }
+                        let mut cx = lx;
+                        let mut pos = 0usize;
+                        for r in marks.iter() {
+                            let (s, e) = (r.start.min(label.len()), r.end.min(label.len()));
+                            if s > pos {
+                                let seg = &label[pos..s];
+                                ctx.text(cx, ty, clip, seg, fg);
+                                cx += ctx.text_width(seg);
+                            }
+                            if e > s {
+                                let seg = &label[s..e];
+                                ctx.text(cx, ty, clip, seg, theme.accent);
+                                cx += ctx.text_width(seg);
+                            }
+                            pos = pos.max(e);
+                        }
+                        if pos < label.len() {
+                            let seg = &label[pos..];
+                            ctx.text(cx, ty, clip, seg, fg);
+                            cx += ctx.text_width(seg);
+                        }
+                        cx - lx
+                    };
+                    if hscroll > 0 {
+                        let clip = Rect::new(x, y, avail.max(0), h);
+                        let lw = draw_label(ctx, x - hscroll, clip);
+                        if let Some(sb) = sub {
+                            ctx.text(x - hscroll + lw, ty, clip, sb, subfg);
+                        }
+                    } else {
+                        let lw = ctx.text_width(label);
+                        match sub {
+                            Some(sb) if lw < avail => {
+                                let lw = draw_label(ctx, x, row);
+                                let shown = crate::draw::ellipsize_middle(ctx, sb, avail - lw);
+                                ctx.text(x + lw, ty, row, &shown, subfg);
+                            }
+                            _ if lw <= avail => {
+                                draw_label(ctx, x, row);
+                            }
+                            _ => {
+                                let shown = crate::draw::ellipsize_middle(ctx, label, avail);
+                                ctx.text(x, ty, row, &shown, fg);
+                            }
+                        }
+                    }
                     // 단축키 — 오른쪽 정렬 · 흐리게(hover면 본문색).
                     if let Some(sc) = shortcut {
                         let w = ctx.text_width(sc);
@@ -1065,6 +1330,17 @@ impl ContextMenu {
                     y += h;
                 }
             }
+        }
+        // 가로 스크롤 표시(라벨이 넘칠 때) — 아래 안쪽에 가는 트랙 + 썸(비율 · 세로 표시와 같은 모양).
+        if over > 0 {
+            let th = self.s(3);
+            let track = Rect::new(label_x0, r.bottom() - self.s(3) - th, label_avail, th);
+            ctx.fill_rect_alpha(track, theme.text_dim, 0.15);
+            let total = (label_avail + over).max(1) as f32;
+            let th_w = ((label_avail as f32 / total) * track.w as f32).max(self.s(8) as f32) as i32;
+            let off = ((hscroll as f32 / total) * track.w as f32) as i32;
+            let th_x = track.x + off.min(track.w - th_w).max(0);
+            ctx.fill_round_rect(Rect::new(th_x, track.y, th_w, th), th / 2, theme.text_dim);
         }
         if let Some(c) = &self.child {
             c.paint(ctx, theme);
@@ -1185,6 +1461,155 @@ mod tests {
     }
 
     /// 기본 항목: hover 없이 Enter = 기본 항목 · 키보드로 옮기면 hover가 우선 · 비활성은 기본이 될 수 없다.
+    /// 최소 행 수(09-24): 항목 1개도 10행 높이 · 상한(max_rows)과 함께 · 없으면 종전(내용만큼).
+    #[test]
+    fn min_rows_keeps_height_with_few_items() {
+        let mut m = ContextMenu::new();
+        let one = vec![CtxItem::item("a", "only")];
+        m.open_at(10, 10, one.clone(), Rect::new(0, 0, 800, 600), 80);
+        let h1 = m.rect.get().h;
+        m.set_min_rows(Some(10));
+        m.open_at(10, 10, one, Rect::new(0, 0, 800, 600), 80);
+        let h10 = m.rect.get().h;
+        assert!(h10 > h1 * 5, "{h1} → {h10}");
+        assert!(
+            m.row_rect_of(0).is_some()
+                && m.hit(Point {
+                    x: 20,
+                    y: m.rect.get().bottom() - 5
+                })
+                .is_none(),
+            "빈 자리는 항목 아님"
+        );
+        m.set_min_rows(None);
+    }
+
+    /// 휠(09-24): delta 0은 아무것도 안 함(끝에서 한 칸 위로 튀던 결함) · 트랙패드 작은 delta는 40px 누적마다 1행 · 노치 120 = 1행.
+    #[test]
+    fn wheel_zero_is_noop_and_small_deltas_accumulate() {
+        let mut m = ContextMenu::new();
+        m.set_max_rows(Some(3));
+        let items: Vec<CtxItem> = (0..8)
+            .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+            .collect();
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 80);
+        for _ in 0..20 {
+            m.on_event(&InputEvent::Wheel { delta: -120 });
+        }
+        assert_eq!(m.vis_range(), 5..8, "끝");
+        m.on_event(&InputEvent::Wheel { delta: 0 });
+        assert_eq!(m.vis_range(), 5..8, "0 = 그대로");
+        m.on_event(&InputEvent::Wheel { delta: 120 });
+        assert_eq!(m.vis_range(), 4..7);
+        for _ in 0..13 {
+            m.on_event(&InputEvent::Wheel { delta: -3 });
+        }
+        assert_eq!(m.vis_range(), 4..7, "39px = 아직");
+        m.on_event(&InputEvent::Wheel { delta: -3 });
+        assert_eq!(m.vis_range(), 5..8, "42px = 1행");
+        // ★ 커서가 팝업 밖(MouseMove로 알게 된 뒤)이면 휠·가로 휠을 소비하지 않고 목록도 그대로(사용자 09-24).
+        m.on_event(&InputEvent::MouseMove { x: 700, y: 500 });
+        assert!(!m.on_event(&InputEvent::Wheel { delta: 120 }));
+        assert!(!m.on_event(&InputEvent::HWheel { delta: 120 }));
+        assert_eq!(m.vis_range(), 5..8, "밖 = 그대로");
+        let r = m.bounds();
+        m.on_event(&InputEvent::MouseMove {
+            x: r.x + 5,
+            y: r.y + 5,
+        });
+        assert!(m.on_event(&InputEvent::Wheel { delta: 120 }));
+        assert_eq!(m.vis_range(), 4..7, "안 = 스크롤");
+    }
+
+    /// 클릭 = 선택 모드(완성 팝업 · 09-24): 단일 클릭 = 강조만 · 같은 행 재클릭 = 확정 · ←/→ = 넘침이 있을 때만 가로 스크롤.
+    #[test]
+    fn click_selects_then_double_click_or_enter_picks() {
+        let mut m = ContextMenu::new();
+        m.set_click_selects(true);
+        let items: Vec<CtxItem> = (0..3)
+            .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+            .collect();
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 120);
+        let r1 = m.row_rect_of(1).expect("row 1");
+        let (x, y) = (r1.x + 5, r1.y + r1.h / 2);
+        m.on_event(&InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        });
+        assert!(
+            m.is_open() && m.hovered() == Some(1) && m.take_picked().is_none(),
+            "첫 클릭 = 강조만"
+        );
+        m.on_event(&InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        });
+        assert_eq!(m.take_picked().as_deref(), Some("h1"), "재클릭 = 확정");
+        assert!(!m.is_open());
+        let items: Vec<CtxItem> = (0..3)
+            .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+            .collect();
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 120);
+        m.on_event(&InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        });
+        m.on_event(&key(Key::Enter));
+        assert_eq!(
+            m.take_picked().as_deref(),
+            Some("h1"),
+            "클릭 뒤 Enter = 확정"
+        );
+        let items: Vec<CtxItem> = vec![CtxItem::item("a", "LONG_NAME_0123456789_ABCDEFGHIJ")];
+        m.set_max_width(Some(120));
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 400);
+        m.label_over.set(60);
+        m.on_event(&key(Key::Right));
+        assert!(
+            m.hscroll.get() > 0 && m.is_open(),
+            "→ = 가로 스크롤(닫지 않음)"
+        );
+        m.on_event(&key(Key::Left));
+        assert_eq!(m.hscroll.get(), 0);
+        m.on_event(&key(Key::Left));
+        assert!(m.is_open(), "선택 모드에서 ←는 닫지 않는다");
+    }
+
+    /// 폭 상한 + 가로 휠(nexa-sql 완성 팝업 사용자 09-23 "긴 이름"): 상한이 있으면 rect 폭이 잘리고 · 넘침은 paint가 재므로
+    /// 그 전에는 휠이 무시되고 · 넘침을 알려 주면 Shift+휠로 0..over 사이를 오간다.
+    #[test]
+    fn max_width_caps_rect_and_hwheel_scrolls_labels() {
+        let mut m = ContextMenu::new();
+        let items = vec![
+            CtxItem::item("a", "M4S_I002040_VERY_LONG_TABLE_NAME_FOR_TEST_0123456789"),
+            CtxItem::item("b", "short"),
+        ];
+        m.open_at(10, 10, items.clone(), Rect::new(0, 0, 800, 600), 600);
+        let wide = m.rect.get().w;
+        m.set_max_width(Some(200));
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 600);
+        let capped = m.rect.get().w;
+        assert!(capped < wide && capped <= 200, "{capped} < {wide}");
+        assert_eq!(m.hscroll.get(), 0);
+        // 넘침을 아직 모르면(paint 전) 가로 휠은 무시.
+        m.on_event(&InputEvent::HWheel { delta: -120 });
+        assert_eq!(m.hscroll.get(), 0);
+        m.label_over.set(100);
+        m.on_event(&InputEvent::HWheel { delta: -120 });
+        assert!(m.hscroll.get() > 0 && m.hscroll.get() <= 100);
+        m.on_event(&InputEvent::HWheel { delta: -120 * 10 });
+        assert_eq!(m.hscroll.get(), 100, "상한에서 멈춘다");
+        m.on_event(&InputEvent::HWheel { delta: 120 * 10 });
+        assert_eq!(m.hscroll.get(), 0);
+        assert!(m.is_open());
+    }
+
     #[test]
     fn scrolls_with_max_rows_keys_and_wheel() {
         // 행 수 상한 3 · 항목 8: 높이는 3행 · ↓로 넘어가면 first가 따라오고 · PgDn/End/Home · 휠 · 가려진 행은 rect 없음.

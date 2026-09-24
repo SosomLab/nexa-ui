@@ -43,6 +43,20 @@ impl Frame<'_> {
 #[cfg(target_os = "macos")]
 pub use mac::LayerPresenter;
 
+/// 앱이 활성(전경)인가 — macOS `NSApplication.sharedApplication.isActive`(nexa-sql 09-24: 창은 키 창이어도 앱은 비활성일 수 있어
+/// `WindowEvent::Focused`만으로는 "뒤에 있는 앱"을 못 가른다 · 캐럿 깜빡임 정지 판정). 다른 OS = `None`(창 포커스로 충분).
+#[must_use]
+pub fn app_active() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        mac::app_active()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 pub use other::LayerPresenter;
 
@@ -172,6 +186,26 @@ mod mac {
     unsafe fn send_void(obj: Id, s: Sel) {
         let f: unsafe extern "C" fn(Id, Sel) = std::mem::transmute(objc_msgSend as *const ());
         f(obj, s);
+    }
+    unsafe fn send_bool(obj: Id, s: Sel) -> bool {
+        let f: unsafe extern "C" fn(Id, Sel) -> i8 = std::mem::transmute(objc_msgSend as *const ());
+        f(obj, s) != 0
+    }
+
+    /// `[[NSApplication sharedApplication] isActive]`.
+    pub(super) fn app_active() -> Option<bool> {
+        // SAFETY: 클래스·셀렉터 이름은 NUL로 끝나는 정적 문자열 · 반환은 BOOL(i8) · 메인 스레드에서 부른다.
+        unsafe {
+            let cls = objc_getClass(c"NSApplication".as_ptr());
+            if cls.is_null() {
+                return None;
+            }
+            let app = send_id(cls, sel(c"sharedApplication"));
+            if app.is_null() {
+                return None;
+            }
+            Some(send_bool(app, sel(c"isActive")))
+        }
     }
     unsafe fn send_void_id(obj: Id, s: Sel, a: Id) {
         let f: unsafe extern "C" fn(Id, Sel, Id) = std::mem::transmute(objc_msgSend as *const ());
