@@ -3172,6 +3172,16 @@ impl TextBox {
         self.ctx_menu.is_open()
     }
 
+    /// 열린 우클릭 편집 메뉴의 영역(닫혀 있으면 빈 Rect) — 컨테이너의 `menu_bounds`(바깥 클릭 판정)에 합친다.
+    #[must_use]
+    pub fn popup_bounds(&self) -> Rect {
+        if self.ctx_menu.is_open() {
+            self.ctx_menu.bounds()
+        } else {
+            Rect::default()
+        }
+    }
+
     /// 조합 중(preedit) 문자열까지 캐럿 자리에 끼운 **표시용** 텍스트(편집 상태 불변).
     /// 아바타 이니셜 미리보기 등 "지금 화면에 보이는 그대로"가 필요한 곳이 쓴다
     /// (08-13 실기: 필드엔 "나다"가 보이는데 아바타는 "나"라 미입력처럼 보였다).
