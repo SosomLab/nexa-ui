@@ -1822,6 +1822,16 @@ impl TextBox {
     }
 
     /// 거터 라벨(줄 → 한두 글자) — 줄번호 왼쪽 accent 상자(북마크 니모닉).
+    /// 진단: 거터에 걸린 (색 띠 수, 라벨 수, 북마크 영역 켬).
+    #[must_use]
+    pub fn gutter_stat(&self) -> (usize, usize, bool) {
+        (
+            self.line_marks.len(),
+            self.gutter_labels.len(),
+            self.gutter_marks,
+        )
+    }
+
     pub fn set_gutter_labels(&mut self, labels: Vec<(usize, String)>) {
         self.gutter_labels = labels;
     }
