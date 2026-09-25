@@ -33,6 +33,7 @@ pub mod draw;
 pub mod edit;
 pub mod event;
 pub mod geom;
+pub mod gridedit;
 pub mod hangul;
 pub mod highlight;
 pub mod raster;

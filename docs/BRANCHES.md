@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/gridedit-core | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 77차(mac) — `nexa_ctl::gridedit` 편집 핵심 부품(spec·datetime·changeset·paste·keymap·live · 시험 20 · nexa-sql 87 E-1) |
 | feat/readonly-editmenu | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 76차(mac) — EditMenuCaps.read_only(잘라내기·붙여넣기 비활성) · TextBox 읽기 전용 = 한글 앱 조합·preedit 무시 · line_h 공개(nexa-sql §214) |
 | feat/73-ctxmenu-paging | 2026-09-24 | 2026-09-24 → main(삭제) | 1 | 73차(mac) — ContextMenu `reached_end`/`take_reached_end`(마지막 활성 항목 보임) · `replace_items`(first·hover·자리 유지) · `item_ids` · 시험 (nexa-sql T-196 페이지 로딩) |
 | feat/72-mac-ctxmenu-textbox-mem | 2026-09-24 | 2026-09-24 → main(삭제) | 1 | 72차(mac) — ContextMenu 폭 상한·가로 스크롤·클릭 선택·min_rows·휠 누적·**휠 안/밖**(`wheel_inside`)·강조/표식(`emph`·`marks`)·`item_ids` · TextBox `point_at`/`lay_rev`·`mem_parts` · `ToggleBlockComment` · nexa-sys `app_active` (nexa-sql 100차) |

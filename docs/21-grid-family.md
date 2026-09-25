@@ -92,6 +92,8 @@ nexa-grid (크레이트 · nexa-ctl 위 · dir2 rows/columns 이식)
 
 이식 순서: G-2에 `CellKind`/`cell_kind`/`on_cell`/`set_cell` 계약과 정적 페인터 · **G-2b** = LiveEditor(TextBox 재배치) · 이미지 셀은 `IconImage` 공유(`Rc`). 셀 컨트롤은 엔진 기능이므로 네 특화가 전부 얻는다.
 
+★ **편집 핵심 부품 `nexa_ctl::gridedit`(77차 · 09-26 · nexa-sql 87)** — 엔진(G-1~G-3)보다 먼저, **어느 그리드에나 꽂히는 순수 부품**으로 들어왔다: `spec`(`CellKind`·`CellSpec` = 타입/길이/NULL/기본값 · 검증 → 정규형) · `datetime`(24형식 → ISO · `now`/`today` 토큰) · `changeset`(`ChangeSet` = 셀 덧그리기·삭제 표식·추가/복제 행·묶음 되돌리기·표시 순서 `layout` 세대 캐시) · `paste`(`parse_matrix` TSV/따옴표 + `apply` 앵커부터 채우기 · 행 자동 확장 · 검증 거부 보고) · `keymap`(엑셀식 키·`grid.edit.*` 명령 id → `EditAction`) · `live`(`LiveEditor` = 편집 셀 한 곳의 `TextBox` · Enter/Tab/↑↓ 커밋+이동 · Esc · 검증 실패 붉은 띠). 값은 `Option<String>`(None = NULL) · DBMS·SQL·그리기 의존 0 · 단위 시험 20. 호스트(nexa-sql 결과 그리드)는 좌표 변환·덧그리기·적용(SQL)만 얹는다.
+
 ### 3-3. 편집기 탭(TabBar · dir2 이식 U-2) — 툴팁·줄 수(사용자 09-14)
 
 | 지점 | 값 |
