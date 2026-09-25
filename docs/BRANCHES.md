@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/readonly-editmenu | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 76차(mac) — EditMenuCaps.read_only(잘라내기·붙여넣기 비활성) · TextBox 읽기 전용 = 한글 앱 조합·preedit 무시 · line_h 공개(nexa-sql §214) |
 | feat/73-ctxmenu-paging | 2026-09-24 | 2026-09-24 → main(삭제) | 1 | 73차(mac) — ContextMenu `reached_end`/`take_reached_end`(마지막 활성 항목 보임) · `replace_items`(first·hover·자리 유지) · `item_ids` · 시험 (nexa-sql T-196 페이지 로딩) |
 | feat/72-mac-ctxmenu-textbox-mem | 2026-09-24 | 2026-09-24 → main(삭제) | 1 | 72차(mac) — ContextMenu 폭 상한·가로 스크롤·클릭 선택·min_rows·휠 누적·**휠 안/밖**(`wheel_inside`)·강조/표식(`emph`·`marks`)·`item_ids` · TextBox `point_at`/`lay_rev`·`mem_parts` · `ToggleBlockComment` · nexa-sys `app_active` (nexa-sql 100차) |
 | feat/win-71-ctxmenu-scroll | 2026-09-23 | 2026-09-23 → main(삭제) | 1 | 71차(win): `ContextMenu::set_max_rows(Some(n))` = 보이는 행 수 상한 + **스크롤**(휠 · ↑/↓가 보이게 따라옴 · PgUp/PgDn/Home/End · 오른쪽 가는 트랙+썸 표시 · 가려진 행은 히트 없음) · `hovered()` — nexa-sql 검색어 이력 드롭다운·완성 팝업용 · 시험 `scrolls_with_max_rows_keys_and_wheel` · 329 통과 |

@@ -2396,7 +2396,9 @@ impl TextBox {
     }
 
     /// 멀티라인 한 줄 높이(글꼴 실측 + 여백은 페인트와 같은 값).
-    fn line_h(&self) -> i32 {
+    /// 줄 높이(물리 px · 배율 반영) — 컨테이너가 "N줄 높이" 최소 크기를 셈할 때(nexa-sql 객체 상세 스플리터 09-26).
+    #[must_use]
+    pub fn line_h(&self) -> i32 {
         self.s(20)
     }
 
@@ -2415,6 +2417,9 @@ impl TextBox {
     pub fn set_preedit(&mut self, text: &str, inv: &mut Invalidations) {
         if !self.base.focused && !text.is_empty() {
             return; // 포커스 가드는 위젯 몫(H-25 선택 삭제·저장은 EditState 공용)
+        }
+        if self.edit.is_read_only() && !text.is_empty() {
+            return; // 읽기 전용 = OS IME 조합 문자열도 표시하지 않는다(09-26).
         }
         let changed = self.edit.preedit() != text;
         // H-25(조합 시작 = 선택 삭제)는 EditState::set_preedit이 공용으로 처리하고,
@@ -4336,6 +4341,7 @@ impl TextBox {
                     has_sel: self.edit.selected_text().is_some(),
                     has_text: !self.edit.is_empty(),
                     clip_has_text: self.clip_has_text,
+                    read_only: self.edit.is_read_only(),
                 };
                 // 팝업이 박스 밖(아래)으로 펼쳐질 공간 — 박스 사각형만 주면 안에 구겨진다.
                 let host = Rect::new(
@@ -4872,7 +4878,12 @@ impl Widget for TextBox {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         // 한글 앱 조합(켜져 있을 때만 · 자모/Backspace는 조합기가 먹고, 그 밖의 입력은 조합을 확정한 뒤 평소대로).
-        if hangul_app_compose() && !self.masked && self.hangul_event(ev, inv) {
+        // ★ 읽기 전용 상자는 조합도 안 한다(nexa-sql 09-26 실기: 객체 상세 창에 초성 "ㅇ"이 preedit로 보였다).
+        if hangul_app_compose()
+            && !self.masked
+            && !self.edit.is_read_only()
+            && self.hangul_event(ev, inv)
+        {
             return;
         }
         self.on_event_core(ev, inv);
@@ -6866,6 +6877,32 @@ mod scroll_sim_tests {
         t.on_event(&InputEvent::Wheel { delta: 0 }, &mut inv);
         t.paint(&mut probe, &theme);
         assert_eq!(pos(&t), 45);
+    }
+}
+
+#[cfg(test)]
+mod read_only_compose_tests {
+    use super::*;
+
+    /// 읽기 전용 상자는 자모를 조합하지 않는다(nexa-sql 09-26 객체 상세 창 "ㅇ" preedit).
+    #[test]
+    fn read_only_box_ignores_jamo_and_preedit() {
+        set_hangul_app_compose(true);
+        let mut tb = TextBox::new("").with_multiline();
+        tb.set_text("== A ==");
+        tb.set_read_only(true);
+        tb.set_focused(true);
+        let mut inv = Invalidations::default();
+        tb.on_event(
+            &InputEvent::Char {
+                c: 'ㅇ', now_ms: 0
+            },
+            &mut inv,
+        );
+        assert_eq!(tb.display_text(), "== A ==");
+        tb.set_preedit("ㅇ", &mut inv);
+        assert_eq!(tb.display_text(), "== A ==");
+        set_hangul_app_compose(false);
     }
 }
 

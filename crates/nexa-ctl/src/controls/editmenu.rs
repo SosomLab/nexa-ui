@@ -46,6 +46,8 @@ pub struct EditMenuCaps {
     pub has_text: bool,
     /// 클립보드에 텍스트가 있는가(붙여넣기 활성 — 호스트가 조회해 준다).
     pub clip_has_text: bool,
+    /// 읽기 전용(잘라내기·붙여넣기 비활성 · nexa-sql 09-26 SQL Preview).
+    pub read_only: bool,
 }
 
 /// 픽 결과 — 편집 4종은 열거로, 호출측 고유 항목은 id 그대로.
@@ -97,14 +99,22 @@ impl EditMenu {
                 .with_shortcut(d.shortcuts[0].clone()),
         );
         items.push(
-            CtxItem::maybe("cut", ctl_label(CtlMsg::CtxCut), caps.has_sel)
-                .with_icon(d.icons[1].clone())
-                .with_shortcut(d.shortcuts[1].clone()),
+            CtxItem::maybe(
+                "cut",
+                ctl_label(CtlMsg::CtxCut),
+                caps.has_sel && !caps.read_only,
+            )
+            .with_icon(d.icons[1].clone())
+            .with_shortcut(d.shortcuts[1].clone()),
         );
         items.push(
-            CtxItem::maybe("paste", ctl_label(CtlMsg::CtxPaste), caps.clip_has_text)
-                .with_icon(d.icons[2].clone())
-                .with_shortcut(d.shortcuts[2].clone()),
+            CtxItem::maybe(
+                "paste",
+                ctl_label(CtlMsg::CtxPaste),
+                caps.clip_has_text && !caps.read_only,
+            )
+            .with_icon(d.icons[2].clone())
+            .with_shortcut(d.shortcuts[2].clone()),
         );
         items.push(CtxItem::Separator);
         items.push(
@@ -186,7 +196,27 @@ mod tests {
             has_sel: true,
             has_text: true,
             clip_has_text: true,
+            read_only: false,
         }
+    }
+
+    /// 읽기 전용 = 잘라내기·붙여넣기 비활성 · 복사·전체 선택은 그대로(nexa-sql 09-26 SQL Preview·객체 상세).
+    #[test]
+    fn read_only_disables_cut_and_paste() {
+        let mut m = EditMenu::new();
+        let mut c = caps();
+        c.read_only = true;
+        m.open_at(10, 10, 1.0, Rect::new(0, 0, 400, 400), c, vec![]);
+        let mut seen = std::collections::HashMap::new();
+        for it in m.menu.items_for_test() {
+            if let CtxItem::Item { id, enabled, .. } = it {
+                seen.insert(id.clone(), *enabled);
+            }
+        }
+        assert_eq!(seen.get("copy"), Some(&true));
+        assert_eq!(seen.get("cut"), Some(&false));
+        assert_eq!(seen.get("paste"), Some(&false));
+        assert_eq!(seen.get("select_all"), Some(&true));
     }
 
     /// 항목 순서 통일 계약 — extra · ― · copy · cut · paste · ― · select_all.
