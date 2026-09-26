@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-26 (83차 · mac)** — ★ nexa-gfx **기저 JPEG 디코더 `jpeg.rs`**(SOF0/SOF1 · 허프만 · 회색/YCbCr · 서브샘플링 · DRI/RSTn · 분리 IDCT · 프로그레시브/산술/CMYK = 안내) · PNG **Adam7** 7패스 · `ImageKind::decodable`에 JPEG · 시험 벡터 3(`quad`/`gray`/`adam7`) → nexa-sql T-237 §242.
+- **2026-09-26 (82차 · mac)** — 풀다운 `MenuEntry::Emph`(강조색 항목) → nexa-sql 미저장 탭 메뉴 §237.
+- **2026-09-26 (81차 · mac)** — ★ nexa-gfx `inflate`(DEFLATE/zlib · puff식) + `image`(PNG·BMP·GIF 디코더 · `sniff`/`dimensions`/`decode`) → nexa-sql LOB 값 창 §236.
+- **2026-09-26 (80차 · mac)** — nexa-sys `gui` feature(CLI가 GUI 프레임워크를 링크하지 않게) → nexa-sql T-234 §233.
 - **2026-09-23 (62차 · win)** — `fallback_file_icon` 부품 · `TreeGrid` 선택 없음(+ nexa-dlg 빈 곳 클릭 해제) · `TextBox` 미니맵 표식/줄 끝 라벨 · `TabBar::set_tab_colors`
 - **2026-09-22 (61차 · win)** — ★ `EditState` 선택 되돌리기(Sublime soft undo/redo · `SoftStep`) · `TextBox::soft_undo/soft_redo` · 🔧 다중 캐럿 ←/→ 접기 · ★ `max_regions` 다중 선택 상한 · `selected_bytes` 공개 · `set_gutter_labels` · 🔧 다중 캐럿 스크롤 유지.
 - **2026-09-22 (60차 · win)** — `ContextMenu::is_outside_click` · `TextBox::skip_next_occurrence`/`EditState::remove_region` · ★ 풀다운 하위 메뉴 `MenuEntry::Sub`.
