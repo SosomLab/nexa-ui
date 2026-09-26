@@ -36,6 +36,8 @@ pub enum EditAction {
     Revert,
     ViewValue,
     PreviewSql,
+    /// 적용 대기 변경 목록(행 키 · 열 · 원본 → 새 값).
+    ShowChanges,
 }
 
 /// 편집기가 **열려 있지 않을 때**의 키 → 동작. 열려 있으면 [`super::LiveEditor`]가 먹는다.
@@ -80,6 +82,7 @@ pub fn action_for_command(id: &str) -> Option<EditAction> {
         "grid.edit.redo" => EditAction::Redo,
         "grid.edit.view_value" => EditAction::ViewValue,
         "grid.edit.preview_sql" => EditAction::PreviewSql,
+        "grid.edit.changes" => EditAction::ShowChanges,
         _ => return None,
     })
 }
