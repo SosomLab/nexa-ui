@@ -2473,10 +2473,33 @@ impl TextBox {
             return;
         }
         let i = idx.min(buf.len().saturating_sub(1));
-        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let us = word_underscore();
+        let is_word = move |c: char| c.is_alphanumeric() || (c == '_' && us);
         let a = i - buf.iter_rev_from(i).take_while(|c| is_word(*c)).count();
         let b = i + buf.iter_from(i).take_while(|c| is_word(*c)).count();
         self.edit.set_selection(a, b);
+    }
+
+    /// 연속 클릭 동작 실행(정책 · 단일행 상자는 줄 = 전체).
+    fn apply_click_action(&mut self, act: ClickAction, idx: usize, shift: bool) {
+        match act {
+            ClickAction::Word => self.select_word_at(idx),
+            ClickAction::Line if self.multiline => {
+                // 줄 선택 — 버퍼의 줄 표로(종전 = 본문 전체를 문자열 + 글자 배열로 떴다 · 큰 파일에서 수백 MB).
+                let (start, end) = {
+                    let buf = self.edit.buf();
+                    let line = buf.line_of(idx.min(buf.len()));
+                    (buf.line_start(line), buf.line_end(line))
+                };
+                self.edit.set_caret(start, false);
+                self.edit.set_caret(end, true);
+            }
+            ClickAction::Line | ClickAction::All => self.edit.key(EditKey::SelectAll, false),
+            ClickAction::None => {
+                self.edit.set_caret(idx, shift);
+                self.dragging = true;
+            }
+        }
     }
 
     /// 열(블록) 선택 모드 — Sublime의 Alt+Shift 드래그. 호스트가 수식키 상태를 밀어 준다.
@@ -4278,6 +4301,92 @@ pub fn set_hangul_app_compose(on: bool) {
     HANGUL_APP_COMPOSE.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// ★ 연속 클릭 정책(nexa-sql 09-26 · 사용자 "더블/트리플 클릭 동작과 `_` 포함 여부를 설정으로"): 프로세스 전역 — 편집기·셀 편집기·패널 상자가
+/// 한 규칙을 따른다(상자마다 배선하지 않는다 · 앱 조합 스위치와 같은 꼴). 기본 = 더블 단어 · 트리플 줄 · `_`는 단어의 일부.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickAction {
+    /// 아무것도 안 함(캐럿만).
+    None,
+    /// 단어 선택(`_` 포함 여부 = [`word_underscore`]).
+    Word,
+    /// 줄 선택(단일행 상자 = 전체).
+    Line,
+    /// 전체 선택.
+    All,
+}
+
+impl ClickAction {
+    #[must_use]
+    pub fn parse(s: &str) -> Option<ClickAction> {
+        Some(match s {
+            "none" => ClickAction::None,
+            "word" => ClickAction::Word,
+            "line" => ClickAction::Line,
+            "all" => ClickAction::All,
+            _ => return None,
+        })
+    }
+    const fn code(self) -> u8 {
+        match self {
+            ClickAction::None => 0,
+            ClickAction::Word => 1,
+            ClickAction::Line => 2,
+            ClickAction::All => 3,
+        }
+    }
+    const fn from_code(c: u8) -> ClickAction {
+        match c {
+            0 => ClickAction::None,
+            1 => ClickAction::Word,
+            3 => ClickAction::All,
+            _ => ClickAction::Line,
+        }
+    }
+}
+
+#[cfg(not(test))]
+static CLICK_POLICY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x0001_0201);
+#[cfg(test)]
+thread_local! {
+    static CLICK_POLICY_T: std::cell::Cell<u32> = const { std::cell::Cell::new(0x0001_0201) };
+}
+
+/// 연속 클릭 정책 설정 — `dbl` = 더블클릭 · `triple` = 트리플클릭 · `underscore` = `_`를 단어 구성 문자로 볼지.
+pub fn set_click_policy(dbl: ClickAction, triple: ClickAction, underscore: bool) {
+    let v = (u32::from(underscore) << 16) | (u32::from(triple.code()) << 8) | u32::from(dbl.code());
+    #[cfg(test)]
+    CLICK_POLICY_T.with(|c| c.set(v));
+    #[cfg(not(test))]
+    CLICK_POLICY.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn click_policy_raw() -> u32 {
+    #[cfg(test)]
+    {
+        CLICK_POLICY_T.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        CLICK_POLICY.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// 지금 정책 `(더블, 트리플)`.
+#[must_use]
+pub fn click_policy() -> (ClickAction, ClickAction) {
+    let v = click_policy_raw();
+    (
+        ClickAction::from_code((v & 0xFF) as u8),
+        ClickAction::from_code(((v >> 8) & 0xFF) as u8),
+    )
+}
+
+/// `_`가 단어의 일부인가(더블클릭 단어 선택).
+#[must_use]
+pub fn word_underscore() -> bool {
+    (click_policy_raw() >> 16) & 1 == 1
+}
+
 /// 지금 앱 조합이 켜져 있는가.
 #[must_use]
 pub fn hangul_app_compose() -> bool {
@@ -4523,22 +4632,11 @@ impl TextBox {
                             1
                         };
                         self.last_click.0 = idx;
+                        let (dbl, triple) = click_policy();
                         match self.last_click.1 {
-                            2 => self.select_word_at(idx),
-                            3 => {
-                                // 줄 선택 — 버퍼의 줄 표로(종전 = 본문 전체를 문자열 + 글자 배열로 떴다 · 큰 파일에서 수백 MB).
-                                let (start, end) = {
-                                    let buf = self.edit.buf();
-                                    let line = buf.line_of(idx.min(buf.len()));
-                                    (buf.line_start(line), buf.line_end(line))
-                                };
-                                self.edit.set_caret(start, false);
-                                self.edit.set_caret(end, true);
-                            }
-                            _ => {
-                                self.edit.set_caret(idx, shift);
-                                self.dragging = true;
-                            }
+                            2 => self.apply_click_action(dbl, idx, shift),
+                            3 => self.apply_click_action(triple, idx, shift),
+                            _ => self.apply_click_action(ClickAction::None, idx, shift),
                         }
                     }
                     inv.push(self.base.bounds);
@@ -4564,13 +4662,11 @@ impl TextBox {
                         1
                     };
                     self.last_click.0 = idx;
+                    let (dbl, triple) = click_policy();
                     match self.last_click.1 {
-                        2 => self.select_word_at(idx),                 // 더블 = 단어
-                        3 => self.edit.key(EditKey::SelectAll, false), // 트리플 = 전체
-                        _ => {
-                            self.edit.set_caret(idx, shift);
-                            self.dragging = true;
-                        }
+                        2 => self.apply_click_action(dbl, idx, shift),
+                        3 => self.apply_click_action(triple, idx, shift),
+                        _ => self.apply_click_action(ClickAction::None, idx, shift),
                     }
                     inv.push(self.base.bounds);
                 }
@@ -6905,6 +7001,62 @@ mod scroll_sim_tests {
         t.on_event(&InputEvent::Wheel { delta: 0 }, &mut inv);
         t.paint(&mut probe, &theme);
         assert_eq!(pos(&t), 45);
+    }
+}
+
+#[cfg(test)]
+mod click_policy_tests {
+    use super::*;
+
+    fn down(x: i32) -> InputEvent {
+        InputEvent::MouseDown {
+            x,
+            y: 10,
+            shift: false,
+            primary: false,
+        }
+    }
+
+    /// 더블클릭 = 단어(`_` 포함/제외 설정) · 트리플 = 정책(줄/전체/없음) — 단일행 상자.
+    #[test]
+    fn double_click_word_underscore_policy_and_triple() {
+        let mut inv = Invalidations::default();
+        let mut tb = TextBox::new("");
+        tb.set_scale(1.0);
+        tb.set_bounds(Rect::new(0, 0, 400, 20), &mut inv);
+        tb.set_focused(true);
+        tb.set_text("MP_VRSN_ID x");
+        // 페인트 없이 캐럿 x 표가 없으므로 caret_at_x = 0 → 첫 글자에서 단어 판정.
+        set_click_policy(ClickAction::Word, ClickAction::All, true);
+        tb.on_event(&down(1), &mut inv);
+        tb.on_event(&down(1), &mut inv);
+        assert_eq!(tb.copy_selection().as_deref(), Some("MP_VRSN_ID"), "_ 포함");
+        tb.edit.set_caret(0, false);
+        tb.last_click = (0, 0);
+        tb.last_click_at = None;
+        set_click_policy(ClickAction::Word, ClickAction::All, false);
+        tb.on_event(&down(1), &mut inv);
+        tb.on_event(&down(1), &mut inv);
+        assert_eq!(
+            tb.copy_selection().as_deref(),
+            Some("MP"),
+            "_ 제외 = 구분자"
+        );
+        tb.on_event(&down(1), &mut inv);
+        assert_eq!(
+            tb.copy_selection().as_deref(),
+            Some("MP_VRSN_ID x"),
+            "트리플 = 전체"
+        );
+        // 더블 = 없음이면 캐럿만.
+        tb.edit.set_caret(0, false);
+        tb.last_click = (0, 0);
+        tb.last_click_at = None;
+        set_click_policy(ClickAction::None, ClickAction::Line, true);
+        tb.on_event(&down(1), &mut inv);
+        tb.on_event(&down(1), &mut inv);
+        assert_eq!(tb.copy_selection(), None);
+        set_click_policy(ClickAction::Word, ClickAction::Line, true);
     }
 }
 
