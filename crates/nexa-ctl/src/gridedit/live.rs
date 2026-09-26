@@ -37,6 +37,8 @@ pub struct EditStart<'a> {
     pub scale: f32,
     pub replace: Option<char>,
     pub select_all: bool,
+    /// 셀 편집 모드 여백(물리 px · 그리드 셀 글자 여백과 같게) — `None` = 보통 상자 모양.
+    pub pad: Option<i32>,
 }
 
 pub struct LiveEditor {
@@ -91,6 +93,7 @@ impl LiveEditor {
             scale,
             replace,
             select_all,
+            pad,
         } = start;
         let mut inv = Invalidations::default();
         self.cell = Some(cell);
@@ -101,6 +104,7 @@ impl LiveEditor {
         self.tb.set_bounds(rect, &mut inv);
         self.rect = rect;
         self.tb.set_read_only(false);
+        self.tb.set_cell_pad(pad);
         self.tb.set_focused(true);
         match replace {
             Some(c) => {
@@ -111,7 +115,23 @@ impl LiveEditor {
             None => {
                 self.tb.set_text(text);
                 if select_all {
-                    self.tb.on_event(&InputEvent::SelectAll, &mut inv);
+                    // ★ 전체 선택하되 캐럿은 **앞**에(끝 → Shift+Home): 폭보다 긴 글도 첫머리부터 보인다(사용자 09-26).
+                    self.tb.on_event(
+                        &InputEvent::Key {
+                            key: Key::End,
+                            shift: false,
+                            primary: false,
+                        },
+                        &mut inv,
+                    );
+                    self.tb.on_event(
+                        &InputEvent::Key {
+                            key: Key::Home,
+                            shift: true,
+                            primary: false,
+                        },
+                        &mut inv,
+                    );
                 } else {
                     self.tb.on_event(
                         &InputEvent::Key {
@@ -279,6 +299,7 @@ mod tests {
             scale: 1.0,
             replace,
             select_all: true,
+            pad: Some(6),
         });
         le
     }

@@ -407,6 +407,9 @@ pub struct TextBox {
     gutter_marks: bool,
     /// 첫 글자 앞 추가 여백(논리 px · 기본 0 · nexa-sql `editor.text_pad_left` 3).
     text_inset: i32,
+    /// ★ 셀 편집 모드(nexa-sql 그리드 09-26): 둥근 틀·테두리 없이 셀 배경만 · 글자 시작 x = `bounds.x + pad`(그리드 셀 여백과 같게) ·
+    ///   세로는 셀과 같은 잉크 중앙(`text_center_y`) — 편집에 들어가도 글자가 그 자리에 그대로 보인다.
+    cell_pad: Option<i32>,
     /// 논리 줄(0부터)별 표시 색 — 북마크·오류·변경 등 호스트가 정한다.
     line_marks: Vec<(usize, Color)>,
     /// 거터 라벨(줄 → 짧은 글 · 예 북마크 니모닉 숫자) — 줄번호 왼쪽에 accent 상자로(nexa-sql docs/69 U-2 · 09-22).
@@ -811,6 +814,7 @@ impl TextBox {
             line_numbers: false,
             gutter_marks: false,
             text_inset: 0,
+            cell_pad: None,
             line_marks: Vec::new(),
             gutter_labels: Vec::new(),
             minimap_marks: Vec::new(),
@@ -1572,6 +1576,11 @@ impl TextBox {
     }
 
     /// 첫 글자 앞 추가 여백(논리 px) — 텍스트 원점만 옮긴다(거터·히트 테스트는 같은 원점을 쓴다).
+    /// 셀 편집 모드 켜기/끄기(물리 px 여백 · `None` = 보통 상자).
+    pub fn set_cell_pad(&mut self, px: Option<i32>) {
+        self.cell_pad = px;
+    }
+
     pub fn set_text_inset(&mut self, px: i32) {
         self.text_inset = px.clamp(0, 64);
     }
@@ -4899,14 +4908,18 @@ impl Widget for TextBox {
             return;
         }
         let b = self.base.bounds;
-        ctx.fill_round_rect(b, self.s(6), theme.field_bg);
-        // hover — 전경색(회색 계열)을 진행도만큼 얹는다(서서히 진해짐 · 색을 새로 만들지 않는다).
-        let hov = crate::tokens::hover_alpha(false, self.hover.value());
-        if hov > 0.0 {
-            ctx.fill_round_rect_alpha(b, self.s(6), theme.text, hov);
+        if self.cell_pad.is_some() {
+            ctx.fill_rect(b, theme.field_bg);
+        } else {
+            ctx.fill_round_rect(b, self.s(6), theme.field_bg);
+            // hover — 전경색(회색 계열)을 진행도만큼 얹는다(서서히 진해짐 · 색을 새로 만들지 않는다).
+            let hov = crate::tokens::hover_alpha(false, self.hover.value());
+            if hov > 0.0 {
+                ctx.fill_round_rect_alpha(b, self.s(6), theme.text, hov);
+            }
+            ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
         }
-        ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
-        if self.warning || self.modified {
+        if (self.warning || self.modified) && self.cell_pad.is_none() {
             // 왼쪽 안쪽 띠(테두리 안 · 둥근 모서리 피해 위아래 4px 들여서) — 경고(빠진 필수 칸) > 바뀜.
             let m = self.s(4);
             let c = if self.warning {
@@ -4919,16 +4932,19 @@ impl Widget for TextBox {
                 c,
             );
         }
-        if self.focus_ring {
+        if self.focus_ring && self.cell_pad.is_none() {
             self.draw_focus_ring(ctx, theme, b);
         }
 
         let cy = b.y + b.h / 2;
         let s16 = self.s(16);
         ctx.select_font(FontSlot::Base, false);
-        let ty = cy - ctx.text_height() / 2;
+        let ty = match self.cell_pad {
+            Some(_) => ctx.text_center_y(b.y, b.h),
+            None => cy - ctx.text_height() / 2,
+        };
         // 선행 이미지(있으면) — placeholder·텍스트·캐럿의 시작 x를 그 뒤로 민다.
-        let mut tx = b.x + self.s(10);
+        let mut tx = b.x + self.cell_pad.unwrap_or_else(|| self.s(10));
         if let Some(img) = self.image.as_deref() {
             let boxr = Rect::new(tx, cy - s16 / 2, s16, s16);
             let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
@@ -4975,7 +4991,8 @@ impl Widget for TextBox {
             ctx.text_width(&shown) // 조합 중 한정 — 종전 그대로
         };
         // 가용 폭 — 우측 여백(×·도움말 배지 자리)을 뺀다.
-        let avail = (b.right() - self.s(24) - tx).max(self.s(20));
+        let right_pad = self.cell_pad.unwrap_or_else(|| self.s(24));
+        let avail = (b.right() - right_pad - tx).max(self.s(20));
         let mut hs = self.hscroll.get();
         self.sl_range.set((total_px, avail));
         if total_px <= avail {
@@ -6877,6 +6894,47 @@ mod scroll_sim_tests {
         t.on_event(&InputEvent::Wheel { delta: 0 }, &mut inv);
         t.paint(&mut probe, &theme);
         assert_eq!(pos(&t), 45);
+    }
+}
+
+#[cfg(test)]
+mod edit_menu_click_tests {
+    use super::*;
+
+    /// 우클릭 메뉴 항목 클릭 = 기능만(복사 요청) · 캐럿·선택은 그대로 · 메뉴는 닫힘 · 뒤따르는 MouseUp도 무해(nexa-sql 09-26).
+    #[test]
+    fn menu_item_click_does_not_move_caret() {
+        let mut inv = Invalidations::default();
+        let mut tb = TextBox::new("").with_multiline();
+        tb.set_text("hello world\nsecond line");
+        tb.set_read_only(true);
+        tb.set_scale(1.0);
+        tb.set_bounds(Rect::new(0, 0, 400, 300), &mut inv);
+        tb.set_focused(true);
+        tb.on_event(&InputEvent::SelectAll, &mut inv);
+        let caret0 = tb.caret();
+        let sel0 = tb.copy_selection();
+        assert!(sel0.is_some());
+        tb.on_event(&InputEvent::RightDown { x: 50, y: 50 }, &mut inv);
+        assert!(tb.popup_open());
+        let r = tb.ctx_menu.row_rect_of(0).expect("copy row");
+        let (x, y) = (r.x + 8, r.y + r.h / 2);
+        tb.on_event(
+            &InputEvent::MouseDown {
+                x,
+                y,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(!tb.popup_open(), "항목 선택 = 닫힘");
+        assert_eq!(tb.take_edit_ctx(), Some(EditCtxAction::Copy));
+        assert_eq!(tb.caret(), caret0, "캐럿 그대로");
+        assert_eq!(tb.copy_selection(), sel0, "선택 그대로");
+        tb.on_event(&InputEvent::MouseUp { x, y }, &mut inv);
+        assert_eq!(tb.caret(), caret0);
+        assert_eq!(tb.copy_selection(), sel0);
     }
 }
 
