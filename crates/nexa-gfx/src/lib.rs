@@ -8,6 +8,8 @@
 pub(crate) mod coretext;
 #[cfg(windows)]
 pub(crate) mod gdi;
+pub mod image;
+pub mod inflate;
 pub(crate) mod names;
 pub mod surface;
 pub mod text;
