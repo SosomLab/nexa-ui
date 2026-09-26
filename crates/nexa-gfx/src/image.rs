@@ -33,7 +33,10 @@ impl ImageKind {
 
     /// 이 크레이트가 픽셀로 풀 수 있는가.
     pub fn decodable(self) -> bool {
-        matches!(self, ImageKind::Png | ImageKind::Gif | ImageKind::Bmp)
+        matches!(
+            self,
+            ImageKind::Png | ImageKind::Gif | ImageKind::Bmp | ImageKind::Jpeg
+        )
     }
 
     /// 파일 확장자(저장 기본 이름용).
