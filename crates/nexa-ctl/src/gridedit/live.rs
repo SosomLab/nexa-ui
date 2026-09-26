@@ -73,6 +73,8 @@ impl LiveEditor {
     pub fn new() -> Self {
         let mut tb = TextBox::new("");
         tb.set_focus_ring(false);
+        // 우클릭 메뉴는 호스트의 팝업 층에서(`paint_popup`) — 편집 테두리·다른 셀이 덮지 않는 최상위(UX 규칙).
+        tb.set_popup_deferred(true);
         LiveEditor {
             tb,
             cell: None,
@@ -264,6 +266,13 @@ impl LiveEditor {
             dc.stroke_round_rect(self.rect, 0, th.danger, 2.0);
         } else {
             dc.stroke_round_rect(self.rect, 0, th.accent, 2.0);
+        }
+    }
+
+    /// 우클릭 메뉴(팝업 층 · 호스트가 모든 층을 그린 뒤 부른다).
+    pub fn paint_popup(&self, dc: &mut dyn DrawCtx, th: &Theme) {
+        if self.cell.is_some() {
+            self.tb.paint_popup(dc, th);
         }
     }
 

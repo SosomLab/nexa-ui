@@ -4360,8 +4360,14 @@ impl TextBox {
                     self.base.bounds.h + self.s(140),
                 );
                 let extras = self.menu_extras.clone();
+                // ★ 셀 편집 모드: 메뉴가 **편집 중인 글(선택)을 가리지 않게** 셀 아래에 연다(UX 규칙 · nexa-sql 09-26).
+                let my = if self.cell_pad.is_some() {
+                    self.base.bounds.bottom()
+                } else {
+                    y
+                };
                 self.ctx_menu
-                    .open_at(x, y, self.base.scale, host, caps, extras);
+                    .open_at(x, my, self.base.scale, host, caps, extras);
                 inv.push(self.base.bounds);
                 inv.push(self.ctx_menu.bounds());
             }
@@ -4991,7 +4997,12 @@ impl Widget for TextBox {
             ctx.text_width(&shown) // 조합 중 한정 — 종전 그대로
         };
         // 가용 폭 — 우측 여백(×·도움말 배지 자리)을 뺀다.
-        let right_pad = self.cell_pad.unwrap_or_else(|| self.s(24));
+        // 셀 편집 모드 = 오른쪽 여백 없이 셀 끝까지(그리드 셀과 같은 폭 · 잘림 없음 · 캐럿 1px만).
+        let right_pad = if self.cell_pad.is_some() {
+            self.s(2)
+        } else {
+            self.s(24)
+        };
         let avail = (b.right() - right_pad - tx).max(self.s(20));
         let mut hs = self.hscroll.get();
         self.sl_range.set((total_px, avail));
