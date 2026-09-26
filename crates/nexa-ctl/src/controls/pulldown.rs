@@ -25,6 +25,8 @@ use std::cell::RefCell;
 pub enum MenuEntry {
     /// 액션 항목(값 = 보고 id · 라벨 · 선택적 앞 이미지).
     Item(ComboItem),
+    /// **강조** 항목 — `Item`과 같되 라벨을 강조색(`theme.warn`)으로(nexa-sql 미저장 탭 · 사용자 09-26).
+    Emph(ComboItem),
     /// **비활성** 항목(흐리게 · hover/선택 없음 · 09-17 nexa-sql "이미 있으면 메뉴 Disable").
     Disabled(ComboItem),
     /// 구분선.
@@ -43,7 +45,9 @@ impl MenuEntry {
 
     fn label_of(&self) -> Option<&str> {
         match self {
-            Self::Item(it) | Self::Disabled(it) | Self::Sub(it, _) => Some(&it.label),
+            Self::Item(it) | Self::Emph(it) | Self::Disabled(it) | Self::Sub(it, _) => {
+                Some(&it.label)
+            }
             Self::Separator => None,
         }
     }
@@ -180,7 +184,10 @@ impl MenuBar {
 
     fn entry_h(&self, e: &MenuEntry) -> i32 {
         match e {
-            MenuEntry::Item(_) | MenuEntry::Disabled(_) | MenuEntry::Sub(..) => self.s(ITEM_H),
+            MenuEntry::Item(_)
+            | MenuEntry::Emph(_)
+            | MenuEntry::Disabled(_)
+            | MenuEntry::Sub(..) => self.s(ITEM_H),
             MenuEntry::Separator => self.s(SEP_H),
         }
     }
@@ -304,7 +311,7 @@ impl MenuBar {
     fn step_sub(&self, from: Option<usize>, down: bool) -> Option<usize> {
         let v = self.sub_entries()?;
         let idxs: Vec<usize> = (0..v.len())
-            .filter(|&k| matches!(v[k], MenuEntry::Item(_)))
+            .filter(|&k| matches!(v[k], MenuEntry::Item(_) | MenuEntry::Emph(_)))
             .collect();
         if idxs.is_empty() {
             return None;
@@ -319,7 +326,9 @@ impl MenuBar {
     }
 
     fn pick_sub(&mut self, k: usize, inv: &mut Invalidations) {
-        if let Some(MenuEntry::Item(it)) = self.sub_entries().and_then(|v| v.get(k)) {
+        if let Some(MenuEntry::Item(it) | MenuEntry::Emph(it)) =
+            self.sub_entries().and_then(|v| v.get(k))
+        {
             self.picked = Some(it.value.clone());
             self.close(inv);
         }
@@ -346,7 +355,7 @@ impl MenuBar {
     fn pick(&mut self, entry: usize, inv: &mut Invalidations) {
         if let Some(i) = self.open {
             match self.menus[i].entries.get(entry) {
-                Some(MenuEntry::Item(it)) => {
+                Some(MenuEntry::Item(it) | MenuEntry::Emph(it)) => {
                     self.picked = Some(it.value.clone());
                     self.close(inv);
                 }
@@ -390,7 +399,12 @@ impl MenuBar {
         let i = self.open?;
         let entries = &self.menus[i].entries;
         let idxs: Vec<usize> = (0..entries.len())
-            .filter(|&k| matches!(entries[k], MenuEntry::Item(_) | MenuEntry::Sub(..)))
+            .filter(|&k| {
+                matches!(
+                    entries[k],
+                    MenuEntry::Item(_) | MenuEntry::Emph(_) | MenuEntry::Sub(..)
+                )
+            })
             .collect();
         if idxs.is_empty() {
             return None;
@@ -669,8 +683,12 @@ impl MenuBar {
                         theme.border,
                     );
                 }
-                MenuEntry::Item(it) | MenuEntry::Disabled(it) | MenuEntry::Sub(it, _) => {
+                MenuEntry::Item(it)
+                | MenuEntry::Emph(it)
+                | MenuEntry::Disabled(it)
+                | MenuEntry::Sub(it, _) => {
                     let disabled = matches!(e, MenuEntry::Disabled(_));
+                    let emph = matches!(e, MenuEntry::Emph(_));
                     let is_sub = matches!(e, MenuEntry::Sub(..));
                     let row = Rect::new(pop.x + 1, y, pop.w - 2, h);
                     if hover == Some(k) && !disabled {
@@ -688,7 +706,13 @@ impl MenuBar {
                     let right_pad = if is_sub { self.s(22) } else { self.s(10) };
                     let shown =
                         crate::draw::ellipsize_middle(ctx, &it.label, row.right() - right_pad - tx);
-                    let fg = if disabled { theme.text_dim } else { theme.text };
+                    let fg = if disabled {
+                        theme.text_dim
+                    } else if emph {
+                        theme.warn
+                    } else {
+                        theme.text
+                    };
                     ctx.text(tx, cy - th / 2, row, &shown, fg);
                     if is_sub {
                         let a = self.s(10);

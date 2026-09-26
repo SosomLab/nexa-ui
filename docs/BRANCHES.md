@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/pulldown-emph | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 82차(mac) — 풀다운 `MenuEntry::Emph`(강조색 `theme.warn` 항목 · 선택 가능) — nexa-sql 미저장 탭 메뉴 강조(사용자 09-26) |
 | feat/gfx-image-decoders | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 81차(mac) — nexa-gfx `inflate`(DEFLATE/zlib · puff식 · Adler 검증) + `image`(PNG 8/16비트·팔레트·tRNS·필터 5 · BMP 1/4/8/16/24/32 · GIF 첫 프레임 LZW·투명·인터레이스 · `sniff`/`dimensions`/`decode(max_pixels)` · JPEG/WebP 판별만) — 외부 crate 0 · nexa-sql LOB 값 창(87 §5) · 시험 벡터(Python zlib 산출 · `tests/z2.hex`) |
 | feat/sys-gui-feature | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 80차(mac) — nexa-sys `gui` feature(기본 on · `input_source`·`layer_present` 게이트) — CLI(nexa-sql `nsql`)는 `default-features = false`로 Carbon·QuartzCore·IOSurface·CoreGraphics 링크 0(nexa-sql T-234 · §233) |
 | feat/cell-edit-pad | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 78차(mac) — TextBox 셀 편집 모드 `set_cell_pad`(틀 없음 · 셀 여백/잉크 중앙 정렬) · LiveEditor 진입 = 전체 선택 + 캐럿 앞(긴 글 첫머리부터) · 시험 menu_item_click_does_not_move_caret(nexa-sql §218) |
