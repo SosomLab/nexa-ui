@@ -14,4 +14,10 @@ description = "Nexa UI OS 신호 — 배터리 전원·원격 세션·동작 줄
 [lints]
 workspace = true
 
+# `gui`(기본 on) = 창이 있는 앱만 쓰는 부분(입력 소스 · 레이어 present) — Carbon·QuartzCore·objc 프레임워크를 링크한다.
+# CLI(nexa-sql `nsql`)는 `default-features = false`로 신호(`Signals`)만 가져가 GUI 프레임워크 적재를 피한다(nexa-sql T-234 · 09-26).
+[features]
+default = ["gui"]
+gui = []
+
 [dependencies]
