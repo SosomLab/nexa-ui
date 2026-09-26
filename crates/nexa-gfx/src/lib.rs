@@ -10,6 +10,7 @@ pub(crate) mod coretext;
 pub(crate) mod gdi;
 pub mod image;
 pub mod inflate;
+pub mod jpeg;
 pub(crate) mod names;
 pub mod surface;
 pub mod text;

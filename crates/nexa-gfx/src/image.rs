@@ -3,7 +3,7 @@
 //! (기저 JPEG 디코더는 크기 대비 가치가 낮아 보류 · 사용자는 "파일로 저장"으로 본다).
 //!
 //! 규칙: 손상 입력 = `Err(String)`(패닉 없음) · 픽셀 상한 `max_pixels`(호출자 설정 · 메모리 보호) · 16비트는 상위 바이트 ·
-//! PNG 인터레이스(Adam7)는 지원하지 않는다(오류 문구로 안내).
+//! PNG 인터레이스(Adam7) = 7패스 풀이(T-237) · JPEG 기저 = `jpeg` 모듈(프로그레시브는 안내).
 
 use crate::inflate::inflate_zlib;
 use crate::surface::IconImage;
@@ -72,7 +72,7 @@ pub fn decode(b: &[u8], max_pixels: usize) -> Result<IconImage, String> {
         ImageKind::Png => decode_png(b, max_pixels),
         ImageKind::Bmp => decode_bmp(b, max_pixels),
         ImageKind::Gif => decode_gif(b, max_pixels),
-        ImageKind::Jpeg => Err("JPEG preview is not supported yet (save to file to view)".into()),
+        ImageKind::Jpeg => crate::jpeg::decode(b, &|w, h| check_size(w, h, max_pixels)),
         ImageKind::Webp => Err("WebP preview is not supported (save to file to view)".into()),
         ImageKind::Unknown => Err("not an image".into()),
     }
@@ -91,6 +91,7 @@ pub fn dimensions(b: &[u8]) -> Option<(u32, u32)> {
             let h = i32::from_le_bytes([b[22], b[23], b[24], b[25]]);
             Some((w.unsigned_abs(), h.unsigned_abs()))
         }
+        ImageKind::Jpeg => crate::jpeg::dimensions(b),
         _ => None,
     }
 }
@@ -158,9 +159,6 @@ fn decode_png(b: &[u8], max_pixels: usize) -> Result<IconImage, String> {
     if !seen_ihdr {
         return Err("png: no IHDR".into());
     }
-    if interlace != 0 {
-        return Err("png: interlaced (Adam7) images are not supported".into());
-    }
     let channels: usize = match ctype {
         0 => 1,
         2 => 3,
@@ -174,84 +172,109 @@ fn decode_png(b: &[u8], max_pixels: usize) -> Result<IconImage, String> {
     }
     let raw = inflate_zlib(&idat).map_err(|e| format!("png: {e}"))?;
     let bits_pp = channels * depth as usize;
-    let stride = (w as usize * bits_pp).div_ceil(8);
     let bpp = bits_pp.div_ceil(8).max(1);
-    if raw.len() < (stride + 1) * h as usize {
-        return Err("png: image data too short".into());
-    }
-    // 필터 되돌리기(줄마다).
-    let mut cur = vec![0u8; stride];
-    let mut prev = vec![0u8; stride];
-    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
-    for y in 0..h as usize {
-        let base = y * (stride + 1);
-        let filter = raw[base];
-        cur.copy_from_slice(&raw[base + 1..base + 1 + stride]);
-        for i in 0..stride {
-            let a = if i >= bpp { cur[i - bpp] } else { 0 };
-            let bb = prev[i];
-            let c = if i >= bpp { prev[i - bpp] } else { 0 };
-            let pred = match filter {
-                0 => 0,
-                1 => a,
-                2 => bb,
-                3 => ((u16::from(a) + u16::from(bb)) / 2) as u8,
-                4 => paeth(a, bb, c),
-                _ => return Err("png: filter type".into()),
-            };
-            cur[i] = cur[i].wrapping_add(pred);
+    let mut rgba = vec![0u8; w as usize * h as usize * 4];
+    // 패스 목록: 비인터레이스 = 전체 한 패스 · Adam7 = 7패스(시작 x·y · 간격 x·y) — 빈 패스는 건너뛴다.
+    let passes: Vec<(usize, usize, usize, usize)> = if interlace == 0 {
+        vec![(0, 0, 1, 1)]
+    } else {
+        vec![
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        ]
+    };
+    let mut off = 0usize;
+    for (sx, sy, dx, dy) in passes {
+        let pw = (w as usize).saturating_sub(sx).div_ceil(dx);
+        let ph = (h as usize).saturating_sub(sy).div_ceil(dy);
+        if pw == 0 || ph == 0 {
+            continue;
         }
-        // 픽셀 → RGBA.
-        for x in 0..w as usize {
-            let px = match (ctype, depth) {
-                (0, 8) => gray(cur[x], &trns, 0, u16::from(cur[x])),
-                (0, 16) => gray(
-                    cur[x * 2],
-                    &trns,
-                    0,
-                    u16::from_be_bytes([cur[x * 2], cur[x * 2 + 1]]),
-                ),
-                (0, d) => {
-                    let v = sample(&cur, x, d);
-                    let max = (1u16 << d) - 1;
-                    let g = (u16::from(v) * 255 / max) as u8;
-                    gray(g, &trns, 0, u16::from(v))
-                }
-                (2, 8) => {
-                    let (r, g, bl) = (cur[x * 3], cur[x * 3 + 1], cur[x * 3 + 2]);
-                    let a = if trns.len() >= 6
-                        && trns[1] == r
-                        && trns[3] == g
-                        && trns[5] == bl
-                        && trns[0] == 0
-                        && trns[2] == 0
-                        && trns[4] == 0
-                    {
-                        0
-                    } else {
-                        255
-                    };
-                    [r, g, bl, a]
-                }
-                (2, 16) => [cur[x * 6], cur[x * 6 + 2], cur[x * 6 + 4], 255],
-                (3, d) => {
-                    let idx = if d == 8 { cur[x] } else { sample(&cur, x, d) } as usize;
-                    let (r, g, bl) = (
-                        *plte.get(idx * 3).unwrap_or(&0),
-                        *plte.get(idx * 3 + 1).unwrap_or(&0),
-                        *plte.get(idx * 3 + 2).unwrap_or(&0),
-                    );
-                    [r, g, bl, *trns.get(idx).unwrap_or(&255)]
-                }
-                (4, 8) => [cur[x * 2], cur[x * 2], cur[x * 2], cur[x * 2 + 1]],
-                (4, 16) => [cur[x * 4], cur[x * 4], cur[x * 4], cur[x * 4 + 2]],
-                (6, 8) => [cur[x * 4], cur[x * 4 + 1], cur[x * 4 + 2], cur[x * 4 + 3]],
-                (6, 16) => [cur[x * 8], cur[x * 8 + 2], cur[x * 8 + 4], cur[x * 8 + 6]],
-                _ => return Err("png: unsupported layout".into()),
-            };
-            rgba.extend_from_slice(&px);
+        let stride = (pw * bits_pp).div_ceil(8);
+        if raw.len() < off + (stride + 1) * ph {
+            return Err("png: image data too short".into());
         }
-        std::mem::swap(&mut cur, &mut prev);
+        // 필터 되돌리기(줄마다 · 패스 안에서 이전 줄 기준).
+        let mut cur = vec![0u8; stride];
+        let mut prev = vec![0u8; stride];
+        for j in 0..ph {
+            let base = off + j * (stride + 1);
+            let filter = raw[base];
+            cur.copy_from_slice(&raw[base + 1..base + 1 + stride]);
+            for i in 0..stride {
+                let a = if i >= bpp { cur[i - bpp] } else { 0 };
+                let bb = prev[i];
+                let c = if i >= bpp { prev[i - bpp] } else { 0 };
+                let pred = match filter {
+                    0 => 0,
+                    1 => a,
+                    2 => bb,
+                    3 => ((u16::from(a) + u16::from(bb)) / 2) as u8,
+                    4 => paeth(a, bb, c),
+                    _ => return Err("png: filter type".into()),
+                };
+                cur[i] = cur[i].wrapping_add(pred);
+            }
+            // 픽셀 → RGBA(패스 좌표 → 전체 좌표).
+            for x in 0..pw {
+                let px = match (ctype, depth) {
+                    (0, 8) => gray(cur[x], &trns, 0, u16::from(cur[x])),
+                    (0, 16) => gray(
+                        cur[x * 2],
+                        &trns,
+                        0,
+                        u16::from_be_bytes([cur[x * 2], cur[x * 2 + 1]]),
+                    ),
+                    (0, d) => {
+                        let v = sample(&cur, x, d);
+                        let max = (1u16 << d) - 1;
+                        let g = (u16::from(v) * 255 / max) as u8;
+                        gray(g, &trns, 0, u16::from(v))
+                    }
+                    (2, 8) => {
+                        let (r, g, bl) = (cur[x * 3], cur[x * 3 + 1], cur[x * 3 + 2]);
+                        let a = if trns.len() >= 6
+                            && trns[1] == r
+                            && trns[3] == g
+                            && trns[5] == bl
+                            && trns[0] == 0
+                            && trns[2] == 0
+                            && trns[4] == 0
+                        {
+                            0
+                        } else {
+                            255
+                        };
+                        [r, g, bl, a]
+                    }
+                    (2, 16) => [cur[x * 6], cur[x * 6 + 2], cur[x * 6 + 4], 255],
+                    (3, d) => {
+                        let idx = if d == 8 { cur[x] } else { sample(&cur, x, d) } as usize;
+                        let (r, g, bl) = (
+                            *plte.get(idx * 3).unwrap_or(&0),
+                            *plte.get(idx * 3 + 1).unwrap_or(&0),
+                            *plte.get(idx * 3 + 2).unwrap_or(&0),
+                        );
+                        [r, g, bl, *trns.get(idx).unwrap_or(&255)]
+                    }
+                    (4, 8) => [cur[x * 2], cur[x * 2], cur[x * 2], cur[x * 2 + 1]],
+                    (4, 16) => [cur[x * 4], cur[x * 4], cur[x * 4], cur[x * 4 + 2]],
+                    (6, 8) => [cur[x * 4], cur[x * 4 + 1], cur[x * 4 + 2], cur[x * 4 + 3]],
+                    (6, 16) => [cur[x * 8], cur[x * 8 + 2], cur[x * 8 + 4], cur[x * 8 + 6]],
+                    _ => return Err("png: unsupported layout".into()),
+                };
+                let (gx, gy) = (sx + x * dx, sy + j * dy);
+                let o = (gy * w as usize + gx) * 4;
+                rgba[o..o + 4].copy_from_slice(&px);
+            }
+            std::mem::swap(&mut cur, &mut prev);
+        }
+        off += (stride + 1) * ph;
     }
     Ok(IconImage { w, h, rgba })
 }
@@ -685,8 +708,32 @@ mod tests {
         assert!(decode(&PNG_RGB[..30], 1 << 20).is_err());
         assert!(decode(&[0xff, 0xd8, 0xff, 0xe0], 1 << 20)
             .expect_err("jpeg")
-            .contains("JPEG"));
+            .to_ascii_lowercase()
+            .contains("jpeg"));
         assert!(decode(b"nope", 1 << 20).is_err());
         assert!(decode(&GIF[..20], 1 << 20).is_err());
+    }
+
+    #[test]
+    fn png_adam7_interlaced_matches_reference() {
+        let hex = |t: &str| -> Vec<u8> {
+            let t = t.trim();
+            (0..t.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&t[i..i + 2], 16).expect("hex"))
+                .collect()
+        };
+        let b = hex(include_str!("../tests/adam7.hex"));
+        let want = hex(include_str!("../tests/adam7-ref.hex"));
+        let img = decode(&b, 1 << 20).expect("adam7");
+        assert_eq!((img.w, img.h), (9, 7));
+        for i in 0..(9 * 7) {
+            assert_eq!(
+                &img.rgba[i * 4..i * 4 + 3],
+                &want[i * 3..i * 3 + 3],
+                "pixel {i}"
+            );
+            assert_eq!(img.rgba[i * 4 + 3], 255);
+        }
     }
 }
