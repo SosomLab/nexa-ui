@@ -4203,6 +4203,17 @@ impl TextBox {
         }
     }
 
+    /// ★ 조합 중 음절을 **명령 앞에서** 확정한다(nexa-sql 09-27 IME 전수 조사): 키맵 명령(저장·실행·복사…)은 호스트가 바로
+    /// 실행하고 이 상자에는 사건이 오지 않아, 앱 조합 모드에서 ⌘S/⌘R을 누르면 조합 중인 음절이 본문에 없는 채로 저장·실행됐다.
+    /// 시스템 IME가 ⌘ 조합 앞에서 조합을 확정하는 것과 같게. 확정한 것이 있으면 `true`(호스트가 다시 그린다).
+    pub fn commit_composition(&mut self, inv: &mut Invalidations) -> bool {
+        if !self.hangul.is_composing() {
+            return false;
+        }
+        self.hangul_flush(inv);
+        true
+    }
+
     /// 조합기의 미리보기를 preedit 표시에 맞춘다.
     fn hangul_sync_preedit(&mut self, inv: &mut Invalidations) {
         let pre = self.hangul.preview().map(String::from).unwrap_or_default();
@@ -7155,6 +7166,28 @@ mod hangul_compose_tests {
         assert_eq!(t.text(), "가나다1234");
         feed(&mut t, &mut inv, " ㄱㅏㄴㅏㄷㅏ!@#$");
         assert_eq!(t.text(), "가나다1234 가나다!@#$");
+        set_hangul_app_compose(false);
+    }
+
+    /// 명령 앞 확정(nexa-sql 09-27 IME 전수 조사): 호스트가 키맵 명령(⌘S·⌘R)을 실행하기 전에 `commit_composition`을 부르면
+    /// 조합 중 음절이 본문에 들어간다(종전 = preedit에만 있어 저장·실행에서 빠짐). 조합 중이 아니면 false · 비용 0.
+    #[test]
+    fn commit_composition_before_host_command() {
+        set_hangul_app_compose(true);
+        let (mut t, mut inv) = tb();
+        feed(&mut t, &mut inv, "ㄱㅏㄴ");
+        assert_eq!(t.text(), "", "조합 중 = 본문에 아직 없다");
+        assert!(
+            t.commit_composition(&mut inv),
+            "조합 중이었으니 확정한 것이 있다"
+        );
+        assert_eq!(t.text(), "간");
+        assert_eq!(t.display_text(), "간", "preedit 없음");
+        assert!(!t.commit_composition(&mut inv), "두 번째는 할 일이 없다");
+        feed(&mut t, &mut inv, "ㅏ");
+        assert_eq!(t.text(), "간", "새 조합 시작(ㅏ) — 아직 본문 아님");
+        assert!(t.commit_composition(&mut inv));
+        assert_eq!(t.text(), "간ㅏ");
         set_hangul_app_compose(false);
     }
 

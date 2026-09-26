@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-27 (84차 · linux · nexa-sql 101차)** — `TextBox::commit_composition`(조합 중 음절을 호스트 명령 앞에서 확정 · nexa-sql IME 전수 조사: ⌘S/⌘R이 조합 중 음절을 빼고 저장·실행하던 것) · 시험 `commit_composition_before_host_command`
 - **2026-09-26 (83차 · mac)** — ★ nexa-gfx **기저 JPEG 디코더 `jpeg.rs`**(SOF0/SOF1 · 허프만 · 회색/YCbCr · 서브샘플링 · DRI/RSTn · 분리 IDCT · 프로그레시브/산술/CMYK = 안내) · PNG **Adam7** 7패스 · `ImageKind::decodable`에 JPEG · 시험 벡터 3(`quad`/`gray`/`adam7`) → nexa-sql T-237 §242.
 - **2026-09-26 (82차 · mac)** — 풀다운 `MenuEntry::Emph`(강조색 항목) → nexa-sql 미저장 탭 메뉴 §237.
 - **2026-09-26 (81차 · mac)** — ★ nexa-gfx `inflate`(DEFLATE/zlib · puff식) + `image`(PNG·BMP·GIF 디코더 · `sniff`/`dimensions`/`decode`) → nexa-sql LOB 값 창 §236.

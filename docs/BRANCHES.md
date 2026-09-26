@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| fix/textbox-commit-composition | 2026-09-27 | 2026-09-27 → main(삭제) | 1 | 84차(linux) — `TextBox::commit_composition`(조합 중 음절을 호스트 명령 앞에서 확정 · nexa-sql IME 전수 조사) · 시험 1 |
 | docs/devlog-status-80-83 | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | DEVLOG·STATUS에 80~83차 보충(nexa-sys `gui` feature · nexa-gfx `inflate`/`image` · `MenuEntry::Emph` · JPEG/Adam7) — nexa-sql §244 |
 | feat/gfx-jpeg-adam7 | 2026-09-26 | 2026-09-26 → main(삭제) | 2 | 83차(mac) — nexa-gfx **기저 JPEG 디코더 `jpeg.rs`**(SOF0/SOF1 · 허프만 · 회색/YCbCr · 서브샘플링 최근접 · DRI/RSTn · 분리 IDCT · 프로그레시브/산술/CMYK = 안내 · `dimensions`) · PNG **Adam7** 7패스 풀이(패스 단위 필터 되돌리기 → 전체 좌표 흩뿌리기) · 시험 벡터 `tests/quad.hex`(sips 4:2:0 16×16 4분면) · `gray.hex` · `adam7.hex`+ref · 26 시험 · 보완 = `ImageKind::decodable`에 JPEG 포함(값 창이 Image 모드로 연다) — nexa-sql T-237 §242 |
 | feat/pulldown-emph | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | 82차(mac) — 풀다운 `MenuEntry::Emph`(강조색 `theme.warn` 항목 · 선택 가능) — nexa-sql 미저장 탭 메뉴 강조(사용자 09-26) |
