@@ -37,6 +37,7 @@ pub mod gridedit;
 pub mod hangul;
 pub mod highlight;
 pub mod raster;
+pub mod shape;
 pub mod theme;
 pub mod tokens;
 pub mod typeahead;

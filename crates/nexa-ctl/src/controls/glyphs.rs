@@ -4,6 +4,7 @@
 //! 한 번 래스터한 마스크는 스레드 로컬 캐시(`Rc`)에 두고 재사용한다.
 
 use super::ctxmenu::MenuIcon;
+use crate::shape::{disc, ring, rrect, stroke};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -40,36 +41,6 @@ pub enum GlyphKind {
 
 const SIDE: u32 = 64;
 const SS: u32 = 4;
-
-fn seg_dist(x: f32, y: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
-    let (vx, vy) = (bx - ax, by - ay);
-    let (wx, wy) = (x - ax, y - ay);
-    let t = ((wx * vx + wy * vy) / (vx * vx + vy * vy)).clamp(0.0, 1.0);
-    let (px, py) = (ax + t * vx, ay + t * vy);
-    ((x - px) * (x - px) + (y - py) * (y - py)).sqrt()
-}
-
-fn stroke(x: f32, y: f32, a: (f32, f32), b: (f32, f32), w: f32) -> bool {
-    seg_dist(x, y, a.0, a.1, b.0, b.1) <= w / 2.0
-}
-
-fn rrect(x: f32, y: f32, x0: f32, y0: f32, w: f32, h: f32, r: f32) -> bool {
-    if x < x0 || y < y0 || x > x0 + w || y > y0 + h {
-        return false;
-    }
-    let cx = x.clamp(x0 + r, x0 + w - r);
-    let cy = y.clamp(y0 + r, y0 + h - r);
-    (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r
-}
-
-fn ring(x: f32, y: f32, cx: f32, cy: f32, r_in: f32, r_out: f32) -> bool {
-    let d = ((x - cx) * (x - cx) + (y - cy) * (y - cy)).sqrt();
-    (r_in..=r_out).contains(&d)
-}
-
-fn disc(x: f32, y: f32, cx: f32, cy: f32, r: f32) -> bool {
-    (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r
-}
 
 fn shape_folder(x: f32, y: f32) -> bool {
     let body =
