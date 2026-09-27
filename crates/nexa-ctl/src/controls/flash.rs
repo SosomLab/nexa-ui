@@ -1,5 +1,5 @@
 //! ★ **순간 메시지(Flash)** 부품(nexa-sql 09-27 · 사용자 "인스턴트 플로팅 메시지를 별도 컨트롤로"): 클릭 복사 "복사됨" 같은 짧은 알림을
-//! **앵커(가리면 안 되는 사각형) 옆**에 띄우고 `ms` 동안 색이 배경으로 녹아 사라진다. 타이머·큐 없음 — 호스트는
+//! **앵커(가리면 안 되는 사각형) 옆**에 띄우고 **`hold_ms` 동안 그대로 보인 뒤 `fade_ms` 동안** 색이 배경으로 녹아 사라진다(유지 → 페이드아웃 · 사용자 09-27). 타이머·큐 없음 — 호스트는
 //! [`Flash::paint`]가 `true`를 돌려주는 동안 다시 그리기만 하면 된다(진행 중 = 프레임마다 · 끝나면 스스로 지운다).
 //!
 //! 자리 규칙(사용자 09-27): 메시지의 **좌하단 = 앵커의 우상단**(앵커 위·오른쪽에 떠서 앵커를 덮지 않음) → 오른쪽이 모자라면 왼쪽으로 밀고 →
@@ -28,7 +28,9 @@ pub struct Flash {
     text: String,
     tone: FlashTone,
     at: Option<Instant>,
-    ms: u64,
+    /// 유지(그대로 보이는) 시간 · 페이드아웃 시간(ms).
+    hold_ms: u64,
+    fade_ms: u64,
     /// 배경 상자(색조 배경 + 테두리 · 글이 돋보이게 · 기본 켬).
     background: bool,
 }
@@ -54,10 +56,12 @@ impl Flash {
     }
 
     /// 보이기 — `ms` 동안(최소 200) 서서히 사라진다.
-    pub fn show(&mut self, text: impl Into<String>, tone: FlashTone, ms: u64) {
+    /// `hold_ms` 동안 그대로 보인 뒤 `fade_ms`(최소 200) 동안 서서히 사라진다.
+    pub fn show(&mut self, text: impl Into<String>, tone: FlashTone, hold_ms: u64, fade_ms: u64) {
         self.text = text.into();
         self.tone = tone;
-        self.ms = ms.max(200);
+        self.hold_ms = hold_ms;
+        self.fade_ms = fade_ms.max(200);
         self.at = Some(Instant::now());
     }
 
@@ -79,11 +83,15 @@ impl Flash {
     pub fn strength_at(&mut self, now: Instant) -> Option<f32> {
         let at = self.at?;
         let el = now.saturating_duration_since(at).as_millis() as u64;
-        if el >= self.ms {
+        if el < self.hold_ms {
+            return Some(1.0);
+        }
+        let f = el - self.hold_ms;
+        if f >= self.fade_ms {
             self.at = None;
             return None;
         }
-        let t = el as f32 / self.ms as f32;
+        let t = f as f32 / self.fade_ms as f32;
         Some(1.0 - t * t)
     }
 
@@ -177,15 +185,28 @@ mod tests {
     fn strength_fades_and_ends() {
         let mut f = Flash::new();
         assert!(!f.active());
-        f.show("copied", FlashTone::Ok, 1000);
+        f.show("copied", FlashTone::Ok, 500, 1000);
         let t0 = f.at.expect("shown");
         assert!((f.strength_at(t0).expect("s") - 1.0).abs() < 1e-6);
-        let mid = f.strength_at(t0 + Duration::from_millis(500)).expect("mid");
-        assert!((mid - 0.75).abs() < 1e-6, "제곱 감속 · {mid}");
-        assert!(f.strength_at(t0 + Duration::from_millis(1000)).is_none());
+        assert!(
+            (f.strength_at(t0 + Duration::from_millis(499))
+                .expect("hold")
+                - 1.0)
+                .abs()
+                < 1e-6,
+            "유지 중 = 1"
+        );
+        let mid = f
+            .strength_at(t0 + Duration::from_millis(1000))
+            .expect("mid");
+        assert!(
+            (mid - 0.75).abs() < 1e-6,
+            "유지 뒤 페이드 절반 = 제곱 감속 · {mid}"
+        );
+        assert!(f.strength_at(t0 + Duration::from_millis(1500)).is_none());
         assert!(!f.active(), "끝나면 스스로 지운다");
-        f.show("x", FlashTone::Warn, 10);
-        assert_eq!(f.ms, 200, "최소 200ms");
+        f.show("x", FlashTone::Warn, 0, 10);
+        assert_eq!(f.fade_ms, 200, "페이드 최소 200ms");
         assert!(Flash::new().background, "배경 기본 켬");
         assert!(!Flash::new().with_background(false).background);
     }

@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-09-27 (85차 후반 2 · linux)** — `Flash` 3차: **유지 시간 → 페이드아웃** 2단계(`show(text, tone, hold_ms, fade_ms)` · 유지 중 세기 1 · 페이드 제곱 감속 · nexa-sql 기본 유지 2초 · 페이드 3초).
 - **2026-09-27 (85차 후반 · linux)** — `Flash` 2차: **배경 상자**(`with_background` 기본 켬 · 색조 배경 + 테두리 · 함께 페이드) · 자리 = **메시지 좌하단 = 앵커 우상단**(→ 왼쪽으로 밀기 → 앵커 아래 → 호스트 안) · 호스트는 창 맨 마지막에 그린다(최상위 Z-order) · 시험 갱신.
 - **2026-09-27 (85차 · linux · nexa-sql 104차)** — ★ **`Flash` 순간 메시지 부품**(`controls/flash.rs` · `show(text, tone, ms)` · 앵커 옆(오른쪽 → 아래 → 위 · 앵커를 덮지 않음 · 호스트 안) · 배경색으로 녹아 사라짐(제곱 감속) · 타이머 없음 = `paint`가 `true`인 동안 호스트가 다시 그림 · 시험 2) — nexa-sql 라이선스 창 이메일 링크 "복사됨"에서 승격.
 - **2026-09-27 (84차 · linux · nexa-sql 101차)** — `TextBox::commit_composition`(조합 중 음절을 호스트 명령 앞에서 확정 · nexa-sql IME 전수 조사: ⌘S/⌘R이 조합 중 음절을 빼고 저장·실행하던 것) · 시험 `commit_composition_before_host_command`

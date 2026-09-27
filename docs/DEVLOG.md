@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-27 (85차 후반 2 · linux)** — `Flash` 3차(유지 → 페이드아웃 · `hold_ms`/`fade_ms`).
 - **2026-09-27 (85차 후반 · linux)** — `Flash` 2차(배경 상자 · 좌하단 = 앵커 우상단 · 최상위 Z-order).
 - **2026-09-27 (85차 · linux)** — ★ `Flash` 순간 메시지 부품(앵커 옆 · 페이드 · 페인트 주도 · 시험 2) — nexa-sql 104차 라이선스 창.
 - **2026-09-27 (84차 · linux · nexa-sql 101차)** — `TextBox::commit_composition`(조합 중 음절을 호스트 명령 앞에서 확정 · nexa-sql IME 전수 조사: ⌘S/⌘R이 조합 중 음절을 빼고 저장·실행하던 것) · 시험 `commit_composition_before_host_command`
