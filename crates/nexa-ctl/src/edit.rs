@@ -1023,12 +1023,6 @@ impl EditState {
         &self.buf
     }
 
-    /// 본문 전체를 글자 배열로(**O(본문)** — 드문 명령·테스트용. 자주 도는 길은 [`Self::buf`]의 조회를 쓴다).
-    #[must_use]
-    pub fn chars_vec(&self) -> Vec<char> {
-        self.buf.iter_from(0).collect()
-    }
-
     /// 글자 수.
     #[must_use]
     pub fn len(&self) -> usize {
