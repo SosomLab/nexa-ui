@@ -52,10 +52,10 @@ pub use controls::{
 pub use controls::{
     AutoIndent, BorderSpec, BracketOpts, Button, ButtonMode, Checkbox, Choose, ChoosePicker,
     ColorPanel, ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg,
-    DiffKind, EditCtxAction, FlatRow, GridColumn, ImageFit, IndentRules, LabelSide, MenuIcon,
-    OccurrenceStyle, Pair, PairKind, PairOpts, PairTable, PopupHit, PositionDropdown,
-    PositionPicker, PreparedText, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl,
-    TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
+    DiffKind, EditCtxAction, Flash, FlashTone, FlatRow, GridColumn, ImageFit, IndentRules,
+    LabelSide, MenuIcon, OccurrenceStyle, Pair, PairKind, PairOpts, PairTable, PopupHit,
+    PositionDropdown, PositionPicker, PreparedText, RadioGroup, RadioOption, ScrollBars, TextBox,
+    TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
