@@ -337,6 +337,18 @@ pub struct SlotFont {
     pub italic: bool,
 }
 
+impl SlotFont {
+    /// 굵게·기울임 없는 `size` 글꼴.
+    #[must_use]
+    pub const fn plain(size: f32) -> Self {
+        Self {
+            size,
+            bold: false,
+            italic: false,
+        }
+    }
+}
+
 /// 영역별 글꼴 설정(기본 UI·사용자 목록·대화 본문·상태바).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FontPrefs {
@@ -348,6 +360,27 @@ pub struct FontPrefs {
     pub message: SlotFont,
     /// 상태바·보조.
     pub status: SlotFont,
+}
+
+impl FontPrefs {
+    /// 기본 칸만 `px`(나머지는 기본값) — 한 가지 크기로 그리는 창·패널(nexa-sql 창 여러 곳의 손 조립을 한 곳으로).
+    #[must_use]
+    pub fn with_base(px: f32) -> Self {
+        Self {
+            base: SlotFont::plain(px),
+            ..Self::default()
+        }
+    }
+
+    /// 기본·상태 칸 모두 `px`.
+    #[must_use]
+    pub fn with_base_status(px: f32) -> Self {
+        Self {
+            base: SlotFont::plain(px),
+            status: SlotFont::plain(px),
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for FontPrefs {
