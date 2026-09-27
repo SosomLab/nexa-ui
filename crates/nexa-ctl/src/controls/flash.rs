@@ -2,8 +2,9 @@
 //! **앵커(가리면 안 되는 사각형) 옆**에 띄우고 `ms` 동안 색이 배경으로 녹아 사라진다. 타이머·큐 없음 — 호스트는
 //! [`Flash::paint`]가 `true`를 돌려주는 동안 다시 그리기만 하면 된다(진행 중 = 프레임마다 · 끝나면 스스로 지운다).
 //!
-//! 자리 규칙(순서): 앵커 **오른쪽** 같은 줄 → 자리 없으면 앵커 **아래** → 그것도 없으면 앵커 **위** → 마지막으로 호스트 안으로 밀어 넣는다.
-//! 어느 경우에도 앵커를 덮지 않는다(팝업 배치 규칙 = nexa-sql docs/61 §2-2).
+//! 자리 규칙(사용자 09-27): 메시지의 **좌하단 = 앵커의 우상단**(앵커 위·오른쪽에 떠서 앵커를 덮지 않음) → 오른쪽이 모자라면 왼쪽으로 밀고 →
+//! 위가 모자라면 앵커 **아래**(좌상단 = 앵커 우하단) → 마지막으로 호스트 안으로. 배경 상자(`with_background` · 기본 켬)로 글이 돋보이게 하고
+//! 호스트는 **창의 맨 마지막**에 그려 다른 컨트롤이 덮지 않게 한다(최상위 Z-order · 팝업 배치 규칙 = nexa-sql docs/61 §2-2).
 
 use std::time::Instant;
 
@@ -28,12 +29,28 @@ pub struct Flash {
     tone: FlashTone,
     at: Option<Instant>,
     ms: u64,
+    /// 배경 상자(색조 배경 + 테두리 · 글이 돋보이게 · 기본 켬).
+    background: bool,
 }
 
 impl Flash {
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            background: true,
+            ..Self::default()
+        }
+    }
+
+    /// 배경 상자 켜기/끄기(빌더).
+    #[must_use]
+    pub fn with_background(mut self, on: bool) -> Self {
+        self.background = on;
+        self
+    }
+
+    pub fn set_background(&mut self, on: bool) {
+        self.background = on;
     }
 
     /// 보이기 — `ms` 동안(최소 200) 서서히 사라진다.
@@ -70,29 +87,22 @@ impl Flash {
         Some(1.0 - t * t)
     }
 
-    /// 자리(순수): 앵커 오른쪽 → 아래 → 위 → 호스트 안으로.
+    /// 자리(순수): 메시지 좌하단 = 앵커 우상단 → 오른쪽이 모자라면 왼쪽으로 → 위가 모자라면 앵커 아래(좌상단 = 앵커 우하단) → 호스트 안으로.
+    /// `w`·`h`는 배경 상자까지 포함한 크기 · `gap`은 앵커와의 틈.
     #[must_use]
     pub fn place(anchor: Rect, w: i32, h: i32, host: Rect, gap: i32) -> Rect {
-        let right = Rect::new(anchor.right() + gap, anchor.y, w, h);
-        if right.right() <= host.right() && right.bottom() <= host.bottom() {
-            return right;
-        }
-        let below = Rect::new(
-            anchor.x.min(host.right() - w).max(host.x),
-            anchor.bottom() + gap,
-            w,
-            h,
-        );
-        if below.bottom() <= host.bottom() {
-            return below;
-        }
-        let above = Rect::new(below.x, anchor.y - gap - h, w, h);
+        let x = (anchor.right() + gap).min(host.right() - w).max(host.x);
+        let above = Rect::new(x, anchor.y - gap - h, w, h);
         if above.y >= host.y {
             return above;
         }
-        // 어디에도 온전히 안 들어가면 호스트 안으로 밀어 넣되 앵커와 겹치지 않는 쪽(오른쪽 끝)에.
+        let below = Rect::new(x, anchor.bottom() + gap, w, h);
+        if below.bottom() <= host.bottom() {
+            return below;
+        }
+        // 위·아래 다 모자라면 앵커 오른쪽 같은 줄(호스트 안으로 클램프).
         Rect::new(
-            (host.right() - w).max(host.x),
+            x,
             anchor.y.clamp(host.y, (host.bottom() - h).max(host.y)),
             w,
             h,
@@ -110,13 +120,28 @@ impl Flash {
             FlashTone::Info => th.text,
         };
         let color: Color = th.panel_bg.lerp(base, a);
-        let h = dc.text_height();
-        let gap = (h / 2).max(4);
-        let max_w = (host.w - gap * 2).max(1);
+        let th_txt = dc.text_height();
+        let gap = (th_txt / 3).max(3);
+        let (px, py) = if self.background {
+            ((th_txt / 2).max(6), (th_txt / 4).max(3))
+        } else {
+            (0, 0)
+        };
+        let max_w = (host.w - gap * 2 - px * 2).max(1);
         let text = crate::draw::ellipsize_middle(dc, &self.text, max_w);
-        let w = dc.text_width(&text);
-        let r = Self::place(anchor, w, h, host, gap);
-        dc.text(r.x, r.y, r, &text, color);
+        let tw = dc.text_width(&text);
+        let r = Self::place(anchor, tw + px * 2, th_txt + py * 2, host, gap);
+        if self.background {
+            // 글이 돋보이는 배경: 색조를 살짝 띤 어두운/밝은 상자 + 같은 색조 테두리(모두 세기 `a`로 함께 사라짐).
+            let bg = th.panel_bg.lerp(th.panel_bg_alt, a).lerp(base, 0.18 * a);
+            let border = th.panel_bg.lerp(base, 0.6 * a);
+            dc.fill_rect(r, bg);
+            dc.fill_rect(Rect::new(r.x, r.y, r.w, 1), border);
+            dc.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), border);
+            dc.fill_rect(Rect::new(r.x, r.y, 1, r.h), border);
+            dc.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), border);
+        }
+        dc.text(r.x + px, r.y + py, r, &text, color);
         true
     }
 }
@@ -127,22 +152,25 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn place_prefers_right_then_below_then_above() {
+    fn place_bottom_left_at_anchor_top_right_then_shift_then_below() {
         let host = Rect::new(0, 0, 400, 300);
         let anchor = Rect::new(20, 100, 100, 16);
-        let r = Flash::place(anchor, 120, 16, host, 8);
-        assert_eq!((r.x, r.y), (128, 100), "오른쪽");
+        let r = Flash::place(anchor, 120, 20, host, 4);
+        assert_eq!((r.x, r.bottom()), (124, 96), "좌하단 = 앵커 우상단(틈 4)");
         assert!(!r.intersects(&anchor));
-        let r = Flash::place(anchor, 300, 16, host, 8);
-        assert_eq!((r.x, r.y), (20, 124), "오른쪽에 못 들어가면 아래");
-        assert!(!r.intersects(&anchor));
-        let low = Rect::new(20, 280, 100, 16);
-        let r = Flash::place(low, 300, 16, host, 8);
-        assert_eq!((r.x, r.y), (20, 256), "아래도 없으면 위");
-        assert!(!r.intersects(&low));
-        // 왼쪽 끝을 넘지 않게 x를 당긴다.
-        let r = Flash::place(Rect::new(350, 100, 40, 16), 100, 16, host, 8);
-        assert!(r.right() <= host.right() && r.x >= host.x);
+        // 오른쪽이 모자라면 왼쪽으로 민다(호스트 안).
+        let r = Flash::place(anchor, 300, 20, host, 4);
+        assert_eq!(r.right(), host.right());
+        assert!(r.bottom() <= anchor.y && !r.intersects(&anchor));
+        // 위가 모자라면 앵커 아래.
+        let top = Rect::new(20, 10, 100, 16);
+        let r = Flash::place(top, 120, 20, host, 4);
+        assert_eq!((r.x, r.y), (124, 30));
+        assert!(!r.intersects(&top));
+        // 위·아래 다 모자라면 오른쪽 같은 줄 · 호스트 안.
+        let small = Rect::new(0, 0, 400, 30);
+        let r = Flash::place(Rect::new(20, 5, 100, 20), 120, 20, small, 4);
+        assert!(r.y >= small.y && r.bottom() <= small.bottom() && r.x == 124);
     }
 
     #[test]
@@ -158,5 +186,7 @@ mod tests {
         assert!(!f.active(), "끝나면 스스로 지운다");
         f.show("x", FlashTone::Warn, 10);
         assert_eq!(f.ms, 200, "최소 200ms");
+        assert!(Flash::new().background, "배경 기본 켬");
+        assert!(!Flash::new().with_background(false).background);
     }
 }
