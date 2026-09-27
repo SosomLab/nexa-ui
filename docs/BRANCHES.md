@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| refactor/dead-code-cleanup | 2026-09-27 | 2026-09-28 → main(삭제) | 3 | 86차(win · nexa-sql 102차 후반) 🧹 코드 건강 — `chars_vec` 제거 · `FontPrefs::with_base(_status)` · 공개 모듈 `shape` |
 | feat/ctl-flash | 2026-09-27 | 2026-09-27 → main(삭제) | 1 | 85차(linux) — `Flash` 순간 메시지 부품(`controls/flash.rs` · 자리 규칙 · 페이드 · 시험 2) |
 | fix/textbox-commit-composition | 2026-09-27 | 2026-09-27 → main(삭제) | 1 | 84차(linux) — `TextBox::commit_composition`(조합 중 음절을 호스트 명령 앞에서 확정 · nexa-sql IME 전수 조사) · 시험 1 |
 | docs/devlog-status-80-83 | 2026-09-26 | 2026-09-26 → main(삭제) | 1 | DEVLOG·STATUS에 80~83차 보충(nexa-sys `gui` feature · nexa-gfx `inflate`/`image` · `MenuEntry::Emph` · JPEG/Adam7) — nexa-sql §244 |
