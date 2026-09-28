@@ -630,19 +630,11 @@ impl TabBar {
         }
     }
 
-    fn draw_close_glyph(&self, ctx: &mut dyn DrawCtx, r: Rect, color: Color) {
-        let m = r.w * 3 / 10;
-        let w = (r.w as f32 / 11.0).max(1.2);
-        ctx.polyline(
-            &[(r.x + m, r.y + m), (r.right() - m, r.bottom() - m)],
-            color,
-            w,
-        );
-        ctx.polyline(
-            &[(r.right() - m, r.y + m), (r.x + m, r.bottom() - m)],
-            color,
-            w,
-        );
+    /// 정사각 `r`의 모서리를 잇는 ×(미저장 점과 같은 크기 · 09-28).
+    fn draw_x_in(ctx: &mut dyn DrawCtx, r: Rect, color: Color) {
+        let w = (r.w as f32 / 5.0).max(1.2);
+        ctx.polyline(&[(r.x, r.y), (r.right(), r.bottom())], color, w);
+        ctx.polyline(&[(r.right(), r.y), (r.x, r.bottom())], color, w);
     }
 
     fn draw_lock_glyph(&self, ctx: &mut dyn DrawCtx, r: Rect, color: Color) {
@@ -1073,21 +1065,23 @@ impl Widget for TabBar {
             if fully_inside(cr, clip) {
                 let ind = self.tab_accent_of(i, theme);
                 let dirty = self.is_dirty(i);
+                // 점과 × = **같은 크기**(점 지름 = 상자의 2/5 · × 도 그 정사각 안에 · 사용자 09-28 "크기 차이가 심하다").
+                let d = (cr.w * 2 / 5).max(4);
+                let inner = Rect::new(cr.x + (cr.w - d) / 2, cr.y + (cr.h - d) / 2, d, d);
                 if locked {
                     self.draw_lock_glyph(ctx, cr, theme.text_dim);
                 } else if dirty && !hover_close {
-                    let d = (cr.w * 2 / 5).max(4);
-                    ctx.fill_ellipse(
-                        Rect::new(cr.x + (cr.w - d) / 2, cr.y + (cr.h - d) / 2, d, d),
-                        ind,
-                    );
+                    ctx.fill_ellipse(inner, ind);
                 } else if hover || active || dirty {
                     let pressed = self.pressed == Some(Zone::Tab(i, true));
                     let st = State::of(false, hover_close, pressed, true);
                     if st.overlay_alpha() > 0.0 {
-                        ctx.fill_round_rect_alpha(cr, cr.w / 2, ind, st.overlay_alpha());
+                        // hover 배경 원도 점 크기에 맞춰(사방 3px 여유).
+                        let pad = (d / 2).max(3);
+                        let bg = Rect::new(inner.x - pad, inner.y - pad, d + pad * 2, d + pad * 2);
+                        ctx.fill_round_rect_alpha(bg, bg.w / 2, ind, st.overlay_alpha());
                     }
-                    self.draw_close_glyph(ctx, cr, ind);
+                    Self::draw_x_in(ctx, inner, ind);
                 }
             }
         }
