@@ -7104,7 +7104,7 @@ mod click_policy_tests {
 mod edit_menu_click_tests {
     use super::*;
 
-    /// 우클릭 메뉴 항목 클릭 = 기능만(복사 요청) · 캐럿·선택은 그대로 · 메뉴는 닫힘 · 뒤따르는 MouseUp도 무해(nexa-sql 09-26).
+    /// 우클릭 메뉴 항목 클릭 = 기능만(복사 요청) · 캐럿·선택은 그대로 · 메뉴는 닫힘(확정은 **MouseUp** · 92차) · Up 뒤에도 무해(nexa-sql 09-26).
     #[test]
     fn menu_item_click_does_not_move_caret() {
         let mut inv = Invalidations::default();
@@ -7131,7 +7131,10 @@ mod edit_menu_click_tests {
             },
             &mut inv,
         );
-        assert!(!tb.popup_open(), "항목 선택 = 닫힘");
+        assert!(tb.popup_open(), "Down = 누름만(확정은 Up · 92차)");
+        assert_eq!(tb.caret(), caret0, "캐럿 그대로");
+        tb.on_event(&InputEvent::MouseUp { x, y }, &mut inv);
+        assert!(!tb.popup_open(), "항목 선택(Up) = 닫힘");
         assert_eq!(tb.take_edit_ctx(), Some(EditCtxAction::Copy));
         assert_eq!(tb.caret(), caret0, "캐럿 그대로");
         assert_eq!(tb.copy_selection(), sel0, "선택 그대로");

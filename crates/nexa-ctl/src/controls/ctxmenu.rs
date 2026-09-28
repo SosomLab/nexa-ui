@@ -1006,7 +1006,8 @@ impl ContextMenu {
                 true
             }
             // ★ MouseUp = 확정(nexa-sql 사용자 09-28 "다른 프로그램처럼 Down이 아니라 Up에서"): 메뉴 안에서 누른 적이 있을 때만 ·
-            //   놓인 자리의 **활성 항목**(Down과 달라도 그 항목 · 하위 메뉴 부모는 열기만) · 밖에서 놓으면 아무것도 없이 열린 채.
+            //   놓인 자리의 **활성 항목**(Down과 달라도 그 항목 · 하위 메뉴 부모는 열기만) · 메뉴 **밖**에서 놓으면 **닫힘**(Sublime
+            //   규칙 · 사용자 09-28 실기 대조) · 메뉴 안 빈 곳·비활성·구분선 위에서 놓으면 열린 채.
             InputEvent::MouseUp { x, y } => {
                 if self.pressed.take().is_some() {
                     let p = Point { x, y };
@@ -1019,6 +1020,8 @@ impl ContextMenu {
                             }
                             self.close();
                         }
+                    } else if !self.rect.get().contains(p) {
+                        self.close();
                     }
                 }
                 true
@@ -1473,15 +1476,14 @@ mod tests {
         assert_eq!(m.take_picked(), None, "결과는 한 번만 가져간다");
     }
 
-    /// ★ Up 자리 확정(09-28 · 일반 관례): Down한 항목과 다른 항목 위에서 놓으면 **놓은 항목** · 메뉴 밖에서 놓으면 아무것도
-    /// 고르지 않고 열린 채 · Down 없는 Up(우클릭으로 연 직후 등)은 무시 · 비활성 항목 위에서 놓으면 무시.
+    /// ★ Up 자리 확정(09-28 · 일반 관례 · Sublime 대조): Down한 항목과 다른 항목 위에서 놓으면 **놓은 항목** · 메뉴 밖에서 놓으면
+    /// 아무것도 고르지 않고 **닫힘** · Down 없는 Up(우클릭으로 연 직후 등)은 무시 · 메뉴 안 비활성 항목 위에서 놓으면 열린 채.
     #[test]
     fn pick_happens_on_release_position() {
         let mut m = ContextMenu::new();
         m.open_at(10, 10, items(), host(), 60);
         let copy = m.row_rect(0).unwrap();
         let paste = m.row_rect(3).unwrap();
-        let cut = m.row_rect(1).unwrap();
         // Down 없는 Up = 무시.
         assert!(m.on_event(&up(copy.x + 5, copy.y + 2)));
         assert!(m.is_open() && m.take_picked().is_none());
@@ -1494,25 +1496,27 @@ mod tests {
         m.on_event(&up(paste.x + 5, paste.y + 2));
         assert_eq!(m.take_picked().as_deref(), Some("paste"));
         assert!(!m.is_open());
-        // 누르고 밖에서 놓음 = 열린 채 · 고른 것 없음.
+        // 누르고 메뉴 밖에서 놓음 = 닫힘 · 고른 것 없음(Sublime).
         m.open_at(10, 10, items(), host(), 60);
         let copy = m.row_rect(0).unwrap();
         m.on_event(&down(copy.x + 5, copy.y + 2));
         m.on_event(&up(390, 290));
         assert!(
-            m.is_open() && m.take_picked().is_none(),
-            "밖에서 놓음 = 유지"
+            !m.is_open() && m.take_picked().is_none(),
+            "밖에서 놓음 = 닫힘"
         );
-        // 그 뒤 다시 Up만 오면(누름 소진) 무시.
-        m.on_event(&up(copy.x + 5, copy.y + 2));
-        assert!(m.is_open() && m.take_picked().is_none());
-        // 비활성 항목 위에서 놓음 = 무시.
+        // 메뉴 안 비활성 항목 위에서 놓음 = 열린 채 · 고른 것 없음 · 그 뒤 Up만 오면(누름 소진) 무시.
+        m.open_at(10, 10, items(), host(), 60);
+        let copy = m.row_rect(0).unwrap();
+        let cut = m.row_rect(1).unwrap();
         m.on_event(&down(copy.x + 5, copy.y + 2));
         m.on_event(&up(cut.x + 5, cut.y + 2));
         assert!(
             m.is_open() && m.take_picked().is_none(),
-            "비활성 위 놓음 = 무시"
+            "비활성 위 놓음 = 유지"
         );
+        m.on_event(&up(copy.x + 5, copy.y + 2));
+        assert!(m.is_open() && m.take_picked().is_none());
     }
 
     #[test]
