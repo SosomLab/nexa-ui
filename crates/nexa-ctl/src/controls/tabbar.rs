@@ -869,8 +869,9 @@ impl Widget for TabBar {
                         // × 프레스 — 해제 시 같은 상자면 닫기.
                         self.pressed = Some(Zone::Tab(i, true));
                     } else {
+                        // ★ 탭 전환은 **뗄 때**(nexa-sql 09-28 "다른 프로그램처럼 Up에서") — 같은 탭 위에서 뗐거나 드래그(재정렬)가
+                        //   시작됐을 때만. 여기서는 수식키와 드래그 후보만 기억한다.
                         self.last_mods = (shift, primary);
-                        self.pending = Some(TabAction::Switch(i));
                         // 본체 프레스 = 드래그 재정렬 후보.
                         self.drag = Some((i, Point { x, y }, false));
                         self.drag_cur = Point { x, y };
@@ -893,7 +894,15 @@ impl Widget for TabBar {
                 None => {}
             },
             InputEvent::MouseUp { x, y } => {
-                self.drag = None;
+                // 탭 본체를 눌렀다 뗌: 같은 탭 위에서 뗐으면 전환 · 다른 곳에서 뗐으면 아무것도 없음(버튼 규칙) ·
+                // 드래그(재정렬)가 시작됐으면 옮긴 탭을 활성으로(다른 도구와 같다). 호스트 주도 드래그(`begin_drag`)는 호스트가 `cancel_drag`로 정리.
+                if let Some((i, _, started)) = self.drag.take() {
+                    let over = self.zone_at(x, y);
+                    if started || matches!(over, Some(Zone::Tab(j, _)) if j == i) {
+                        self.pending = Some(TabAction::Switch(i));
+                    }
+                    inv.push(self.base.bounds);
+                }
                 if let Some(p) = self.pressed.take() {
                     let over = self.zone_at(x, y);
                     match (p, over) {
@@ -1495,7 +1504,11 @@ mod tests {
     fn drag_reorder_single_line_emits_move_on_midpoint() {
         let (mut t, mut inv) = bar(&["alpha", "beta", "gamma"], 0);
         down(&mut t, &mut inv, 10, 14);
-        assert_eq!(t.take_action(), Some(TabAction::Switch(0)));
+        assert_eq!(
+            t.take_action(),
+            None,
+            "누름만으로는 전환하지 않는다(09-28 · 뗄 때)"
+        );
         // 탭1 = [71,135) 중간 103. 중간 전은 무동작.
         mv(&mut t, &mut inv, 90, 14);
         assert_eq!(t.take_action(), None);
@@ -1505,6 +1518,27 @@ mod tests {
         assert_eq!(t.dragging(), Some(1));
         up(&mut t, &mut inv, 110, 14);
         assert_eq!(t.dragging(), None);
+        assert_eq!(
+            t.take_action(),
+            Some(TabAction::Switch(1)),
+            "드래그로 옮긴 탭이 활성"
+        );
+    }
+
+    /// ★ 탭 전환은 뗄 때(09-28 nexa-sql "다른 프로그램처럼 Up에서"): 같은 탭 위에서 뗌 = 전환 · 다른 탭 위에서 뗌 = 없음(임계 안 움직임).
+    #[test]
+    fn switch_happens_on_release_over_same_tab_only() {
+        let (mut t, mut inv) = bar(&["alpha", "beta", "gamma"], 0);
+        let r1 = t.tab_rect(1).unwrap();
+        let (cx, cy) = center(r1);
+        down(&mut t, &mut inv, cx, cy);
+        assert_eq!(t.take_action(), None);
+        up(&mut t, &mut inv, cx + 1, cy);
+        assert_eq!(t.take_action(), Some(TabAction::Switch(1)));
+        // 눌렀다가 탭 바 밖에서 뗌 = 전환 없음(임계 미만이라 드래그도 아님).
+        down(&mut t, &mut inv, cx, cy);
+        up(&mut t, &mut inv, cx, cy + 200);
+        assert_eq!(t.take_action(), None);
     }
 
     #[test]
@@ -1512,7 +1546,7 @@ mod tests {
         // 폭 150 = 줄당 2탭: 0줄=[탭0,탭1] · 1줄=[탭2,탭3].
         let (mut t, mut inv) = bar_sized(&["alpha", "betaa", "gamma", "delta"], 0, 150, 90, true);
         down(&mut t, &mut inv, 10, 5);
-        assert_eq!(t.take_action(), Some(TabAction::Switch(0)));
+        assert_eq!(t.take_action(), None);
         mv(&mut t, &mut inv, 40, 30);
         assert_eq!(
             t.take_action(),

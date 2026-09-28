@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| fix/tab-switch-on-release | 2026-09-28 | 2026-09-28 → main(삭제) | 1 | 90차: 탭 전환 = 뗄 때 · 글자 항목 hover 색 유지 |
 | feat/toolbar-text-item | 2026-09-28 | 2026-09-28 → main(삭제) | 1 | 89차: 툴바 글자 항목(가변 폭) · 그룹 손잡이 툴팁 |
 | fix/whitespace-all-regions | 2026-09-28 | 2026-09-28 → main(삭제) | 1 | 88차: 공백 표시 = 모든 선택 구간 · (main 직접) nexa-fs reveal 경로 정리 |
 | feat/tabbar-title-colors | 2026-09-28 | 2026-09-28 → main(삭제) | 1 | 87차: `TabBar::set_title_colors`(탭별 제목 글자 색 · nexa-sql 미저장 탭 이름 색) |

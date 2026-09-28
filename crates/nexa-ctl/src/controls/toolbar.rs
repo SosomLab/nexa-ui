@@ -672,9 +672,10 @@ impl Toolbar {
                 ToolIcon::Glyph(g) => {
                     // 글리프 항목도 마스크 항목과 같은 색 규칙: 비활성 = 흐림 · hover/pressed = accent · 아니면 색조.
                     // (종전엔 늘 본문색이라 `.disabled()` 항목이 켜진 것처럼 보였다 — nexa-sql 결과 도구줄 + − ⧉ ✓ ✕ Σ · 09-19)
+                    // ★ 글자 항목(`label`)은 hover에도 색조 그대로(nexa-sql 09-28 "마우스 오버시 푸른색으로 바꿀 필요 없음").
                     let color = if !it.enabled {
                         theme.text_dim
-                    } else if is_hover || is_pressed {
+                    } else if (is_hover || is_pressed) && !it.label {
                         theme.accent
                     } else {
                         match it.tone {
