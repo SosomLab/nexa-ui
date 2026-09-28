@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-09-28 (91차 · win · nexa-sql 102차 끝 3)** — `TabBar::set_dirty` Sublime식 닫기 상자(미저장 = 구분색 점 · hover = 같은 색 ×) · 시험 369.
 - **2026-09-28 (90차 · win · nexa-sql 102차 끝 3)** — `TabBar` 탭 전환 = 뗄 때(버튼 규칙 · 드래그 뒤 = 옮긴 탭) · 툴바 글자 항목 hover 색 유지 · 시험 368.
 - **2026-09-28 (89차 · win · nexa-sql 102차 끝 3)** — ★ 툴바 글자 항목 `ToolItem::text`/`set_item_label`(가변 폭) · 도크 그룹 손잡이 툴팁 = 그룹 이름.
 - **2026-09-28 (88차 · win · nexa-sql 102차 끝 3)** — 🔧 `TextBox` 공백 표시(선택 모드) = 모든 선택 구간(열 선택·Ctrl+D) · 줄끝은 개행을 담은 구간만 · 🔧 nexa-fs `reveal_in_file_manager` 경로 정리(`explorer_path`) — 시험 367.

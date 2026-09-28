@@ -118,6 +118,8 @@ pub struct TabBar {
     /// ★ **묶인 탭**(동시 편집 · 사용자 09-22): 활성이 아니어도 상단 accent 줄을 그린다 — 나란히 열린 칸의 탭이
     /// 어느 것들인지 탭 줄에서 보이게. 인덱스 정렬 · 부족분 = false.
     group: Vec<bool>,
+    /// ★ 탭별 **미저장**(Sublime식 · nexa-sql 09-28): 닫기 상자 자리에 구분색 **동그라미** · 그 위에 마우스를 올리면 같은 색 × · 인덱스 정렬 · 부족분 = false.
+    dirty: Vec<bool>,
     /// 탭별 상단 줄 색 덮어쓰기(활성·묶인 탭 · None = `accent` → 테마) — 편집기 탭 유형별 색(nexa-sql 09-23).
     tab_colors: Vec<Option<Color>>,
     /// ★ 탭별 **제목 글자 색** 덮어쓰기(None = 활성 text · 비활성 text_dim) — 미저장 탭을 포커스가 없어도 이름으로
@@ -171,6 +173,7 @@ impl TabBar {
             locked: Vec::new(),
             pinned: Vec::new(),
             group: Vec::new(),
+            dirty: Vec::new(),
             tab_colors: Vec::new(),
             title_colors: Vec::new(),
             badges: Vec::new(),
@@ -249,6 +252,18 @@ impl TabBar {
             self.group = group;
             inv.push(self.base.bounds);
         }
+    }
+
+    /// 탭별 미저장 표시(Sublime식 · 09-28): 닫기 상자 자리에 구분색 동그라미 · hover = 같은 색 ×. 바뀔 때만 무효화.
+    pub fn set_dirty(&mut self, dirty: Vec<bool>, inv: &mut Invalidations) {
+        if self.dirty != dirty {
+            self.dirty = dirty;
+            inv.push(self.base.bounds);
+        }
+    }
+
+    fn is_dirty(&self, i: usize) -> bool {
+        self.dirty.get(i).copied().unwrap_or(false)
     }
 
     /// 탭별 상단 줄 색(활성 탭·묶인 탭 모두 자기 색 · None = 바 공통 `set_accent` → 테마 accent). 바뀔 때만 무효화.
@@ -1053,22 +1068,26 @@ impl Widget for TabBar {
                 let ty = ctx.text_center_y(cell.y, cell.h);
                 ctx.text(tx, ty, text_clip, &self.titles[i], fg);
             }
-            // 닫기 상자: 잠김 = 자물쇠 · hover/활성 = ×(상자 hover 시 상태 레이어).
+            // 닫기 상자(Sublime식 · nexa-sql 09-28): 잠김 = 자물쇠 · **미저장 = 구분색 동그라미**(상자 hover면 같은 색 ×) ·
+            //   저장할 것 없음 = hover/활성 때 구분색 ×. 구분색 = 그 탭의 줄 색(새 탭 = 경고색 · 파일 = 강조색 · 미리보기 = 미리보기색).
             if fully_inside(cr, clip) {
+                let ind = self.tab_accent_of(i, theme);
+                let dirty = self.is_dirty(i);
                 if locked {
                     self.draw_lock_glyph(ctx, cr, theme.text_dim);
-                } else if hover || active {
+                } else if dirty && !hover_close {
+                    let d = (cr.w * 2 / 5).max(4);
+                    ctx.fill_ellipse(
+                        Rect::new(cr.x + (cr.w - d) / 2, cr.y + (cr.h - d) / 2, d, d),
+                        ind,
+                    );
+                } else if hover || active || dirty {
                     let pressed = self.pressed == Some(Zone::Tab(i, true));
                     let st = State::of(false, hover_close, pressed, true);
                     if st.overlay_alpha() > 0.0 {
-                        ctx.fill_round_rect_alpha(cr, cr.w / 2, theme.text, st.overlay_alpha());
+                        ctx.fill_round_rect_alpha(cr, cr.w / 2, ind, st.overlay_alpha());
                     }
-                    let c = if hover_close {
-                        theme.text
-                    } else {
-                        theme.text_dim
-                    };
-                    self.draw_close_glyph(ctx, cr, c);
+                    self.draw_close_glyph(ctx, cr, ind);
                 }
             }
         }
@@ -1170,6 +1189,20 @@ mod tests {
 
     fn bar(titles: &[&str], active: usize) -> (TabBar, Invalidations) {
         bar_sized(titles, active, 600, 28, false)
+    }
+
+    /// 미저장 점(09-28): 바뀔 때만 무효화 · 부족분 = false.
+    #[test]
+    fn dirty_marks_invalidate_only_on_change() {
+        let (mut t, _) = bar(&["a", "b"], 0);
+        let mut inv = Invalidations::default();
+        t.set_dirty(vec![true], &mut inv);
+        assert!(!inv.is_empty());
+        assert!(t.is_dirty(0) && !t.is_dirty(1));
+        let mut inv2 = Invalidations::default();
+        t.set_dirty(vec![true], &mut inv2);
+        assert!(inv2.is_empty());
+        t.paint(&mut ProbeCtx, &Theme::dark());
     }
 
     /// 탭별 제목 글자 색 덮어쓰기(nexa-sql 09-28 미저장 탭): 바뀔 때만 무효화 · 부족분 = None · 비활성 탭에도 적용(조회).
