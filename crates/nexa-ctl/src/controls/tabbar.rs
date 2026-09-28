@@ -120,6 +120,9 @@ pub struct TabBar {
     group: Vec<bool>,
     /// 탭별 상단 줄 색 덮어쓰기(활성·묶인 탭 · None = `accent` → 테마) — 편집기 탭 유형별 색(nexa-sql 09-23).
     tab_colors: Vec<Option<Color>>,
+    /// ★ 탭별 **제목 글자 색** 덮어쓰기(None = 활성 text · 비활성 text_dim) — 미저장 탭을 포커스가 없어도 이름으로
+    /// 알아보게(nexa-sql 09-28 "포커스가 없을 때는 구분이 안 된다 · 탭 이름 텍스트에도 색 표시"). 인덱스 정렬 · 부족분 = None.
+    title_colors: Vec<Option<Color>>,
     /// 탭별 앞 표식(부족분 = None).
     badges: Vec<TabBadge>,
     active: usize,
@@ -169,6 +172,7 @@ impl TabBar {
             pinned: Vec::new(),
             group: Vec::new(),
             tab_colors: Vec::new(),
+            title_colors: Vec::new(),
             badges: Vec::new(),
             active: 0,
             multiline: false,
@@ -253,6 +257,21 @@ impl TabBar {
             self.tab_colors = colors;
             inv.push(self.base.bounds);
         }
+    }
+
+    /// 탭별 제목 글자 색(None = 기본: 활성 `text` · 비활성 `text_dim`). 창 비활성이어도 그대로 쓴다(그때가 바로 구분이
+    /// 필요한 순간). 바뀔 때만 무효화.
+    pub fn set_title_colors(&mut self, colors: Vec<Option<Color>>, inv: &mut Invalidations) {
+        if self.title_colors != colors {
+            self.title_colors = colors;
+            inv.push(self.base.bounds);
+        }
+    }
+
+    /// 탭 `i`의 제목 글자 색 덮어쓰기(호스트가 준 것 · 없으면 None) — 호스트 시험용.
+    #[must_use]
+    pub fn title_color(&self, i: usize) -> Option<Color> {
+        self.title_colors.get(i).copied().flatten()
     }
 
     /// 탭 `i`에 지정된 줄 색(호스트가 `set_tab_colors`로 준 것 · 없으면 None) — 호스트 시험용.
@@ -1018,7 +1037,10 @@ impl Widget for TabBar {
             let cr = self.close_rect(*cell);
             let text_clip = Rect::new(tx, cell.y, cr.x - gap - tx, cell.h).intersection(&clip);
             if !text_clip.is_empty() {
-                let fg = if active { theme.text } else { theme.text_dim };
+                // 제목 색: 호스트 덮어쓰기(미저장 탭 등) > 활성 text · 비활성 text_dim.
+                let fg =
+                    self.title_color(i)
+                        .unwrap_or(if active { theme.text } else { theme.text_dim });
                 let ty = ctx.text_center_y(cell.y, cell.h);
                 ctx.text(tx, ty, text_clip, &self.titles[i], fg);
             }
@@ -1139,6 +1161,23 @@ mod tests {
 
     fn bar(titles: &[&str], active: usize) -> (TabBar, Invalidations) {
         bar_sized(titles, active, 600, 28, false)
+    }
+
+    /// 탭별 제목 글자 색 덮어쓰기(nexa-sql 09-28 미저장 탭): 바뀔 때만 무효화 · 부족분 = None · 비활성 탭에도 적용(조회).
+    #[test]
+    fn title_colors_override_and_invalidate_only_on_change() {
+        let (mut t, _) = bar(&["a", "b", "c"], 0);
+        let mut inv = Invalidations::default();
+        assert_eq!(t.title_color(1), None);
+        t.set_title_colors(vec![None, Some(Color(0x00FF_8800))], &mut inv);
+        assert!(!inv.is_empty(), "첫 설정 = 무효화");
+        assert_eq!(t.title_color(0), None);
+        assert_eq!(t.title_color(1), Some(Color(0x00FF_8800)));
+        assert_eq!(t.title_color(2), None, "부족분 = None");
+        let mut inv2 = Invalidations::default();
+        t.set_title_colors(vec![None, Some(Color(0x00FF_8800))], &mut inv2);
+        assert!(inv2.is_empty(), "같은 값 = 무효화 없음");
+        t.paint(&mut ProbeCtx, &Theme::dark());
     }
 
     fn down(t: &mut TabBar, inv: &mut Invalidations, x: i32, y: i32) {

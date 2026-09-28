@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-28 (87차 · win · nexa-sql 102차 끝 3)** — `TabBar::set_title_colors`/`title_color`(탭별 **제목 글자 색** 덮어쓰기 · 활성/비활성·창 비활성에도 적용 · 바뀔 때만 무효화 · 시험) — nexa-sql 미저장 탭 이름 색(사용자 09-28 "포커스가 없을 때는 구분이 안 된다").
 - **2026-09-28 (86차 · win · nexa-sql 102차 후반)** — 🧹 코드 건강 점검(nexa-sql docs/93): 미사용 `TextBox::chars_vec` 제거(편집기 불변식과 어긋남 · 소비자 0) · ★ 점-도형 판정 공개 모듈 `shape`(seg_dist·stroke·rect·rrect·disc·ring·ellipse·tri·poly·polys_* · 글리프와 nexa-sql 아이콘 복사본 3벌을 한 벌로 · 시험) · `SlotFont::plain` · `FontPrefs::with_base`/`with_base_status`(한 크기 글꼴 설정 생성 · nexa-sql 27곳) · 원복 태그 `baseline/pre-refactor-2026-09-27` · 시험 432.
 - **2026-09-27 (85차 후반 2 · linux)** — `Flash` 3차(유지 → 페이드아웃 · `hold_ms`/`fade_ms`).
 - **2026-09-27 (85차 후반 · linux)** — `Flash` 2차(배경 상자 · 좌하단 = 앵커 우상단 · 최상위 Z-order).
