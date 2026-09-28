@@ -315,6 +315,9 @@ pub struct ContextMenu {
     ///   "단일 클릭은 내용 표시 · 엔터/더블 클릭은 선택"). 기본(false) = 클릭이 곧 확정(우클릭 메뉴).
     click_selects: bool,
     last_click: Option<(usize, std::time::Instant)>,
+    /// ★ 누른 항목(MouseDown 자리 · nexa-sql 사용자 09-28 "다른 프로그램처럼 Up에서 확정"): 확정은 **MouseUp이 놓인 자리의
+    ///   항목**(Down과 다른 항목 위에서 놓으면 그 항목 · 메뉴 밖에서 놓으면 아무것도 없이 열린 채 · Down 없는 Up = 무시).
+    pressed: Option<usize>,
     /// 트랙패드 세로 휠 누적(px · 40마다 1행 · nexa-sql 09-24 "끝까지 내렸는데 한 칸 위로" = delta 0 사건이 위로 1행이던 결함).
     wheel_acc: std::cell::Cell<i32>,
     /// ★ 최소 행 수(완성 팝업 · 사용자 09-24 "항목이 1개여도 10칸 높이"): 항목이 적어도 이 높이를 유지한다(빈 자리는 바탕).
@@ -534,6 +537,7 @@ impl ContextMenu {
         self.hscroll.set(0);
         self.label_over.set(0);
         self.last_click = None;
+        self.pressed = None;
         self.wheel_acc.set(0);
         self.reached_end = false;
         let (w, h) = self.size_px();
@@ -872,6 +876,12 @@ impl ContextMenu {
                     self.close_child();
                     // 아래 일반 처리로 이어진다.
                 }
+                InputEvent::MouseUp { x, y } => {
+                    // 자식 위에서 놓음 = 자식이 확정 · 아니면 아래 일반 처리(부모의 누름 상태).
+                    if child_area.contains(Point { x, y }) {
+                        return self.forward_child(ev);
+                    }
+                }
                 InputEvent::Key {
                     key: Key::Left | Key::Escape,
                     ..
@@ -913,10 +923,17 @@ impl ContextMenu {
                             return true;
                         }
                     }
-                    if let CtxItem::Item { id, .. } = &self.items[i] {
-                        self.picked = Some(id.clone());
+                    if self.click_selects {
+                        // 클릭 = 선택 모드(완성 팝업): 재클릭 확정은 종전대로 Down(더블클릭 = Down 사건).
+                        if let CtxItem::Item { id, .. } = &self.items[i] {
+                            self.picked = Some(id.clone());
+                        }
+                        self.close();
+                    } else {
+                        // ★ 확정은 MouseUp에서(09-28) — 여기서는 누름만 기억하고 강조.
+                        self.pressed = Some(i);
+                        self.hover = Some(i);
                     }
-                    self.close();
                 } else if self.rect.get().contains(p) {
                     // 팝업 안 여백: 스크롤 트랙이면 한 쪽씩(세로 = 오른쪽 띠 · 가로 = 아래 띠 · 09-24) · 그 밖은 무시.
                     let r = self.rect.get();
@@ -988,7 +1005,24 @@ impl ContextMenu {
                 }
                 true
             }
-            InputEvent::MouseUp { .. } => true,
+            // ★ MouseUp = 확정(nexa-sql 사용자 09-28 "다른 프로그램처럼 Down이 아니라 Up에서"): 메뉴 안에서 누른 적이 있을 때만 ·
+            //   놓인 자리의 **활성 항목**(Down과 달라도 그 항목 · 하위 메뉴 부모는 열기만) · 밖에서 놓으면 아무것도 없이 열린 채.
+            InputEvent::MouseUp { x, y } => {
+                if self.pressed.take().is_some() {
+                    let p = Point { x, y };
+                    if let Some(i) = self.hit(p) {
+                        if self.items[i].has_children() {
+                            self.open_child(i, false);
+                        } else {
+                            if let CtxItem::Item { id, .. } = &self.items[i] {
+                                self.picked = Some(id.clone());
+                            }
+                            self.close();
+                        }
+                    }
+                }
+                true
+            }
             // 키보드 — ↑/↓ 이동 · PgUp/PgDn/Home/End(스크롤 목록) · → 하위 열기 · Enter 선택(하위 있으면 열기) · 그 외(Esc 포함)는 메뉴만 닫는다.
             InputEvent::Key { key, .. } => {
                 match key {
@@ -1411,6 +1445,15 @@ mod tests {
             primary: true,
         }
     }
+    fn up(x: i32, y: i32) -> InputEvent {
+        InputEvent::MouseUp { x, y }
+    }
+    /// 클릭 = Down + 같은 자리 Up(확정은 Up · 09-28).
+    fn click(m: &mut ContextMenu, x: i32, y: i32) -> bool {
+        let a = m.on_event(&down(x, y));
+        m.on_event(&up(x, y));
+        a
+    }
 
     #[test]
     fn opens_at_cursor_and_picks_an_item() {
@@ -1420,9 +1463,56 @@ mod tests {
         assert!(m.is_open());
         let first = m.row_rect(0).unwrap();
         assert!(m.on_event(&down(first.x + 5, first.y + 2)), "클릭 소비");
+        assert!(
+            m.is_open() && m.take_picked().is_none(),
+            "Down만으로는 확정하지 않는다(09-28)"
+        );
+        m.on_event(&up(first.x + 5, first.y + 2));
         assert_eq!(m.take_picked().as_deref(), Some("copy"));
         assert!(!m.is_open(), "고르면 닫힌다");
         assert_eq!(m.take_picked(), None, "결과는 한 번만 가져간다");
+    }
+
+    /// ★ Up 자리 확정(09-28 · 일반 관례): Down한 항목과 다른 항목 위에서 놓으면 **놓은 항목** · 메뉴 밖에서 놓으면 아무것도
+    /// 고르지 않고 열린 채 · Down 없는 Up(우클릭으로 연 직후 등)은 무시 · 비활성 항목 위에서 놓으면 무시.
+    #[test]
+    fn pick_happens_on_release_position() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items(), host(), 60);
+        let copy = m.row_rect(0).unwrap();
+        let paste = m.row_rect(3).unwrap();
+        let cut = m.row_rect(1).unwrap();
+        // Down 없는 Up = 무시.
+        assert!(m.on_event(&up(copy.x + 5, copy.y + 2)));
+        assert!(m.is_open() && m.take_picked().is_none());
+        // copy에서 누르고 paste에서 놓음 = paste.
+        m.on_event(&down(copy.x + 5, copy.y + 2));
+        m.on_event(&InputEvent::MouseMove {
+            x: paste.x + 5,
+            y: paste.y + 2,
+        });
+        m.on_event(&up(paste.x + 5, paste.y + 2));
+        assert_eq!(m.take_picked().as_deref(), Some("paste"));
+        assert!(!m.is_open());
+        // 누르고 밖에서 놓음 = 열린 채 · 고른 것 없음.
+        m.open_at(10, 10, items(), host(), 60);
+        let copy = m.row_rect(0).unwrap();
+        m.on_event(&down(copy.x + 5, copy.y + 2));
+        m.on_event(&up(390, 290));
+        assert!(
+            m.is_open() && m.take_picked().is_none(),
+            "밖에서 놓음 = 유지"
+        );
+        // 그 뒤 다시 Up만 오면(누름 소진) 무시.
+        m.on_event(&up(copy.x + 5, copy.y + 2));
+        assert!(m.is_open() && m.take_picked().is_none());
+        // 비활성 항목 위에서 놓음 = 무시.
+        m.on_event(&down(copy.x + 5, copy.y + 2));
+        m.on_event(&up(cut.x + 5, cut.y + 2));
+        assert!(
+            m.is_open() && m.take_picked().is_none(),
+            "비활성 위 놓음 = 무시"
+        );
     }
 
     #[test]
@@ -1727,12 +1817,7 @@ mod tests {
         assert_eq!(m.vis_range(), 1..4);
         // 보이는 행 클릭 = 선택.
         let r = m.row_rect_of(2).expect("보이는 행");
-        m.on_event(&InputEvent::MouseDown {
-            x: r.x + 5,
-            y: r.y + 5,
-            shift: false,
-            primary: false,
-        });
+        click(&mut m, r.x + 5, r.y + 5);
         assert_eq!(m.take_picked().as_deref(), Some("h2"));
     }
 
@@ -1856,7 +1941,7 @@ mod tests {
             csv.x >= adv.right() - 10,
             "오른쪽에 붙는다: {csv:?} vs {adv:?}"
         );
-        m.on_event(&down(csv.x + 5, csv.y + 2));
+        click(&mut m, csv.x + 5, csv.y + 2);
         assert_eq!(m.take_picked().as_deref(), Some("csv"));
         assert!(!m.is_open(), "자식 선택 = 전부 닫힘");
     }
@@ -1917,12 +2002,7 @@ mod tests {
             x: g_row.x + 5,
             y: g_row.y + 2,
         });
-        m.on_event(&InputEvent::MouseDown {
-            x: g_row.x + 5,
-            y: g_row.y + 2,
-            shift: false,
-            primary: false,
-        });
+        click(&mut m, g_row.x + 5, g_row.y + 2);
         assert_eq!(m.take_picked().as_deref(), Some("sql_merge"));
         assert!(!m.is_open(), "선택 뒤 전부 닫힘");
     }
