@@ -643,7 +643,7 @@ impl TabBar {
 
     /// 정사각 `r`의 모서리를 잇는 ×(미저장 점과 같은 크기 · 09-28).
     fn draw_x_in(ctx: &mut dyn DrawCtx, r: Rect, color: Color) {
-        let w = (r.w as f32 / 5.0).max(1.2);
+        let w = (r.w as f32 / 6.0).max(1.2);
         ctx.polyline(&[(r.x, r.y), (r.right(), r.bottom())], color, w);
         ctx.polyline(&[(r.right(), r.y), (r.x, r.bottom())], color, w);
     }
@@ -1092,7 +1092,10 @@ impl Widget for TabBar {
                         let bg = Rect::new(inner.x - pad, inner.y - pad, d + pad * 2, d + pad * 2);
                         ctx.fill_round_rect_alpha(bg, bg.w / 2, ind, st.overlay_alpha());
                     }
-                    Self::draw_x_in(ctx, inner, ind);
+                    // × 는 점보다 조금 작게(사용자 09-28 "더 작은 닫기 버튼") — 점 지름의 80 % 정사각.
+                    let xd = (d * 4 / 5).max(4);
+                    let xr = Rect::new(inner.x + (d - xd) / 2, inner.y + (d - xd) / 2, xd, xd);
+                    Self::draw_x_in(ctx, xr, ind);
                 }
             }
         }
