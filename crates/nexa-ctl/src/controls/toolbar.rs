@@ -101,6 +101,10 @@ pub struct ToolItem {
     pub separator: bool,
     /// **배지**(09-17 nexa-sql 트랜잭션 버튼): 슬롯 오른쪽 위 작은 캡슐(색 = 색조 · 글자 = 배경색). `None` = 없음.
     pub badge: Option<String>,
+    /// ★ **글자 항목**(09-28 nexa-sql "탭 연결정보"): `icon = Glyph(글)`를 아이콘 슬롯이 아니라 **글 폭만큼** 넓게 그린다.
+    /// 폭은 그릴 때 잰다(`label_w` · 물리 px) — 히트 판정·권장 폭은 마지막 실측을 쓴다.
+    pub label: bool,
+    label_w: std::cell::Cell<i32>,
 }
 
 impl ToolItem {
@@ -117,7 +121,16 @@ impl ToolItem {
             dropdown: false,
             separator: false,
             badge: None,
+            label: false,
+            label_w: std::cell::Cell::new(0),
         }
+    }
+
+    /// 글자 항목(가변 폭 · 09-28): 현재 값을 글로 보이고 누르면 고르는 자리(nexa-sql 탭 연결정보). 색조·드롭다운·툴팁은 그대로 쓴다.
+    pub fn text(id: impl Into<String>, label: impl Into<String>) -> Self {
+        let mut it = Self::new(id, ToolIcon::Glyph(label.into()));
+        it.label = true;
+        it
     }
 
     /// 구분자 항목(세로 선) — 그룹 안에서 묶음을 나눈다(09-17).
@@ -278,6 +291,15 @@ impl Toolbar {
         if self.items[i].separator {
             return self.s(SEP_W);
         }
+        if self.items[i].label {
+            // 글 폭(마지막 실측) + 좌우 슬롯 여백 — 아직 안 그렸으면 아이콘 슬롯 폭.
+            let lw = self.items[i].label_w.get();
+            return if lw > 0 {
+                lw + self.s(self.slot_pad) * 2 + extra
+            } else {
+                self.slot() + extra
+            };
+        }
         match &self.items[i].icon {
             ToolIcon::StatusMask { size, .. } => self.s(*size),
             _ => self.slot() + extra,
@@ -416,6 +438,17 @@ impl Toolbar {
     }
 
     /// 툴팁 문구 교체(상태에 따라 바뀌는 설명 · 09-17).
+    /// 글자 항목의 글 바꾸기(09-28) — 바뀌면 무효화 · 폭은 다음 그리기에서 다시 잰다.
+    pub fn set_item_label(&mut self, id: &str, label: &str, inv: &mut Invalidations) {
+        if let Some(it) = self.items.iter_mut().find(|it| it.id == id && it.label) {
+            if !matches!(&it.icon, ToolIcon::Glyph(g) if g == label) {
+                it.icon = ToolIcon::Glyph(label.to_string());
+                it.label_w.set(0);
+                inv.push(self.base.bounds);
+            }
+        }
+    }
+
     pub fn set_item_tip(&mut self, id: &str, tip: &str) {
         if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
             if it.tip != tip {
@@ -578,6 +611,15 @@ impl Toolbar {
         let b = Rect::new(b.x + dx, b.y + dy, b.w, b.h);
         ctx.fill_rect(b, theme.chrome_bg);
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
+        // 글자 항목의 폭을 먼저 잰다(슬롯 배치가 이 값을 쓴다).
+        ctx.select_font(FontSlot::Base, false);
+        for it in &self.items {
+            if it.label {
+                if let ToolIcon::Glyph(g) = &it.icon {
+                    it.label_w.set(ctx.text_width(g));
+                }
+            }
+        }
         for (i, it) in self.items.iter().enumerate() {
             if !it.visible {
                 continue;

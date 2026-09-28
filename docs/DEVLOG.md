@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-28 (89차 · win · nexa-sql 102차 끝 3)** — ★ 툴바 **글자 항목** `ToolItem::text`(가변 폭 · 그릴 때 실측 `label_w` · `set_item_label` · 색조·드롭다운·툴팁 그대로 · nexa-sql "탭 연결정보") · ★ 도크 **그룹 손잡이 hover = 그룹 이름 툴팁**(끄는 중 제외).
 - **2026-09-28 (88차 · win · nexa-sql 102차 끝 3)** — 🔧 `TextBox` 공백 표시(선택 모드) = **모든 선택 구간**(열 선택·Ctrl+D)에 그린다(종전 주 구간만 · 마지막 캐럿 줄에만 보였다) · 줄끝 `¶`는 구간이 개행을 담을 때만(열 선택은 의도적으로 없음) · 시험 · 🔧 nexa-fs `reveal_in_file_manager` = `\?\` 접두·`/` 경로 정리 + 따옴표(`explorer_path` · 시험) — 탐색기가 파일을 선택하지 않던 결함.
 - **2026-09-28 (87차 · win · nexa-sql 102차 끝 3)** — `TabBar::set_title_colors`/`title_color`(탭별 **제목 글자 색** 덮어쓰기 · 활성/비활성·창 비활성에도 적용 · 바뀔 때만 무효화 · 시험) — nexa-sql 미저장 탭 이름 색(사용자 09-28 "포커스가 없을 때는 구분이 안 된다").
 - **2026-09-28 (86차 · win · nexa-sql 102차 후반)** — 🧹 코드 건강 점검(nexa-sql docs/93): 미사용 `TextBox::chars_vec` 제거(편집기 불변식과 어긋남 · 소비자 0) · ★ 점-도형 판정 공개 모듈 `shape`(seg_dist·stroke·rect·rrect·disc·ring·ellipse·tri·poly·polys_* · 글리프와 nexa-sql 아이콘 복사본 3벌을 한 벌로 · 시험) · `SlotFont::plain` · `FontPrefs::with_base`/`with_base_status`(한 크기 글꼴 설정 생성 · nexa-sql 27곳) · 원복 태그 `baseline/pre-refactor-2026-09-27` · 시험 432.

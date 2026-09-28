@@ -502,6 +502,13 @@ impl ToolDock {
         }
     }
 
+    /// 글자 항목의 글(09-28 · nexa-sql 탭 연결정보).
+    pub fn set_item_label(&mut self, id: &str, label: &str, inv: &mut Invalidations) {
+        for b in &mut self.bars {
+            b.set_item_label(id, label, inv);
+        }
+    }
+
     pub fn set_item_icon(&mut self, id: &str, icon: ToolIcon, inv: &mut Invalidations) {
         for b in &mut self.bars {
             b.set_item_icon(id, icon.clone(), inv);
@@ -714,6 +721,14 @@ impl ToolDock {
         for &i in &self.order {
             if !self.is_floating_idx(i) {
                 self.bars[i].paint_tooltip_in(ctx, theme, clamp);
+            }
+        }
+        // ★ 그룹 손잡이 위 = 그룹 이름 툴팁(nexa-sql 09-28 "그룹을 이동하는 영역에 마우스를 올리면 그룹 이름") — 끄는 중에는 없음.
+        if let Some(i) = self.hover_grip.filter(|_| self.drag.is_none()) {
+            if let (Some(g), Some(r)) = (self.groups.get(i), self.grips.get(i)) {
+                if !g.title.is_empty() && r.w > 0 {
+                    crate::draw::draw_tooltip_in(ctx, theme, *r, clamp, &g.title, self.base.scale);
+                }
             }
         }
     }

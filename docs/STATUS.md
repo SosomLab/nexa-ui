@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-09-28 (89차 · win · nexa-sql 102차 끝 3)** — ★ 툴바 글자 항목 `ToolItem::text`/`set_item_label`(가변 폭) · 도크 그룹 손잡이 툴팁 = 그룹 이름.
 - **2026-09-28 (88차 · win · nexa-sql 102차 끝 3)** — 🔧 `TextBox` 공백 표시(선택 모드) = 모든 선택 구간(열 선택·Ctrl+D) · 줄끝은 개행을 담은 구간만 · 🔧 nexa-fs `reveal_in_file_manager` 경로 정리(`explorer_path`) — 시험 367.
 - **2026-09-28 (87차 · win · nexa-sql 102차 끝 3)** — `TabBar::set_title_colors`/`title_color`: 탭별 제목 글자 색 덮어쓰기(None = 활성 text · 비활성 text_dim · 창 비활성이어도 그대로 = 그때가 구분이 필요한 순간) · 바뀔 때만 무효화 · 시험 +1(tabbar 18).
 - **2026-09-28 (86차 · win · nexa-sql 102차 후반)** — 🧹 코드 건강 점검(nexa-sql docs/93): 미사용 `TextBox::chars_vec` 제거(편집기 불변식과 어긋남 · 소비자 0) · ★ 점-도형 판정 공개 모듈 `shape`(seg_dist·stroke·rect·rrect·disc·ring·ellipse·tri·poly·polys_* · 글리프와 nexa-sql 아이콘 복사본 3벌을 한 벌로 · 시험) · `SlotFont::plain` · `FontPrefs::with_base`/`with_base_status`(한 크기 글꼴 설정 생성 · nexa-sql 27곳) · 원복 태그 `baseline/pre-refactor-2026-09-27` · 시험 432.
