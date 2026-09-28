@@ -3489,12 +3489,7 @@ impl TextBox {
 
         // 빈 값 = placeholder(첫 줄).
         let empty = n_chars == 0 && preedit_n == 0;
-        let sel = if preedit_n == 0 {
-            self.edit.selection()
-        } else {
-            None
-        };
-        // 다중 선택(Ctrl+D · 열 선택) — 그릴 구간 전부(빈 구간은 캐럿으로만 그린다).
+        // 다중 선택(Ctrl+D · 열 선택) — 그릴 구간 전부(빈 구간은 캐럿으로만 그린다) · 공백 표시(선택 모드)도 이 목록을 본다.
         let sels: Vec<(usize, usize)> = if preedit_n == 0 {
             self.edit
                 .regions()
@@ -3911,15 +3906,14 @@ impl TextBox {
                 let base = ws.color.unwrap_or(theme.text_dim);
                 let col = base.lerp(theme.field_bg, 1.0 - ws.alpha.clamp(0.0, 1.0));
                 let (ls, le) = (*start_idx, *start_idx + line_len);
-                let (sa, se) = match (ws.mode, sel) {
-                    (WhitespaceMode::All, _) => (ls, le + 1),
-                    (WhitespaceMode::Selection, Some((a, e))) => (a, e),
-                    _ => (0, 0),
-                };
+                // ★ 선택 모드 = **모든 선택 구간**(열 선택 · Ctrl+D 다중 구간)을 본다 — 종전에는 주 구간(`sel`) 하나만 보아 열 선택에서
+                //   마지막 캐럿 줄에만 표시됐다(nexa-sql 09-28). 줄끝 `¶`는 구간이 개행을 포함할 때만(열 선택은 개행을 안 담는다 = 의도).
+                let all = ws.mode == WhitespaceMode::All;
+                let in_ws = |idx: usize| all || sels.iter().any(|(a, e)| idx >= *a && idx < *e);
                 let mut buf = [0u8; 4];
                 for (ci, ch) in line_str.chars().enumerate() {
                     let idx = ls + ci;
-                    if idx < sa || idx >= se {
+                    if !in_ws(idx) {
                         continue;
                     }
                     let mark = match ch {
@@ -3938,7 +3932,7 @@ impl TextBox {
                 // 줄끝 표시 — 이 행이 논리 줄의 끝(다음 글자가 '\n')일 때.
                 // 이 행이 논리 줄의 끝인가 = 다음 행이 개행 하나를 건너 시작한다(접힌 나머지 행은 바로 이어진다).
                 let ends_line = li + 1 < n_rows && rows_src.start(li + 1) == le + 1;
-                if ws.eol != '\0' && le >= sa && le < se && ends_line {
+                if ws.eol != '\0' && in_ws(le) && ends_line {
                     let mx = dx + w.get(line_len).copied().unwrap_or(0);
                     if mx >= vx0 && mx < vx1 {
                         ctx.text(mx, ty, view, ws.eol.encode_utf8(&mut buf), col);
@@ -5832,6 +5826,41 @@ c  d",
         let dots = rec.0.iter().filter(|s| s.as_str() == ".").count();
         let eols = rec.0.iter().filter(|s| s.as_str() == "$").count();
         assert_eq!((dots, eols), (3, 1), "그린 글자: {:?}", rec.0);
+    }
+
+    /// 선택 모드 = 모든 구간(열 선택·다중 구간)에 공백 표시(nexa-sql 09-28 — 종전엔 마지막 캐럿 구간만) · 줄끝 `$`는 구간이 개행을 담을 때만.
+    #[test]
+    fn whitespace_selection_mode_covers_every_region() {
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t.set_text("a\tb\nc\td\ne f");
+        t.set_whitespace(WhitespaceStyle {
+            mode: WhitespaceMode::Selection,
+            space: '.',
+            tab: '>',
+            eol: '$',
+            color: None,
+            alpha: 0.4,
+        });
+        // 열 선택 흉내: 줄 1·2의 탭만 두 구간으로(개행 없음).
+        t.set_regions_pub(&[(1, 2), (5, 6)]);
+        let mut rec = TextRec(Vec::new());
+        t.paint(&mut rec, &crate::theme::Theme::dark());
+        let tabs = rec.0.iter().filter(|s| s.as_str() == ">").count();
+        let eols = rec.0.iter().filter(|s| s.as_str() == "$").count();
+        assert_eq!(
+            (tabs, eols),
+            (2, 0),
+            "두 구간 모두 · 개행 없으면 $ 없음: {:?}",
+            rec.0
+        );
+        // 줄을 넘는 한 구간 = 개행을 담으므로 첫 줄 끝 $.
+        t.set_regions_pub(&[(1, 6)]);
+        let mut rec = TextRec(Vec::new());
+        t.paint(&mut rec, &crate::theme::Theme::dark());
+        let eols = rec.0.iter().filter(|s| s.as_str() == "$").count();
+        assert_eq!(eols, 1, "{:?}", rec.0);
     }
 
     #[test]
