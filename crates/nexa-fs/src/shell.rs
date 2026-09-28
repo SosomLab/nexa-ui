@@ -857,9 +857,15 @@ pub fn reveal_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     use std::process::Command;
     #[cfg(target_os = "windows")]
     {
-        let mut arg = std::ffi::OsString::from("/select,");
-        arg.push(path.as_os_str());
-        Command::new("explorer.exe").arg(arg).spawn().map(|_| ())
+        use std::os::windows::process::CommandExt;
+        // ★ 탐색기의 `/select,`는 `\\?\` 접두(정규화 경로)나 `/` 구분자가 섞이면 선택을 무시하고 기본 폴더(문서)를 연다
+        //   (nexa-sql 09-28 "파일 위치 열기가 파일을 선택하지 않는다") → 탐색기가 아는 모양으로 고치고 따옴표로 감싼다(공백 경로).
+        //   `arg`는 인자 전체를 따옴표로 감싸 `/select,`까지 경로로 읽혀서 `raw_arg`로 그대로 넘긴다.
+        let arg = format!("/select,\"{}\"", explorer_path(path));
+        Command::new("explorer.exe")
+            .raw_arg(arg)
+            .spawn()
+            .map(|_| ())
     }
     #[cfg(target_os = "macos")]
     {
@@ -869,6 +875,36 @@ pub fn reveal_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     {
         let dir = path.parent().unwrap_or(path);
         Command::new("xdg-open").arg(dir).spawn().map(|_| ())
+    }
+}
+
+/// 탐색기에 넘길 경로 — `\\?\UNC\` → `\\` · `\\?\` 접두 제거 · `/` → `\`(순수 함수 · 3-OS 시험).
+#[must_use]
+pub fn explorer_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy().replace('/', "\\");
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s
+    }
+}
+
+#[cfg(test)]
+mod explorer_path_tests {
+    use super::explorer_path;
+    use std::path::Path;
+
+    #[test]
+    fn strips_verbatim_prefix_and_normalizes_slashes() {
+        assert_eq!(explorer_path(Path::new(r"\\?\D:\a\b.txt")), r"D:\a\b.txt");
+        assert_eq!(
+            explorer_path(Path::new(r"\\?\UNC\srv\share\x.sql")),
+            r"\\srv\share\x.sql"
+        );
+        assert_eq!(explorer_path(Path::new("D:/p/q/r.toml")), r"D:\p\q\r.toml");
+        assert_eq!(explorer_path(Path::new(r"C:\x y\z.sql")), r"C:\x y\z.sql");
     }
 }
 
