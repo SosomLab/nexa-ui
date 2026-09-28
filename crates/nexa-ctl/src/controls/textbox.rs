@@ -3821,9 +3821,11 @@ impl TextBox {
                             let x0 = dx + w.get(i).copied().unwrap_or(0);
                             let x1 = dx + w.get(i + n).copied().unwrap_or(0);
                             if x1 > x0 && x1 > vx0 && x0 < vx1 && y >= vy0 && y + lh <= vy1 {
-                                // 상자 = 글자 좌우 2px(1px 여백 + 1px 선) · 세로 = 행 + 1 → 인접 행 상자와 선 공유.
-                                let bx0 = (x0 - 2).max(vx0);
-                                let bx1 = (x1 + 2).min(vx1);
+                                // 상자 = 그 글자들의 **전진 폭 칸 그대로**(`text_prefix_widths` = 같은 글꼴·크기의 실측 · 고정폭·가변폭 공통) ·
+                                //   좌우로 넓히지 않는다(종전 ±2px가 이웃 글자 칸을 침범 · nexa-sql 사용자 09-28) · 세로 = 행 + 1 →
+                                //   인접 행 상자와 선 공유.
+                                let bx0 = x0.max(vx0);
+                                let bx1 = x1.min(vx1);
                                 let r = Rect::new(bx0, y, (bx1 - bx0).max(1), lh + 1);
                                 self.paint_occurrence_box(ctx, theme, r);
                             }
