@@ -120,6 +120,8 @@ pub struct TabBar {
     group: Vec<bool>,
     /// ★ 탭별 **미저장**(Sublime식 · nexa-sql 09-28): 닫기 상자 자리에 구분색 **동그라미** · 그 위에 마우스를 올리면 같은 색 × · 인덱스 정렬 · 부족분 = false.
     dirty: Vec<bool>,
+    /// 닫기 상자를 **늘** 보이나(기본 true · nexa-sql 09-28 설정 `editor.tab_close_show`) · false = 활성/hover/미저장 탭에서만.
+    close_always: bool,
     /// 탭별 상단 줄 색 덮어쓰기(활성·묶인 탭 · None = `accent` → 테마) — 편집기 탭 유형별 색(nexa-sql 09-23).
     tab_colors: Vec<Option<Color>>,
     /// ★ 탭별 **제목 글자 색** 덮어쓰기(None = 활성 text · 비활성 text_dim) — 미저장 탭을 포커스가 없어도 이름으로
@@ -174,6 +176,7 @@ impl TabBar {
             pinned: Vec::new(),
             group: Vec::new(),
             dirty: Vec::new(),
+            close_always: true,
             tab_colors: Vec::new(),
             title_colors: Vec::new(),
             badges: Vec::new(),
@@ -250,6 +253,14 @@ impl TabBar {
     pub fn set_group(&mut self, group: Vec<bool>, inv: &mut Invalidations) {
         if self.group != group {
             self.group = group;
+            inv.push(self.base.bounds);
+        }
+    }
+
+    /// 닫기 상자 표시 규칙(09-28): `true` = 늘 보임(기본) · `false` = 활성/hover/미저장 탭에서만. 바뀔 때만 무효화.
+    pub fn set_close_always(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.close_always != on {
+            self.close_always = on;
             inv.push(self.base.bounds);
         }
     }
@@ -1072,7 +1083,7 @@ impl Widget for TabBar {
                     self.draw_lock_glyph(ctx, cr, theme.text_dim);
                 } else if dirty && !hover_close {
                     ctx.fill_ellipse(inner, ind);
-                } else if hover || active || dirty {
+                } else if self.close_always || hover || active || dirty {
                     let pressed = self.pressed == Some(Zone::Tab(i, true));
                     let st = State::of(false, hover_close, pressed, true);
                     if st.overlay_alpha() > 0.0 {
