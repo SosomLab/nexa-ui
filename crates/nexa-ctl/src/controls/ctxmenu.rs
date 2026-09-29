@@ -338,6 +338,15 @@ impl ContextMenu {
         }
     }
 
+    /// ★ 항목을 **선택 상태**(hover · 키보드 ↓와 같은 강조 · 보이게 스크롤)로 — 활성 항목만 · 열린 뒤에 부른다
+    /// (nexa-sql 완성 팝업 사용자 09-29 "순서만 정하지 말고 바로 선택 상태로"). Enter/Tab = 이것.
+    pub fn select(&mut self, i: usize) {
+        if matches!(self.items.get(i), Some(CtxItem::Item { enabled: true, .. })) {
+            self.hover = Some(i);
+            self.ensure_visible(i);
+        }
+    }
+
     /// 기본 항목 지정(활성 항목만 · Enter = 이것 · 열린 뒤에 부른다).
     pub fn set_default(&mut self, i: usize) {
         if matches!(self.items.get(i), Some(CtxItem::Item { enabled: true, .. })) {
@@ -1592,6 +1601,30 @@ mod tests {
         m.on_event(&key(Key::Enter));
         assert_eq!(m.take_picked().as_deref(), Some("paste"));
         assert!(!m.is_open(), "Enter 선택 = 닫힘");
+    }
+
+    /// `select(i)` = 프로그램 선택(hover) · 비활성·구분선은 안 됨 · 그 뒤 ↓는 다음 항목(09-29).
+    #[test]
+    fn select_sets_hover_programmatically() {
+        let mut m = ContextMenu::new();
+        m.open_at(
+            0,
+            0,
+            vec![
+                CtxItem::item("copy", "Copy"),
+                CtxItem::maybe("cut", "Cut", false),
+                CtxItem::item("paste", "Paste"),
+            ],
+            Rect::new(0, 0, 400, 400),
+            100,
+        );
+        assert_eq!(m.hovered(), None);
+        m.select(2);
+        assert_eq!(m.hovered(), Some(2));
+        m.select(1);
+        assert_eq!(m.hovered(), Some(2), "비활성은 선택되지 않는다");
+        m.on_event(&key(Key::Down));
+        assert_eq!(m.hovered(), Some(0), "↓ = 다음 활성(끝에서 처음으로)");
     }
 
     /// 기본 항목: hover 없이 Enter = 기본 항목 · 키보드로 옮기면 hover가 우선 · 비활성은 기본이 될 수 없다.

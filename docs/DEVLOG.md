@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-29 (97차 · win · nexa-sql 102차 끝 8)** — `ContextMenu::select(i)` = 프로그램으로 항목을 선택 상태(hover · 보이게 스크롤 · 활성만)로 — nexa-sql 완성 팝업의 건너편 컬럼 1순위 선택(사용자 09-29) · 시험 `select_sets_hover_programmatically`.
 - **2026-09-29 (96차 · win · nexa-sql 102차 끝 7)** — 🔧 `TextBox` 공백 표식은 **그 글자 칸 안에만**(클립) · 탭 칸이 글리프보다 좁으면(정지점 직전) 칸 폭의 가는 선 — `→`가 다음 글자를 덮던 결함(nexa-sql 사용자 09-29) · 시험 `narrow_tab_mark_never_covers_next_char`.
 - **2026-09-29 (95차 · win · nexa-sql 102차 끝 7)** — `TextBox::set_text_keep_view`(본문 교체 + 캐럿 줄·열·세로 스크롤 유지 · 넘치면 마지막 줄 · 자유 스크롤 상태) — nexa-sql 포맷 미리보기가 옵션마다 맨 뒤로 가던 불편(사용자 09-29) · 시험 `set_text_keep_view_keeps_caret_line_and_scroll`.
 - **2026-09-29 (94차 · win · nexa-sql 102차 끝 5)** — ★ `TextBox` 객체 링크 **밑줄 스타일**(nexa-sql 사용자 09-29 2차): `LinkLine`(Solid/Dashed/Dotted/Wavy/WavyDashed) · `LinkStyle{color: Option<Color>, width, line}` · `link_marks`가 `(시작, 끝, known)`(정상/미확인 = 다른 스타일 · 색 None = 테마 accent/danger) · `set_link_styles(ok, bad)`(바뀔 때만 true) · `draw_link_line`(`fill_rect`만 · 대시 4/2 px · 점 w/2w · 물결 = 삼각파 주기 4 px 진폭 2 px · 대시 물결 = 두 주기 그리고 한 주기 비움 · 두께 = `width` 배율 · 0 = 안 그림) · hot 링크 = 글자도 링크 색 · `visible_range()`(마지막 그리기에서 보인 첫 줄 시작 ~ 마지막 줄 끝 · 그리기 전 None) — 호스트의 큰 파일 **부분 분석** 창 · 시험 `link_marks_change_detection` 갱신(known 차이 · 스타일 · visible_range).

@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-09-29 (97차 · win · nexa-sql 102차 끝 8)** — `ContextMenu::select(i)`(프로그램 선택) · 시험 +1.
 - **2026-09-29 (96차 · win · nexa-sql 102차 끝 7)** — 🔧 공백 표식 = 글자 칸 안에만 · 좁은 탭 = 선(글자 우선) · 시험 +1.
 - **2026-09-29 (95차 · win · nexa-sql 102차 끝 7)** — `TextBox::set_text_keep_view`(캐럿 줄·열·세로 스크롤 유지 본문 교체) · 시험 +1.
 - **2026-09-29 (94차 · win · nexa-sql 102차 끝 5)** — ★ `TextBox` 객체 링크 밑줄 스타일 `LinkLine`/`LinkStyle` · `link_marks = (a, e, known)` · `set_link_styles(ok, bad)` · `draw_link_line`(실선·대시·점·물결·대시 물결 · 두께) · `visible_range()` — nexa-sql 객체 링크 2차(정상/미확인 · 부분 분석) · 시험 갱신(textbox 64).
