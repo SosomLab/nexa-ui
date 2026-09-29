@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/textbox-keep-view | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 95~96차: `TextBox::set_text_keep_view`(본문 교체 + 캐럿 줄·열·세로 스크롤 유지) · 공백 표식 = 글자 칸 안 클립 · 좁은 탭 = 선(nexa-sql 포맷 미리보기 09-29) |
 | feat/textbox-link-marks | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 93~94차: TextBox 객체 링크 표시(`link_marks`/`link_hot`/`index_at_point`) · 밑줄 스타일 `LinkStyle`/`LinkLine`(정상/미확인 · 실선·대시·점·물결·대시 물결) · `visible_range` (nexa-sql T-256) |
 | feat/tabbar-dirty-dot | 2026-09-28 | 2026-09-28 → main(삭제) | 1 | 91차: Sublime식 닫기 상자(미저장 점 · 구분색 ×) |
 | fix/tab-switch-on-release | 2026-09-28 | 2026-09-28 → main(삭제) | 1 | 90차: 탭 전환 = 뗄 때 · 글자 항목 hover 색 유지 |

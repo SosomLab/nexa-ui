@@ -2993,6 +2993,31 @@ impl TextBox {
         self.edit.set_text(text);
     }
 
+    /// 본문 교체 + **보기 유지**: 캐럿은 같은 줄·열(넘치면 마지막 줄/줄 끝)로 · 세로 스크롤은 그 자리(마지막 줄 안으로) —
+    /// 옵션을 바꿀 때마다 다시 만드는 미리보기(nexa-sql 포맷 미리보기 · 사용자 09-29 "바뀔 때마다 맨 뒤로 가서 불편")가 쓴다.
+    /// `set_text`처럼 히스토리는 비운다.
+    pub fn set_text_keep_view(&mut self, text: &str) {
+        let (line, col) = {
+            let buf = self.edit.buf();
+            let caret = self.edit.caret().min(buf.len());
+            let line = buf.line_of(caret);
+            (line, caret.saturating_sub(buf.line_start(line)))
+        };
+        let top = self.vscroll.get();
+        self.edit.set_text(text);
+        let last = self.edit.buf().line_count().saturating_sub(1);
+        let line = line.min(last);
+        let idx = {
+            let buf = self.edit.buf();
+            (buf.line_start(line) + col).min(buf.line_end(line))
+        };
+        self.edit.set_caret(idx, false);
+        self.vscroll.set(top.min(last));
+        // 자유 스크롤 상태로 두어 그리기가 캐럿을 따라가지 않게(창 위치가 그대로).
+        self.ml_user_scrolled = true;
+        self.last_click.1 = 0;
+    }
+
     /// 미리 준비한 본문을 옮겨 넣는다([`PreparedText`]) — 버퍼(본문 + 줄 표)가 편집 상태로 **복사 없이** 들어간다.
     /// 히스토리는 비고 캐럿은 문서 처음. 줄별 캐시(폭·구문 상태)는 첫 페인트에서 새로 만들어진다.
     pub fn set_prepared(&mut self, p: PreparedText) {
@@ -4108,7 +4133,23 @@ impl TextBox {
                     }
                     let mx = dx + w.get(ci).copied().unwrap_or(0);
                     if mx >= vx0 && mx < vx1 {
-                        ctx.text(mx, ty, view, mark.encode_utf8(&mut buf), col);
+                        // ★ 표식은 **그 글자 칸 안에만**(nexa-sql 09-29: 정지점 직전의 좁은 탭에서 `→`가 다음 글자를 덮었다).
+                        //   칸이 글리프보다 좁으면 글리프 대신 칸 폭의 가는 선(글자가 늘 우선).
+                        let x1 = dx + w.get(ci + 1).copied().unwrap_or(mx + self.s(8));
+                        let cell = (x1 - mx).max(1);
+                        let s = mark.encode_utf8(&mut buf);
+                        let gw = ctx.text_width(s);
+                        if ch == '\t' && cell < gw {
+                            let cy = ty + th / 2;
+                            let pad = self.s(1).min(cell / 4);
+                            if let Some(r) =
+                                clipv(Rect::new(mx + pad, cy, (cell - pad * 2).max(1), 1))
+                            {
+                                ctx.fill_rect(r, col);
+                            }
+                        } else if let Some(clip) = clipv(Rect::new(mx, ty, cell, th)) {
+                            ctx.text(mx, ty, clip, s, col);
+                        }
                     }
                 }
                 // 줄끝 표시 — 이 행이 논리 줄의 끝(다음 글자가 '\n')일 때.
@@ -5429,6 +5470,21 @@ mod tests {
     }
 
     /// 객체 링크 표시(nexa-sql T-256 · 93차): 같은 값이면 false(호스트가 헛되이 다시 그리지 않게) · 단일행/본문 밖 점은 None.
+    /// `set_text_keep_view`: 캐럿 줄·열과 세로 스크롤이 남고 넘치면 마지막 줄로.
+    #[test]
+    fn set_text_keep_view_keeps_caret_line_and_scroll() {
+        let mut tb = TextBox::new("").with_multiline();
+        tb.set_text("l0\nl1\nl2\nl3\nl4\nl5");
+        tb.goto_line(4);
+        tb.vscroll.set(2);
+        tb.set_text_keep_view("a0\na1\na2\na3\na4\na5\na6");
+        assert_eq!(tb.buf().line_of(tb.caret()), 3);
+        assert_eq!(tb.vscroll.get(), 2);
+        tb.set_text_keep_view("x\ny");
+        assert_eq!(tb.buf().line_of(tb.caret()), 1, "넘치면 마지막 줄");
+        assert_eq!(tb.vscroll.get(), 1);
+    }
+
     #[test]
     fn link_marks_change_detection() {
         let (mut t, _) = tb();
@@ -6037,6 +6093,56 @@ c  d",
         let dots = rec.0.iter().filter(|s| s.as_str() == ".").count();
         let eols = rec.0.iter().filter(|s| s.as_str() == "$").count();
         assert_eq!((dots, eols), (3, 1), "그린 글자: {:?}", rec.0);
+    }
+
+    /// 탭 표식은 **칸 안에만**(nexa-sql 09-29): 표식의 클립 폭 = 그 탭 칸 폭(뷰 전체가 아니다) — 글리프가 다음 글자를 덮지 않는다.
+    #[test]
+    fn narrow_tab_mark_never_covers_next_char() {
+        struct ClipRec(Vec<(String, i32)>);
+        impl DrawCtx for ClipRec {
+            fn fill_rect(&mut self, _r: Rect, _c: crate::theme::Color) {}
+            fn text_opaque(
+                &mut self,
+                _x: i32,
+                _y: i32,
+                _c: Rect,
+                _t: &str,
+                _f: crate::theme::Color,
+                _b: crate::theme::Color,
+            ) {
+            }
+            fn text(&mut self, _x: i32, _y: i32, clip: Rect, t: &str, _f: crate::theme::Color) {
+                self.0.push((t.to_string(), clip.w));
+            }
+            fn text_width(&mut self, text: &str) -> i32 {
+                text.chars().count() as i32 * 7
+            }
+        }
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        t.set_indent(4, false);
+        t.set_tab_stops(true);
+        // "abc\tX" = 탭이 3열에서 4열까지 1칸 · "a\tX" = 3칸.
+        t.set_text("abc\tX\na\tX");
+        t.set_whitespace(WhitespaceStyle {
+            mode: WhitespaceMode::All,
+            space: '.',
+            tab: '>',
+            eol: '\0',
+            color: None,
+            alpha: 0.4,
+        });
+        let mut rec = ClipRec(Vec::new());
+        t.paint(&mut rec, &crate::theme::Theme::dark());
+        let clips: Vec<i32> = rec
+            .0
+            .iter()
+            .filter(|(s, _)| s == ">")
+            .map(|(_, w)| *w)
+            .collect();
+        // 시험 기록기는 글자마다 7px(탭도 한 글자) → 두 탭 모두 한 칸 폭 7로 클립(뷰 폭 380이 아니다).
+        assert_eq!(clips, vec![7, 7], "표식 클립 = 탭 칸 폭: {:?}", rec.0);
     }
 
     /// 선택 모드 = 모든 구간(열 선택·다중 구간)에 공백 표시(nexa-sql 09-28 — 종전엔 마지막 캐럿 구간만) · 줄끝 `$`는 구간이 개행을 담을 때만.
