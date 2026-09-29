@@ -62,6 +62,35 @@ impl Default for OccurrenceStyle {
     }
 }
 
+/// ★ 객체 링크 밑줄 모양(nexa-sql T-256 · 94차 · 사용자 09-29 "물결·솔리드·대시 물결·점").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LinkLine {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+    Wavy,
+    WavyDashed,
+}
+
+/// 객체 링크 밑줄 스타일(정상/미확인 각각) — 색 `None` = 테마(정상 = `accent` · 미확인 = `danger`) · 두께 px(0 = 밑줄 없음).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkStyle {
+    pub color: Option<Color>,
+    pub width: i32,
+    pub line: LinkLine,
+}
+
+impl Default for LinkStyle {
+    fn default() -> Self {
+        LinkStyle {
+            color: None,
+            width: 1,
+            line: LinkLine::Solid,
+        }
+    }
+}
+
 /// Auto indent 설정(nexa-sql docs/49 · Sublime `auto_indent`/`smart_indent`/`indent_to_bracket`/`trim_automatic_white_space`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AutoIndent {
@@ -399,6 +428,11 @@ pub struct TextBox {
     line_comment: Option<String>,
     /// 찾기 일치 구간(전부 · 호스트가 갱신) — 반투명 채움으로 표시(nexa-sql T-73 · 09-16).
     find_marks: Vec<(usize, usize)>,
+    /// ★ 객체 링크 구간(호스트가 Ctrl을 누르는 동안 넣음 · nexa-sql T-256 09-29) — (시작, 끝, 카탈로그 확인됨) · 밑줄 스타일은
+    ///   `link_style`(정상, 미확인) · `link_hot` = 커서 아래 하나(글자도 링크 색).
+    link_marks: Vec<(usize, usize, bool)>,
+    link_hot: Option<(usize, usize)>,
+    link_style: (LinkStyle, LinkStyle),
     /// 찾기 범위(선택 범위에서 찾기 · 호스트가 켤 때의 선택) — 은은한 채움으로 표시(VS Code Find in Selection · 09-16).
     find_scope: Option<(usize, usize)>,
     /// 줄번호 거터(멀티라인 · 09-14 nexa-sql 편집기). 폭은 페인트가 재서 캐시한다.
@@ -810,6 +844,16 @@ impl TextBox {
             scroll_snap: false,
             line_comment: None,
             find_marks: Vec::new(),
+            link_marks: Vec::new(),
+            link_hot: None,
+            link_style: (
+                LinkStyle::default(),
+                LinkStyle {
+                    color: None,
+                    width: 1,
+                    line: LinkLine::Wavy,
+                },
+            ),
             find_scope: None,
             line_numbers: false,
             gutter_marks: false,
@@ -1409,6 +1453,113 @@ impl TextBox {
     /// 찾기 일치 구간 전부(문자 인덱스 · 빈 목록 = 표시 없음).
     pub fn set_find_marks(&mut self, marks: Vec<(usize, usize)>) {
         self.find_marks = marks;
+    }
+
+    /// ★ 객체 링크 구간(문자 인덱스 · 카탈로그 확인 여부 · 밑줄 · nexa-sql T-256): 바뀌었으면 `true`(호스트가 다시 그린다).
+    pub fn set_link_marks(&mut self, marks: Vec<(usize, usize, bool)>) -> bool {
+        if self.link_marks == marks {
+            return false;
+        }
+        self.link_marks = marks;
+        true
+    }
+
+    /// 커서 아래 링크(강조색 · `None` = 없음): 바뀌었으면 `true`.
+    pub fn set_link_hot(&mut self, hot: Option<(usize, usize)>) -> bool {
+        if self.link_hot == hot {
+            return false;
+        }
+        self.link_hot = hot;
+        true
+    }
+
+    /// 링크 밑줄 스타일(정상, 미확인): 바뀌었으면 `true`.
+    pub fn set_link_styles(&mut self, ok: LinkStyle, bad: LinkStyle) -> bool {
+        if self.link_style == (ok, bad) {
+            return false;
+        }
+        self.link_style = (ok, bad);
+        true
+    }
+
+    /// 마지막 그리기에서 **보인 글자 구간**(멀티라인 · 첫 줄 시작 ~ 마지막 줄 끝 · 아직 안 그렸으면 `None`) — 호스트가 보이는
+    /// 부분만 분석할 때(nexa-sql 객체 링크의 큰 파일 모드).
+    #[must_use]
+    pub fn visible_range(&self) -> Option<(usize, usize)> {
+        let lay = self.line_lay.borrow();
+        let first = lay.first()?;
+        let last = lay.last()?;
+        Some((
+            first.start_idx,
+            last.start_idx + last.xs.len().saturating_sub(1),
+        ))
+    }
+
+    /// 링크 밑줄 한 구간(글자 상자 아래 · 모양 = 실선/대시/점/물결/대시 물결 · 두께 `st.width`).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_link_line(
+        &self,
+        ctx: &mut dyn DrawCtx,
+        x0: i32,
+        x1: i32,
+        bottom: i32,
+        st: LinkStyle,
+        col: Color,
+        clipv: &dyn Fn(Rect) -> Option<Rect>,
+    ) {
+        let wpx = self.s(st.width.clamp(1, 4));
+        let mut fill = |r: Rect| {
+            if let Some(rr) = clipv(r) {
+                ctx.fill_rect(rr, col);
+            }
+        };
+        let len = (x1 - x0).max(1);
+        match st.line {
+            LinkLine::Solid => fill(Rect::new(x0, bottom - wpx, len, wpx)),
+            LinkLine::Dashed => {
+                let (on, off) = (self.s(4).max(2), self.s(2).max(1));
+                let mut x = x0;
+                while x < x1 {
+                    fill(Rect::new(x, bottom - wpx, (x1 - x).min(on), wpx));
+                    x += on + off;
+                }
+            }
+            LinkLine::Dotted => {
+                let mut x = x0;
+                while x < x1 {
+                    fill(Rect::new(x, bottom - wpx, (x1 - x).min(wpx), wpx));
+                    x += wpx * 2;
+                }
+            }
+            LinkLine::Wavy | LinkLine::WavyDashed => {
+                // 삼각파: 한 칸 = 1 px(배율) · 주기 4칸 · 진폭 2칸 · 대시 물결 = 두 주기 그리고 한 주기 비움.
+                let unit = self.s(1).max(1);
+                let period = unit * 4;
+                let half = (period / 2).max(1);
+                let amp = unit * 2;
+                let dashed = st.line == LinkLine::WavyDashed;
+                let mut x = x0;
+                while x < x1 {
+                    let ph = (x - x0) % period;
+                    let dy = if ph < half { ph } else { period - ph };
+                    let gap = dashed && ((x - x0) / period) % 3 == 2;
+                    if !gap {
+                        let y = bottom - wpx - amp + dy * amp / half;
+                        fill(Rect::new(x, y, unit.min(x1 - x).max(1), wpx));
+                    }
+                    x += unit;
+                }
+            }
+        }
+    }
+
+    /// 점 → 가장 가까운 글자 경계 인덱스(멀티라인 · 페인트가 남긴 줄 배치 · 본문 영역 밖이면 `None`).
+    #[must_use]
+    pub fn index_at_point(&self, p: Point) -> Option<usize> {
+        if !self.multiline || !self.base.bounds.contains(p) {
+            return None;
+        }
+        Some(self.ml_caret_at(p.x, p.y))
     }
 
     /// 찾기 범위(문자 인덱스 · `None` = 전체).
@@ -3856,6 +4007,30 @@ impl TextBox {
                 }
                 let (ls, le) = (*start_idx, *start_idx + lchars.len());
                 let mut underline: Vec<(usize, Color)> = Vec::new();
+                // ★ 객체 링크(T-256 · 94차): 구간마다 스타일 밑줄(정상/미확인 = 색·두께·모양) · 커서 아래 링크 = 글자도 그 색.
+                let mut link_ul: Vec<(usize, usize, LinkStyle, Color)> = Vec::new();
+                for &(a, e, ok) in &self.link_marks {
+                    if a >= le || e <= ls {
+                        continue;
+                    }
+                    let st = if ok {
+                        self.link_style.0
+                    } else {
+                        self.link_style.1
+                    };
+                    let col = st
+                        .color
+                        .unwrap_or(if ok { theme.accent } else { theme.danger });
+                    let (i0, i1) = (a.max(ls) - ls, e.min(le) - ls);
+                    if self.link_hot == Some((a, e)) {
+                        for c in &mut colors[i0..i1] {
+                            *c = col;
+                        }
+                    }
+                    if st.width > 0 && i1 > i0 {
+                        link_ul.push((i0, i1, st, col));
+                    }
+                }
                 if let Some(t) = pair_table.as_ref() {
                     if self.bracket_opts.rainbow {
                         for &(pos, depth, unmatched) in t.marks_in(ls, le) {
@@ -3899,6 +4074,11 @@ impl TextBox {
                     if let Some(rr) = clipv(r) {
                         ctx.fill_rect(rr, col);
                     }
+                }
+                for (i0, i1, st, col) in link_ul {
+                    let x0 = dx + w.get(i0).copied().unwrap_or(0);
+                    let x1 = dx + w.get(i1).copied().unwrap_or(x0 + self.s(8));
+                    self.draw_link_line(ctx, x0, x1, ty + th, st, col, &clipv);
                 }
             }
             // 공백 표시(·/→/¶ · 선택 안 또는 전체 · 반투명 = 배경과 섞은 색).
@@ -5246,6 +5426,35 @@ mod tests {
         let mut inv = Invalidations::default();
         t.set_bounds(Rect::new(0, 0, 260, 30), &mut inv);
         (t, inv)
+    }
+
+    /// 객체 링크 표시(nexa-sql T-256 · 93차): 같은 값이면 false(호스트가 헛되이 다시 그리지 않게) · 단일행/본문 밖 점은 None.
+    #[test]
+    fn link_marks_change_detection() {
+        let (mut t, _) = tb();
+        assert!(t.set_link_marks(vec![(0, 3, true)]));
+        assert!(!t.set_link_marks(vec![(0, 3, true)]));
+        // 확인 여부만 달라도 바뀐 것.
+        assert!(t.set_link_marks(vec![(0, 3, false)]));
+        assert!(t.set_link_hot(Some((0, 3))));
+        assert!(!t.set_link_hot(Some((0, 3))));
+        assert!(t.set_link_hot(None));
+        assert!(t.set_link_marks(Vec::new()));
+        let bad = LinkStyle {
+            color: Some(Color(0xB7472A)),
+            width: 2,
+            line: LinkLine::WavyDashed,
+        };
+        assert!(t.set_link_styles(LinkStyle::default(), bad));
+        assert!(!t.set_link_styles(LinkStyle::default(), bad));
+        // 아직 그리지 않은 상자 = 보이는 구간 없음.
+        assert_eq!(t.visible_range(), None);
+        // 단일행 상자는 링크 히트 없음 · 멀티라인은 본문 밖이면 None.
+        assert_eq!(t.index_at_point(Point { x: 5, y: 5 }), None);
+        let mut m = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        m.set_bounds(Rect::new(0, 0, 200, 100), &mut inv);
+        assert_eq!(m.index_at_point(Point { x: 500, y: 500 }), None);
     }
     fn ch(c: char) -> InputEvent {
         InputEvent::Char { c, now_ms: 0 }

@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-09-29 (94차 · win · nexa-sql 102차 끝 5)** — ★ `TextBox` 객체 링크 밑줄 스타일 `LinkLine`/`LinkStyle` · `link_marks = (a, e, known)` · `set_link_styles(ok, bad)` · `draw_link_line`(실선·대시·점·물결·대시 물결 · 두께) · `visible_range()` — nexa-sql 객체 링크 2차(정상/미확인 · 부분 분석) · 시험 갱신(textbox 64).
+- **2026-09-29 (93차 · win · nexa-sql 102차 끝 5)** — ★ `TextBox::set_link_marks`/`set_link_hot`(객체 링크 밑줄 · hot = 강조색 · 바뀔 때만 true) · `index_at_point`(점 → 글자 경계 · 본문 밖 None) — nexa-sql T-256 Ctrl 객체 하이퍼링크 · 시험 +1(textbox 64).
 - **2026-09-28 (91차 · win · nexa-sql 102차 끝 3)** — `TabBar::set_dirty` Sublime식 닫기 상자(미저장 = 구분색 점 · hover = 같은 색 ×) · 시험 369.
 - **2026-09-28 (90차 · win · nexa-sql 102차 끝 3)** — `TabBar` 탭 전환 = 뗄 때(버튼 규칙 · 드래그 뒤 = 옮긴 탭) · 툴바 글자 항목 hover 색 유지 · 시험 368.
 - **2026-09-28 (89차 · win · nexa-sql 102차 끝 3)** — ★ 툴바 글자 항목 `ToolItem::text`/`set_item_label`(가변 폭) · 도크 그룹 손잡이 툴팁 = 그룹 이름.
