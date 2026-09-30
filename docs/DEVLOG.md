@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-09-30 (100차 · win · nexa-sql 108차)** — ★ `TextBox::set_select_all_keep_view`(⌘/Ctrl+A·메뉴 전체 선택 뒤 화면 유지 = 자유 스크롤 표식 · 기본 거짓 · nexa-sql `editor.select_all_view`) · ★ **버튼 빠른 두 번 누름 차단**(`Button::fire_click` · 전역 `set_default_click_guard_ms`(350) · 인스턴스 `set_click_guard_ms` · 연타 허용 `set_rapid` · `Toolbar` 같은 항목 가드 · nexa-sql `ui.click_guard_ms`) · 시험 380.
 - **2026-09-29 (97차 · win · nexa-sql 102차 끝 8)** — `ContextMenu::select(i)` = 프로그램으로 항목을 선택 상태(hover · 보이게 스크롤 · 활성만)로 — nexa-sql 완성 팝업의 건너편 컬럼 1순위 선택(사용자 09-29) · 시험 `select_sets_hover_programmatically`.
 - **2026-09-29 (96차 · win · nexa-sql 102차 끝 7)** — 🔧 `TextBox` 공백 표식은 **그 글자 칸 안에만**(클립) · 탭 칸이 글리프보다 좁으면(정지점 직전) 칸 폭의 가는 선 — `→`가 다음 글자를 덮던 결함(nexa-sql 사용자 09-29) · 시험 `narrow_tab_mark_never_covers_next_char`.
 - **2026-09-29 (95차 · win · nexa-sql 102차 끝 7)** — `TextBox::set_text_keep_view`(본문 교체 + 캐럿 줄·열·세로 스크롤 유지 · 넘치면 마지막 줄 · 자유 스크롤 상태) — nexa-sql 포맷 미리보기가 옵션마다 맨 뒤로 가던 불편(사용자 09-29) · 시험 `set_text_keep_view_keeps_caret_line_and_scroll`.

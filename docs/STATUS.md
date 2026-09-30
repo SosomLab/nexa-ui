@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-09-30 (100차 · win · nexa-sql 108차)** — `TextBox::set_select_all_keep_view` · `Button` 연타 차단(`set_default_click_guard_ms`/`set_click_guard_ms`/`set_rapid`) + `Toolbar` 항목 가드 · 시험 380.
 - **2026-09-29 (97차 · win · nexa-sql 102차 끝 8)** — `ContextMenu::select(i)`(프로그램 선택) · 시험 +1.
 - **2026-09-29 (96차 · win · nexa-sql 102차 끝 7)** — 🔧 공백 표식 = 글자 칸 안에만 · 좁은 탭 = 선(글자 우선) · 시험 +1.
 - **2026-09-29 (95차 · win · nexa-sql 102차 끝 7)** — `TextBox::set_text_keep_view`(캐럿 줄·열·세로 스크롤 유지 본문 교체) · 시험 +1.

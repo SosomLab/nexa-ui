@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/select-all-keep-click-guard | 2026-09-30 | 2026-09-30 → main(삭제) | 1 | 100차: `TextBox::set_select_all_keep_view` · `Button`/`Toolbar` 빠른 두 번 누름 차단(`set_default_click_guard_ms` · `set_rapid`) — nexa-sql 108차 |
 | feat/ctxmenu-select | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 97차: `ContextMenu::select(i)` = 프로그램 선택(hover · 보이게 스크롤 · 활성만) — nexa-sql 완성 팝업 건너편 컬럼(09-29) |
 | feat/textbox-keep-view | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 95~96차: `TextBox::set_text_keep_view`(본문 교체 + 캐럿 줄·열·세로 스크롤 유지) · 공백 표식 = 글자 칸 안 클립 · 좁은 탭 = 선(nexa-sql 포맷 미리보기 09-29) |
 | feat/textbox-link-marks | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 93~94차: TextBox 객체 링크 표시(`link_marks`/`link_hot`/`index_at_point`) · 밑줄 스타일 `LinkStyle`/`LinkLine`(정상/미확인 · 실선·대시·점·물결·대시 물결) · `visible_range` (nexa-sql T-256) |

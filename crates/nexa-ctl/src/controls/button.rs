@@ -13,6 +13,24 @@ use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::{Color, IconImage, Theme};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+/// ★ 빠른 두 번 누름 차단 기본값(ms · nexa-sql 09-30 · 사용자 "버튼은 빠른 2번 누름에 2번 클릭되지 않게 기본 제어"): 같은 버튼이
+/// 클릭을 낸 뒤 이 시간 안의 두 번째 클릭은 버린다. 0 = 끔. 호스트가 설정(`ui.click_guard_ms`)으로 바꾼다 · 연타가 필요한 버튼은
+/// [`Button::set_rapid`]로 제외한다. [`super::toolbar::Toolbar`] 항목도 같은 값을 쓴다.
+static CLICK_GUARD_MS: AtomicU64 = AtomicU64::new(350);
+
+/// 전 버튼 기본 연타 차단 시간(ms · 0 = 끔).
+pub fn set_default_click_guard_ms(ms: u64) {
+    CLICK_GUARD_MS.store(ms, Ordering::Relaxed);
+}
+
+/// 지금 기본값(ms).
+#[must_use]
+pub fn default_click_guard_ms() -> u64 {
+    CLICK_GUARD_MS.load(Ordering::Relaxed)
+}
 use crate::tokens::{hover_alpha, hover_color, pressed_color, Fade, FadeSpeed};
 use std::cell::RefCell;
 
@@ -83,6 +101,12 @@ pub struct Button {
     image_leading: bool,
     pressed: bool,
     clicked: bool,
+    /// 연타 허용(기본 거짓 = 전역 가드 적용 · 09-30).
+    rapid: bool,
+    /// 이 버튼만의 가드(ms · None = 전역 기본).
+    click_guard: Option<u64>,
+    /// 마지막으로 클릭을 낸 시각(가드 판정).
+    last_click: Option<Instant>,
     /// 색조(08-17 — 배경색으로 위험도 신호). 기본 중립.
     tone: ButtonTone,
     /// 라벨 폰트 슬롯(08-17 — 카드 등 작은 폰트에 맞추려면 Status). 기본 Base.
@@ -116,6 +140,9 @@ impl Button {
             image_leading: false,
             pressed: false,
             clicked: false,
+            rapid: false,
+            click_guard: None,
+            last_click: None,
             tone: ButtonTone::Default,
             font: FontSlot::Base,
             hover: Fade::button_hover(),
@@ -144,6 +171,9 @@ impl Button {
             image_leading: false,
             pressed: false,
             clicked: false,
+            rapid: false,
+            click_guard: None,
+            last_click: None,
             tone: ButtonTone::Default,
             font: FontSlot::Base,
             hover: Fade::button_hover(),
@@ -294,6 +324,30 @@ impl Button {
     pub fn take_clicked(&mut self) -> bool {
         std::mem::take(&mut self.clicked)
     }
+
+    /// ★ 연타 허용(09-30): 빠른 두 번 누름도 두 번 클릭(페이지 +/- 처럼 연타가 뜻인 버튼만 · 기본 거짓).
+    pub fn set_rapid(&mut self, on: bool) {
+        self.rapid = on;
+    }
+
+    /// 이 버튼만의 연타 차단 시간(ms · `None` = 전역 기본 [`default_click_guard_ms`]).
+    pub fn set_click_guard_ms(&mut self, ms: Option<u64>) {
+        self.click_guard = ms;
+    }
+
+    /// 클릭 확정 한 길(MouseUp · Enter/Space): 가드 안의 두 번째 클릭은 버린다.
+    fn fire_click(&mut self) {
+        let guard = self.click_guard.unwrap_or_else(default_click_guard_ms);
+        if !self.rapid && guard > 0 {
+            if let Some(t) = self.last_click {
+                if t.elapsed().as_millis() < u128::from(guard) {
+                    return;
+                }
+            }
+        }
+        self.last_click = Some(Instant::now());
+        self.clicked = true;
+    }
 }
 
 impl Control for Button {
@@ -344,14 +398,14 @@ impl Widget for Button {
                 if self.pressed {
                     self.pressed = false;
                     if self.base.bounds.contains(Point { x, y }) {
-                        self.clicked = true;
+                        self.fire_click();
                     }
                     inv.push(self.base.bounds);
                 }
             }
             InputEvent::Key { key, .. } if self.base.focused => {
                 if matches!(key, Key::Enter | Key::Space) {
-                    self.clicked = true;
+                    self.fire_click();
                 }
             }
             _ => {}
@@ -602,5 +656,40 @@ mod tests {
 
         let imgbtn = Button::icon(img()).image_fill(ImageFit::Cover);
         assert_eq!(imgbtn.mode, ButtonMode::Image(ImageFit::Cover));
+    }
+
+    /// ★ 빠른 두 번 누름 = 클릭 1회(가드) · `set_rapid` = 2회 · 가드 0 = 2회(nexa-sql 09-30).
+    #[test]
+    fn double_press_is_one_click_unless_rapid() {
+        let press = |b: &mut Button| {
+            let mut inv = Invalidations::default();
+            b.on_event(
+                &InputEvent::MouseDown {
+                    x: 10,
+                    y: 10,
+                    shift: false,
+                    primary: true,
+                },
+                &mut inv,
+            );
+            b.on_event(&InputEvent::MouseUp { x: 10, y: 10 }, &mut inv);
+        };
+        let mut b = Button::new("x");
+        b.set_bounds(Rect::new(0, 0, 100, 30), &mut Invalidations::default());
+        b.set_click_guard_ms(Some(10_000));
+        press(&mut b);
+        assert!(b.take_clicked(), "첫 클릭");
+        press(&mut b);
+        assert!(!b.take_clicked(), "가드 안의 두 번째 = 버림");
+        b.set_rapid(true);
+        press(&mut b);
+        assert!(b.take_clicked(), "연타 허용");
+        let mut c = Button::new("y");
+        c.set_bounds(Rect::new(0, 0, 100, 30), &mut Invalidations::default());
+        c.set_click_guard_ms(Some(0));
+        press(&mut c);
+        assert!(c.take_clicked());
+        press(&mut c);
+        assert!(c.take_clicked(), "가드 0 = 종전");
     }
 }

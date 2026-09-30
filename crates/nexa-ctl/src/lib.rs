@@ -45,6 +45,7 @@ pub mod view_mode;
 pub mod widget;
 
 pub use controls::textbox::{click_policy, set_click_policy, word_underscore, ClickAction};
+pub use controls::{default_click_guard_ms, set_default_click_guard_ms};
 pub use controls::{fast_scroll, set_fast_scroll, FastScroll};
 pub use controls::{
     rgba_from_hex, rgba_to_hex, DockAction, DockLayout, DropClick, FiredBy, HAlign, MenuBar,

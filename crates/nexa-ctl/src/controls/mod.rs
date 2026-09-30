@@ -39,7 +39,9 @@ pub mod toolbar;
 pub mod tooldock;
 pub mod tree;
 
-pub use button::{Button, ButtonMode, ButtonTone, ImageFit};
+pub use button::{
+    default_click_guard_ms, set_default_click_guard_ms, Button, ButtonMode, ButtonTone, ImageFit,
+};
 pub use carousel::Carousel;
 pub use checkbox::Checkbox;
 pub use colorpanel::{rgba_from_hex, rgba_to_hex, ColorPanel};

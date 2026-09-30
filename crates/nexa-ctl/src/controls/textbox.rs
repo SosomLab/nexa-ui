@@ -416,6 +416,9 @@ pub struct TextBox {
     /// 사용자가 휠/바로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
     /// vscroll/mhscroll을 그대로 존중(자유 스크롤). 편집(캐럿 이동) 시 거짓으로 리셋.
     ml_user_scrolled: bool,
+    /// ★ 전체 선택(⌘/Ctrl+A · 메뉴)의 화면 위치(nexa-sql 09-30 · 사용자 "기본은 현재 위치 유지"): 참 = 캐럿은 끝으로 가되 **화면은
+    ///   그대로**(자유 스크롤 상태) · 거짓 = 종전(캐럿을 따라 끝으로 스크롤). 부품 기본 = 거짓(종전 동작).
+    select_all_keep_view: bool,
     /// **바뀜 표시**(nexa-sql 접속 폼 09-19): 저장본과 다른 칸 = 왼쪽 안쪽 2px 강조 띠(편집기 줄 변경 표시와 같은 어휘).
     modified: bool,
     /// 경고 띠(빠진 필수 칸 · nexa-sql 09-19) — `modified`보다 우선 · 색 = `theme.warn`.
@@ -838,6 +841,7 @@ impl TextBox {
             vscroll: std::cell::Cell::new(0),
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
+            select_all_keep_view: false,
             modified: false,
             warning: false,
             ml_wheel_rem: std::cell::Cell::new(0),
@@ -2136,6 +2140,19 @@ impl TextBox {
     pub fn set_wrap(&mut self, on: bool) {
         self.wrap = on;
         self.mhscroll.set(0);
+    }
+
+    /// 전체 선택 뒤 화면 유지(참) / 끝으로 스크롤(거짓 · 기본).
+    pub fn set_select_all_keep_view(&mut self, on: bool) {
+        self.select_all_keep_view = on;
+    }
+
+    /// 전체 선택 한 길(⌘/Ctrl+A · 우클릭 메뉴): 선택은 전부 · 캐럿은 끝 · 화면은 옵션대로.
+    fn select_all_cmd(&mut self) {
+        self.edit.key(EditKey::SelectAll, false);
+        if self.select_all_keep_view {
+            self.ml_user_scrolled = true;
+        }
     }
 
     /// 현재 줄 바꿈 상태.
@@ -4674,7 +4691,7 @@ impl TextBox {
                     use super::EditMenuAction as A;
                     match a {
                         // 전체 선택은 위젯 내부 상태 — 즉시 실행.
-                        A::SelectAll => self.edit.key(EditKey::SelectAll, false),
+                        A::SelectAll => self.select_all_cmd(),
                         // 클립보드는 호스트 몫 — 요청만 남긴다(⌘C/X/V와 같은 경로).
                         A::Copy => self.edit_ctx = Some(EditCtxAction::Copy),
                         A::Cut => self.edit_ctx = Some(EditCtxAction::Cut),
@@ -5193,7 +5210,7 @@ impl TextBox {
                 }
             }
             InputEvent::SelectAll if self.base.focused => {
-                self.edit.key(EditKey::SelectAll, false);
+                self.select_all_cmd();
                 inv.push(self.base.bounds); // 선택 반전이 즉시 보여야 한다
             }
             InputEvent::Undo if self.base.focused && self.edit.undo() => {
@@ -5477,6 +5494,28 @@ mod tests {
 
     /// 객체 링크 표시(nexa-sql T-256 · 93차): 같은 값이면 false(호스트가 헛되이 다시 그리지 않게) · 단일행/본문 밖 점은 None.
     /// `set_text_keep_view`: 캐럿 줄·열과 세로 스크롤이 남고 넘치면 마지막 줄로.
+    /// ★ 전체 선택의 화면 위치(nexa-sql 09-30): 유지 = 자유 스크롤 표식(paint가 캐럿을 따라가지 않음) · 끝 = 종전(캐럿 추종).
+    #[test]
+    fn select_all_keep_view_marks_free_scroll() {
+        let mut t = TextBox::new("").with_multiline().with_text("a\nb\nc\n");
+        t.set_bounds(Rect::new(0, 0, 200, 40), &mut Invalidations::default());
+        t.set_focused(true);
+        let mut inv = Invalidations::default();
+        t.on_event(&InputEvent::SelectAll, &mut inv);
+        assert!(!t.ml_user_scrolled, "기본 = 캐럿(끝)을 따라간다");
+        assert_eq!(t.caret(), t.text().chars().count());
+        t.set_select_all_keep_view(true);
+        t.edit.set_caret(0, false);
+        t.on_event(&InputEvent::SelectAll, &mut inv);
+        assert!(t.ml_user_scrolled, "유지 = 화면을 그대로(자유 스크롤)");
+        assert_eq!(
+            t.caret(),
+            t.text().chars().count(),
+            "선택은 전부 · 캐럿은 끝"
+        );
+        assert!(t.copy_selection().is_some_and(|s| s == "a\nb\nc\n"));
+    }
+
     #[test]
     fn set_text_keep_view_keeps_caret_line_and_scroll() {
         let mut tb = TextBox::new("").with_multiline();

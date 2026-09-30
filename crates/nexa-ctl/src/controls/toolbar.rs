@@ -17,6 +17,7 @@ use crate::theme::{Color, IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Instant;
 
 /// 항목 아이콘 종류.
 #[derive(Clone, Debug)]
@@ -234,6 +235,8 @@ pub struct Toolbar {
     hover: Option<usize>,
     pressed: Option<usize>,
     clicked: Option<String>,
+    /// 마지막 클릭(항목 id · 시각) — 빠른 두 번 누름 차단(`button::default_click_guard_ms` · 09-30).
+    last_click: Option<(String, Instant)>,
     /// 마스크 틴트 캐시(항목별 · 같은 색이면 재사용) — 페인트가 `&self`라 내부 가변.
     tint: RefCell<Vec<TintSlot>>,
     /// 툴팁을 슬롯 **위**에 그린다(창 아래 붙은 도구줄 — 아래로 그리면 상태줄/창 밖 · nexa-sql 결과 도구줄 09-16).
@@ -255,6 +258,7 @@ impl Toolbar {
             hover: None,
             pressed: None,
             clicked: None,
+            last_click: None,
             tint: RefCell::new(vec![None; n]),
             tip_above: false,
             slot_pad: SLOT_PAD,
@@ -597,11 +601,21 @@ impl Widget for Toolbar {
                         let on_drop = it.dropdown
                             && it.drop_click == DropClick::Separate
                             && x >= slot.right() - self.s(DROP_W) - self.s(self.slot_pad);
-                        self.clicked = Some(if on_drop {
+                        let id = if on_drop {
                             format!("{}#drop", it.id)
                         } else {
                             it.id.clone()
-                        });
+                        };
+                        // ★ 같은 항목의 빠른 두 번 누름은 한 번만(실행 ▶ 두 번 · 커밋 두 번 방지 · 09-30).
+                        let guard = super::button::default_click_guard_ms();
+                        let blocked = guard > 0
+                            && self.last_click.as_ref().is_some_and(|(pid, t)| {
+                                *pid == id && t.elapsed().as_millis() < u128::from(guard)
+                            });
+                        if !blocked {
+                            self.last_click = Some((id.clone(), Instant::now()));
+                            self.clicked = Some(id);
+                        }
                     }
                     inv.push(self.base.bounds);
                 }
