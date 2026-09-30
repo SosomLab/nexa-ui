@@ -77,6 +77,15 @@ pub enum ToolTone {
     /// 호스트가 정한 색(테마 밖 상태색 — 09-17 nexa-sql 트랜잭션 상태: 갱신 = 호박 · DDL = 보라).
     Custom(Color),
 }
+/// 드롭다운 항목(`dropdown`)의 ▾ 영역 클릭 동작(09-30).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DropClick {
+    /// ▾도 본체(이미지)와 같은 id로 온다 — "이미지 클릭과 동일하게 동작"(기본).
+    #[default]
+    Same,
+    /// ▾는 `"<id>#drop"`으로 구별한다(본체 = 기본 동작 · ▾ = 목록 · nexa-sql Disconnect ▾ 09-18).
+    Separate,
+}
 
 /// 툴바 항목 — 액션 id + 아이콘 (+ 오른쪽 정렬 여부).
 #[derive(Clone, Debug)]
@@ -95,8 +104,11 @@ pub struct ToolItem {
     pub enabled: bool,
     /// 마스크 아이콘 색조(09-16) — 상태를 색으로(연결됨 = `Ok`).
     pub tone: ToolTone,
-    /// 드롭다운 표시(아이콘 오른쪽 ▾ · 슬롯이 10px 넓어진다 · 클릭은 같은 액션 · nexa-sql 보기 모드 09-16).
+    /// 드롭다운 표시(아이콘 오른쪽 ▾ · 슬롯이 10px 넓어진다 · nexa-sql 보기 모드 09-16).
     pub dropdown: bool,
+    /// ★ ▾ 영역을 눌렀을 때의 동작(nexa-sql 09-30 "화살표를 눌러도 동작하게"): 기본 [`DropClick::Same`] = 본체(이미지)
+    /// 클릭과 같은 id · [`DropClick::Separate`] = `"<id>#drop"`으로 구별해 준다(본체 = 기본 동작 · ▾ = 목록).
+    pub drop_click: DropClick,
     /// **구분자**(09-17 nexa-sql 툴바 그룹): 세로 선 하나 — hover·클릭 없음 · 폭 [`SEP_W`]. `id`는 비어 있어도 된다.
     pub separator: bool,
     /// **배지**(09-17 nexa-sql 트랜잭션 버튼): 슬롯 오른쪽 위 작은 캡슐(색 = 색조 · 글자 = 배경색). `None` = 없음.
@@ -119,6 +131,7 @@ impl ToolItem {
             enabled: true,
             tone: ToolTone::Default,
             dropdown: false,
+            drop_click: DropClick::Same,
             separator: false,
             badge: None,
             label: false,
@@ -141,11 +154,17 @@ impl ToolItem {
         it
     }
 
-    /// 드롭다운 화살표(체이닝).
+    /// 드롭다운 화살표(체이닝) — ▾를 눌러도 **본체와 같은 id**가 온다(기본 · [`DropClick::Same`]).
     #[must_use]
-    /// ▾ 영역을 누르면 클릭 id가 `"<id>#drop"`으로 온다(본체 = 기본 동작 · ▾ = 목록).
     pub fn with_dropdown(mut self) -> Self {
         self.dropdown = true;
+        self
+    }
+
+    /// ▾ 영역의 클릭 동작을 정한다(체이닝) — [`DropClick::Separate`]면 `"<id>#drop"`으로 온다.
+    #[must_use]
+    pub fn drop_click(mut self, mode: DropClick) -> Self {
+        self.drop_click = mode;
         self
     }
 
@@ -576,6 +595,7 @@ impl Widget for Toolbar {
                         let it = &self.items[i];
                         let slot = self.slot_rect(i);
                         let on_drop = it.dropdown
+                            && it.drop_click == DropClick::Separate
                             && x >= slot.right() - self.s(DROP_W) - self.s(self.slot_pad);
                         self.clicked = Some(if on_drop {
                             format!("{}#drop", it.id)
@@ -855,5 +875,32 @@ mod tests {
         assert!(!Rc::ptr_eq(&a, &c), "색 변경 = 재생성");
         assert_eq!(c.rgba[0], 61, "틴트 색 반영");
         assert_eq!(c.rgba[3], 255, "마스크 알파 유지");
+    }
+
+    /// ★ ▾ 클릭 동작(09-30): 기본 `Same` = 본체와 같은 id · `Separate` = `id#drop`.
+    #[test]
+    fn dropdown_arrow_click_modes() {
+        for (mode, want) in [(DropClick::Same, "v"), (DropClick::Separate, "v#drop")] {
+            let mut tb = Toolbar::new(vec![ToolItem::new("v", ToolIcon::Glyph("V".into()))
+                .with_dropdown()
+                .drop_click(mode)]);
+            let mut inv = Invalidations::default();
+            tb.set_bounds(Rect::new(0, 0, 200, 30), &mut inv);
+            let slot = tb.slot_rect(0);
+            // ▾ 영역 = 슬롯 오른쪽 DROP_W 안.
+            let x = slot.right() - 3;
+            let y = slot.y + slot.h / 2;
+            tb.on_event(
+                &InputEvent::MouseDown {
+                    x,
+                    y,
+                    shift: false,
+                    primary: false,
+                },
+                &mut inv,
+            );
+            tb.on_event(&InputEvent::MouseUp { x, y }, &mut inv);
+            assert_eq!(tb.take_clicked().as_deref(), Some(want), "{mode:?}");
+        }
     }
 }

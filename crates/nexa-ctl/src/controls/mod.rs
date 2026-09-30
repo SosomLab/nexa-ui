@@ -55,7 +55,7 @@ pub use posdrop::PositionDropdown;
 pub use posgrid::PositionPicker;
 pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
-pub use scroll::ScrollBars;
+pub use scroll::{fast_scroll, set_fast_scroll, FastScroll, ScrollAccel, ScrollBars, SpeedHud};
 pub use splitter::{SplitAxis, SplitEvent, Splitter};
 pub use switch::Switch;
 pub use tabbar::{TabAction, TabBadge, TabBar};
@@ -67,7 +67,7 @@ pub use textbox::{
     WhitespaceMode, WhitespaceStyle,
 };
 pub use timeout_button::{FiredBy, TimeoutButton};
-pub use toolbar::{ToolIcon, ToolItem, ToolTone, Toolbar, DEFAULT_ICON};
+pub use toolbar::{DropClick, ToolIcon, ToolItem, ToolTone, Toolbar, DEFAULT_ICON};
 pub use tooldock::{DockAction, DockLayout, ToolDock, ToolGroup};
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};
 

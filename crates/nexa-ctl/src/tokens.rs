@@ -774,6 +774,101 @@ impl<T: Copy + PartialEq> HoverIntent<T> {
     }
 }
 
+/// ★ **최신 의도 부품**(nexa-sql 09-30 "스크롤처럼 같은 사건이 밀려 들어올 때 마지막 것만 살아남으면 되는 상황(툴팁 등)은 나머지를
+/// 버리는 큐잉으로") — 큐가 아니라 **목표 하나를 덮어쓰는** 슬롯. 사건은 `set(목표)`만 하고(비용 0 · 큐 0), `tick`이 목표가
+/// `delay_ms` 동안 **그대로 머문 뒤**에만 "확정(settled)"으로 올린다. 그 사이에 목표가 바뀌면 앞의 의도는 확정에 닿지도 않고 사라진다
+/// (= 선발생 사건 폐기 · 마지막만 수행). [`IntentFade`](hover 페이드)와 같은 사상을 값 종류 `T`에 일반화한 것.
+///
+/// 쓰는 곳: 노드 툴팁(탐색기 · 커서 아래 노드가 목표) · 링크 툴팁 · 그리드 표식 툴팁 · 검색어 확정 등 "마지막 상태만 뜻 있는" 지연 동작.
+/// 규칙: 표시할 때 목표가 **아직도 유효한지**(예: 지금 커서 아래 행인지)를 호출자가 한 번 더 확인한다 — 스크롤로 밀린 목표를 걸러 낸다.
+#[derive(Clone, Debug)]
+pub struct LatestIntent<T> {
+    /// 사건이 덮어쓰는 마지막 목표(시계 없이 기록).
+    want: Option<T>,
+    /// `tick`이 마지막으로 본 목표.
+    seen: Option<T>,
+    /// `seen`이 정해진 시각(ms).
+    since: Option<u64>,
+    settled: bool,
+    delay_ms: u64,
+}
+
+impl<T: PartialEq + Clone> LatestIntent<T> {
+    #[must_use]
+    pub fn new(delay_ms: u64) -> Self {
+        Self {
+            want: None,
+            seen: None,
+            since: None,
+            settled: false,
+            delay_ms,
+        }
+    }
+
+    pub fn set_delay_ms(&mut self, ms: u64) {
+        self.delay_ms = ms;
+    }
+
+    /// 사건: 목표를 덮어쓴다(같은 목표면 대기가 이어진다 · `None` = 목표 없음).
+    pub fn set(&mut self, target: Option<T>) {
+        self.want = target;
+    }
+
+    /// 목표를 비우고 확정도 내린다.
+    pub fn clear(&mut self) {
+        self.want = None;
+        self.seen = None;
+        self.since = None;
+        self.settled = false;
+    }
+
+    /// 같은 목표라도 대기를 다시 시작한다(예: 스크롤 뒤 "머문 시간"을 새로 재기).
+    pub fn restart(&mut self) {
+        self.seen = None;
+        if self.settled {
+            self.settled = false;
+        }
+    }
+
+    /// 호스트 tick — 확정 상태가 **바뀌면** `true`(다시 그리기). 목표가 바뀌면 확정을 내리고 새 대기 시작.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        if self.want != self.seen {
+            self.seen = self.want.clone();
+            self.since = self.seen.as_ref().map(|_| now_ms);
+            if self.settled {
+                self.settled = false;
+                return true;
+            }
+            return false;
+        }
+        if !self.settled {
+            if let (Some(s), Some(_)) = (self.since, &self.seen) {
+                if now_ms.saturating_sub(s) >= self.delay_ms {
+                    self.settled = true;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 확정된 목표(머문 뒤) — 아니면 None.
+    #[must_use]
+    pub fn settled(&self) -> Option<&T> {
+        if self.settled {
+            self.seen.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// 지금 목표(확정 여부 무관).
+    #[must_use]
+    pub fn target(&self) -> Option<&T> {
+        self.want.as_ref()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1071,5 +1166,35 @@ mod tests {
         hi.clear();
         assert_eq!(hi.take_due(5_000), None);
         assert!(!hi.is_waiting(5_000));
+    }
+
+    /// ★ LatestIntent(09-30): 사건은 덮어쓰기만 · 머문 목표만 확정 · 바뀌면 앞 의도는 확정에 닿지 않음 · restart · clear.
+    #[test]
+    fn latest_intent_keeps_only_the_last_target() {
+        let mut li: LatestIntent<u32> = LatestIntent::new(100);
+        li.set(Some(1));
+        assert!(!li.tick(0), "첫 tick = 대기 시작");
+        li.set(Some(2)); // 1은 폐기
+        li.set(Some(3));
+        assert!(!li.tick(50));
+        assert!(!li.tick(120), "3은 50에 시작 → 150에 확정");
+        assert!(li.tick(150));
+        assert_eq!(li.settled(), Some(&3));
+        assert!(!li.tick(200), "변화 없음");
+        li.set(Some(4));
+        assert!(li.tick(210), "목표가 바뀌면 확정이 내려간다(다시 그림)");
+        assert_eq!(li.settled(), None);
+        li.restart();
+        assert!(!li.tick(220));
+        assert!(li.tick(320));
+        assert_eq!(li.settled(), Some(&4));
+        li.set(None);
+        assert!(li.tick(330));
+        assert_eq!(li.settled(), None);
+        li.set(Some(5));
+        li.tick(340);
+        li.clear();
+        assert!(!li.tick(500));
+        assert_eq!(li.settled(), None);
     }
 }

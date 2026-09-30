@@ -45,18 +45,20 @@ pub mod view_mode;
 pub mod widget;
 
 pub use controls::textbox::{click_policy, set_click_policy, word_underscore, ClickAction};
+pub use controls::{fast_scroll, set_fast_scroll, FastScroll};
 pub use controls::{
-    rgba_from_hex, rgba_to_hex, DockAction, DockLayout, FiredBy, HAlign, MenuBar, MenuDef,
-    MenuEntry, TabAction, TabBadge, TabBar, TimeoutButton, ToolDock, ToolGroup, ToolIcon, ToolItem,
-    ToolTone, Toolbar, VAlign,
+    rgba_from_hex, rgba_to_hex, DockAction, DockLayout, DropClick, FiredBy, HAlign, MenuBar,
+    MenuDef, MenuEntry, TabAction, TabBadge, TabBar, TimeoutButton, ToolDock, ToolGroup, ToolIcon,
+    ToolItem, ToolTone, Toolbar, VAlign,
 };
 pub use controls::{
     AutoIndent, BorderSpec, BracketOpts, Button, ButtonMode, Checkbox, Choose, ChoosePicker,
     ColorPanel, ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg,
     DiffKind, EditCtxAction, Flash, FlashTone, FlatRow, GridColumn, ImageFit, IndentRules,
     LabelSide, LinkLine, LinkStyle, MenuIcon, OccurrenceStyle, Pair, PairKind, PairOpts, PairTable,
-    PopupHit, PositionDropdown, PositionPicker, PreparedText, RadioGroup, RadioOption, ScrollBars,
-    TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
+    PopupHit, PositionDropdown, PositionPicker, PreparedText, RadioGroup, RadioOption, ScrollAccel,
+    ScrollBars, SpeedHud, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
+    WhitespaceMode, WhitespaceStyle,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
@@ -72,6 +74,6 @@ pub use theme::{
 };
 pub use widget::{Invalidations, Widget};
 
-pub use tokens::{motion, radius, space, type_scale, Elevation, State};
+pub use tokens::{motion, radius, space, type_scale, Elevation, LatestIntent, State};
 pub use typeahead::{HudPos, TypeAhead, TypeAheadFilter, TYPEAHEAD_TIMEOUT_MS};
 pub use view_mode::ViewMode;

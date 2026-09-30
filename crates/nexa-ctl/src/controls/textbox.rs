@@ -930,6 +930,12 @@ impl TextBox {
         a || b || c || d
     }
 
+    /// 마우스를 누른 채 끄는 중인가(선택 드래그 · 열 선택 · 미니맵 드래그) — 호스트의 포인터 캡처·시험용(09-30).
+    #[must_use]
+    pub fn is_dragging(&self) -> bool {
+        self.dragging || self.minimap_drag
+    }
+
     /// 드래그 자동 스크롤을 [`Self::tick`]이 몰아야 하는가 — 멀티라인 드래그 중이고 포인터가 영역의 **위/아래 밖**에 있다.
     /// 호스트는 이 동안 프레임(틱)을 예약한다(그 밖에는 비용 0).
     #[must_use]

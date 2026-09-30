@@ -10,10 +10,11 @@
 //! 상태(hover/drag/표시)만 보유하고 **오프셋은 호스트가 소유**한다 — [`ScrollBars::on_event`]에
 //! 현재 오프셋을 넣으면 갱신된 오프셋을 돌려준다(스크롤 가능한 어떤 뷰에도 재사용: 갤러리·트리·그리드).
 
-use crate::draw::DrawCtx;
+use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
+use crate::typeahead::HudPos;
 
 // 레이아웃 상수(논리 px).
 const THIN: i32 = 6;
@@ -48,10 +49,276 @@ enum Axis {
     V,
     H,
 }
+/// ★ **고속 스크롤 전역 설정**(nexa-sql 09-30 · 설정 `scroll.*` · 핫스왑 원칙 = 값을 들고 다니지 않고 한 곳에서 읽는다).
+/// 호스트가 설정이 바뀔 때 [`set_fast_scroll`]로 넣고, 모든 [`ScrollBars`]·[`ScrollAccel`]·[`SpeedHud`]가 그때그때 읽는다.
+/// 영역별 예외(결과 그리드 = 한 단계 더 빠르게)는 [`ScrollBars::set_fast_override`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FastScroll {
+    /// 고속 스크롤 사용.
+    pub enabled: bool,
+    /// 연속 N번마다 배수 +1.
+    pub step: u32,
+    /// 배수 상한.
+    pub max: i32,
+    /// 이 간격(ms) 안에 이어진 사건만 연속으로 본다.
+    pub window_ms: u64,
+    /// 속도 HUD 표시.
+    pub hud: bool,
+    /// HUD 자리(영역 안 9자리 · 기본 우상단).
+    pub hud_pos: HudPos,
+    /// 마지막 가속 사건 뒤 HUD가 그대로 보이는 시간.
+    pub hud_hold_ms: u64,
+    /// 그 뒤 서서히 사라지는 시간.
+    pub hud_fade_ms: u64,
+}
+
+impl Default for FastScroll {
+    /// 부품 기본 = **끔**(호스트가 설정으로 켠다 — 기존 스크롤 동작·시험을 바꾸지 않는다).
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            step: 5,
+            max: 8,
+            window_ms: 160,
+            hud: true,
+            hud_pos: HudPos::TopRight,
+            hud_hold_ms: 250,
+            hud_fade_ms: 600,
+        }
+    }
+}
+
+static FAST: std::sync::RwLock<FastScroll> = std::sync::RwLock::new(FastScroll {
+    enabled: false,
+    step: 5,
+    max: 8,
+    window_ms: 160,
+    hud: true,
+    hud_pos: HudPos::TopRight,
+    hud_hold_ms: 250,
+    hud_fade_ms: 600,
+});
+
+/// 전역 고속 스크롤 설정을 바꾼다(설정 즉시 적용).
+pub fn set_fast_scroll(cfg: FastScroll) {
+    if let Ok(mut g) = FAST.write() {
+        *g = cfg;
+    }
+}
+
+/// 현재 전역 고속 스크롤 설정.
+#[must_use]
+pub fn fast_scroll() -> FastScroll {
+    FAST.read().map(|g| *g).unwrap_or_default()
+}
+
+/// ★ **속도 HUD 부품**(nexa-sql 09-30 "가속 중이면 영역 우상단에 속도를 플래시로 · 멈추면 지정 시간에 서서히"): 가속 사건마다
+/// `note(k)` — 배수 > 1이면 `×k`를 보이고, 마지막 사건 뒤 `hud_hold_ms`가 지나면(또는 배수가 1로 돌아오면) `hud_fade_ms` 동안
+/// 제곱 감속으로 사라진다. 스크롤 자체에는 관성이 없다(사건마다 즉시 이동 · 멈추면 바로 멈춤) — HUD만 늦게 사라진다.
+#[derive(Debug, Clone, Default)]
+pub struct SpeedHud {
+    factor: i32,
+    last: Option<std::time::Instant>,
+    fade_from: Option<std::time::Instant>,
+}
+
+impl SpeedHud {
+    /// 가속 사건 하나(배수 `k`).
+    pub fn note(&mut self, k: i32, cfg: &FastScroll) {
+        self.note_at(k, cfg, std::time::Instant::now());
+    }
+
+    pub fn note_at(&mut self, k: i32, cfg: &FastScroll, now: std::time::Instant) {
+        if !cfg.hud || !cfg.enabled {
+            self.clear();
+            return;
+        }
+        if k > 1 {
+            self.factor = k;
+            self.last = Some(now);
+            self.fade_from = None;
+        } else if self.last.is_some() && self.fade_from.is_none() {
+            // 가속이 끊겼다(1배로) → 지금부터 사라진다.
+            self.fade_from = Some(now);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.last = None;
+        self.fade_from = None;
+    }
+
+    #[must_use]
+    pub fn visible(&self) -> bool {
+        self.last.is_some()
+    }
+
+    /// 지금의 세기 0..=1(없으면 None). 순수 — 상태를 바꾸지 않는다.
+    #[must_use]
+    pub fn alpha_at(&self, now: std::time::Instant, cfg: &FastScroll) -> Option<f32> {
+        let last = self.last?;
+        let fade_from = match self.fade_from {
+            Some(f) => f,
+            None => {
+                let held = now.saturating_duration_since(last).as_millis() as u64;
+                if held < cfg.hud_hold_ms {
+                    return Some(1.0);
+                }
+                last + std::time::Duration::from_millis(cfg.hud_hold_ms)
+            }
+        };
+        let f = now.saturating_duration_since(fade_from).as_millis() as u64;
+        let fade = cfg.hud_fade_ms.max(1);
+        if f >= fade {
+            return None;
+        }
+        let t = f as f32 / fade as f32;
+        Some(1.0 - t * t)
+    }
+
+    /// 호스트 tick — 사라지는 중이면 `true`(다시 그려야 한다) · 다 사라지면 상태를 지우고 `true` 한 번.
+    pub fn tick(&mut self, now: std::time::Instant, cfg: &FastScroll) -> bool {
+        if self.last.is_none() {
+            return false;
+        }
+        match self.alpha_at(now, cfg) {
+            None => {
+                self.clear();
+                true
+            }
+            Some(a) => a < 1.0,
+        }
+    }
+
+    /// 그리기 — `area` 안 `cfg.hud_pos` 자리에 캡슐 `×k`(세기만큼 투명).
+    pub fn paint(
+        &self,
+        ctx: &mut dyn DrawCtx,
+        theme: &Theme,
+        area: Rect,
+        scale: f32,
+        cfg: &FastScroll,
+    ) {
+        let Some(a) = self.alpha_at(std::time::Instant::now(), cfg) else {
+            return;
+        };
+        if a < 0.08 {
+            return;
+        }
+        let label = format!("×{}", self.factor);
+        // ★ 크기(사용자 09-30) — 처음 50 %로 줄였다가 다시 50 % 키움 = 호출자 글꼴 높이의 75 %.
+        let base_h = ctx.text_height();
+        // (09-30 "50 % 키워서") 글꼴 = 호출자 높이의 75 % · 여백 6/3px · 가장자리 8px.
+        ctx.select_font_sized(FontSlot::Base, false, -(base_h as f32) * 0.25);
+        let th_txt = ctx.text_height();
+        let tw = ctx.text_width(&label);
+        let (px, py) = (sc(6, scale), sc(3, scale));
+        let (w, h) = (tw + px * 2, th_txt + py * 2);
+        let m = sc(8, scale);
+        let (l, c, r) = (area.x + m, area.x + (area.w - w) / 2, area.right() - m - w);
+        let (t, mid, b) = (area.y + m, area.y + (area.h - h) / 2, area.bottom() - m - h);
+        let (x, y) = match cfg.hud_pos {
+            HudPos::TopLeft => (l, t),
+            HudPos::TopCenter => (c, t),
+            HudPos::TopRight => (r, t),
+            HudPos::MidLeft => (l, mid),
+            HudPos::MidRight => (r, mid),
+            HudPos::BottomLeft => (l, b),
+            HudPos::BottomCenter => (c, b),
+            HudPos::BottomRight => (r, b),
+            _ => (c, mid),
+        };
+        let rect = Rect::new(x.max(area.x), y.max(area.y), w, h);
+        // 배경 60 % 투명(= 40 % 불투명 · 페이드 세기 곱) · 글자 = **테마 글자색**(라이트 = 어두운 글자 · 다크 = 밝은 글자 · 09-30
+        //   "흰색이라 식별이 어렵다 · 투명도 더 낮게") — 페이드 후반에만 캡슐 색 쪽으로 섞어 사라진다.
+        ctx.fill_round_rect_alpha(rect, h / 2, theme.accent, 0.4 * a);
+        if a > 0.35 {
+            let fg = if a >= 0.85 {
+                theme.text
+            } else {
+                theme
+                    .accent
+                    .lerp(theme.text, ((a - 0.35) / 0.5).clamp(0.0, 1.0))
+            };
+            ctx.text(rect.x + px, rect.y + py, rect, &label, fg);
+        }
+        ctx.select_font(FontSlot::Base, false);
+    }
+}
+
+/// ★ **고속 스크롤 가속 부품**(nexa-sql 09-30 "상/하 이동시 고속 스크롤") — 같은 방향의 사건이 짧은 간격으로 이어지면
+/// 한 번의 이동량을 배수로 키운다(휠 틱 · 키 자동 반복 공통). 사건마다 `factor(dir)` 하나만 부른다 — 큐·타이머 없음.
+///
+/// 규칙: 이전 사건과 방향이 같고 간격이 [`ScrollAccel::WINDOW_MS`] 안이면 연속 횟수 +1, 아니면 0으로. 배수 =
+/// `1 + 연속/STEP`(최대 [`ScrollAccel::MAX`]). 처음 몇 번은 그대로(정확한 한 줄 이동이 먼저) · 오래 누르거나 빨리 돌릴 때만 빨라진다.
+#[derive(Debug, Clone)]
+pub struct ScrollAccel {
+    last: Option<std::time::Instant>,
+    dir: i32,
+    streak: u32,
+}
+
+impl Default for ScrollAccel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScrollAccel {
+    pub fn new() -> Self {
+        Self {
+            last: None,
+            dir: 0,
+            streak: 0,
+        }
+    }
+
+    /// 사건 하나(`dir` = 부호만 본다 · 0 = 리셋) → 이번 이동에 곱할 배수(1 = 가속 없음). 전역 설정([`fast_scroll`])을 쓴다.
+    pub fn factor(&mut self, dir: i32) -> i32 {
+        let cfg = fast_scroll();
+        self.factor_cfg(dir, &cfg)
+    }
+
+    /// 설정을 넘기는 판(영역별 override).
+    pub fn factor_cfg(&mut self, dir: i32, cfg: &FastScroll) -> i32 {
+        self.factor_at(dir, std::time::Instant::now(), cfg)
+    }
+
+    /// 시각·설정을 밖에서 주는 판(시험 · 순수).
+    pub fn factor_at(&mut self, dir: i32, now: std::time::Instant, cfg: &FastScroll) -> i32 {
+        let d = dir.signum();
+        if d == 0 || !cfg.enabled {
+            self.reset();
+            return 1;
+        }
+        let quick = self
+            .last
+            .is_some_and(|t| now.duration_since(t).as_millis() <= u128::from(cfg.window_ms));
+        if quick && d == self.dir {
+            self.streak = self.streak.saturating_add(1);
+        } else {
+            self.streak = 0;
+        }
+        self.dir = d;
+        self.last = Some(now);
+        (1 + (self.streak / cfg.step.max(1)) as i32).min(cfg.max.max(1))
+    }
+
+    /// 연속을 끊는다(방향 전환·포커스 이탈 등).
+    pub fn reset(&mut self) {
+        self.last = None;
+        self.dir = 0;
+        self.streak = 0;
+    }
+}
 
 /// 오버레이 스크롤바(세로+가로).
 #[derive(Clone, Debug, Default)]
 pub struct ScrollBars {
+    /// ★ 고속 스크롤(전역 [`fast_scroll`] · 영역별 override) — 휠 가속기 + 속도 HUD.
+    accel: ScrollAccel,
+    hud: SpeedHud,
+    fast_override: Option<FastScroll>,
     hover: Option<Axis>,
     /// 드래그 중: (축, 잡은 지점 오프셋 = 커서 - 썸 시작).
     drag: Option<(Axis, i32)>,
@@ -84,6 +351,31 @@ impl ScrollBars {
     /// **프로그램적 표시** — 사용자 입력이 아니라 코드가 스크롤을 옮겼을 때 부른다
     /// (타이핑으로 가로 스크롤이 따라붙는 경우 등). 이걸 부르지 않으면 막대가
     /// `on_event` 전까지 숨어 있어 "스크롤이 생기지 않는다"로 보인다(08-10 지적).
+    /// 이 영역만의 고속 스크롤 설정(None = 전역 [`fast_scroll`]). 예 = 결과 그리드 한 단계 더 빠르게.
+    pub fn set_fast_override(&mut self, cfg: Option<FastScroll>) {
+        self.fast_override = cfg;
+        self.accel.reset();
+        self.hud.clear();
+    }
+
+    /// 지금 이 영역에 적용되는 고속 스크롤 설정.
+    #[must_use]
+    pub fn fast_cfg(&self) -> FastScroll {
+        self.fast_override.unwrap_or_else(fast_scroll)
+    }
+
+    /// 키 등 휠 밖의 가속 사건을 HUD에 알린다(배수 `k`).
+    pub fn note_fast(&mut self, k: i32) {
+        let cfg = self.fast_cfg();
+        self.hud.note(k, &cfg);
+    }
+
+    /// 속도 HUD(호스트가 자기 영역에 직접 그릴 때).
+    #[must_use]
+    pub fn hud(&self) -> &SpeedHud {
+        &self.hud
+    }
+
     pub fn show(&mut self) {
         self.wake(Axis::V);
         self.wake(Axis::H);
@@ -174,7 +466,11 @@ impl ScrollBars {
         let (mut ox, mut oy) = (off_x, off_y);
         match *ev {
             InputEvent::Wheel { delta } => {
-                oy -= delta / 3;
+                // ★ 고속 스크롤: 같은 방향의 틱이 빨리 이어지면 배수(전역 설정 또는 영역 override) + HUD.
+                let cfg = self.fast_cfg();
+                let k = self.accel.factor_cfg(-delta, &cfg);
+                self.hud.note(k, &cfg);
+                oy -= delta / 3 * k;
                 self.wake(Axis::V); // 0/1→1단계 + 카운트다운 리셋 — 세로만
                 let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                 (ox, oy, Self::v_needed(vp, content_h))
@@ -329,6 +625,9 @@ impl ScrollBars {
     pub fn tick(&mut self, now_ms: u64) -> bool {
         let delay = hide_delay_ms();
         let mut redraw = core::mem::take(&mut self.dirty);
+        // 속도 HUD가 사라지는 중이면 계속 그린다.
+        let cfg = self.fast_cfg();
+        redraw |= self.hud.tick(std::time::Instant::now(), &cfg);
         for axis in [Axis::V, Axis::H] {
             let i = axis.idx();
             let engaged = matches!(self.hover, Some(a) if a == axis)
@@ -361,6 +660,8 @@ impl ScrollBars {
         off_y: i32,
         scale: f32,
     ) {
+        // 속도 HUD(막대 표시 여부와 무관 · 영역 = 뷰포트).
+        self.hud.paint(ctx, theme, vp, scale, &self.fast_cfg());
         if !self.is_visible() {
             return;
         }
@@ -698,5 +999,115 @@ mod tests {
         assert!(sb.tick(1), "호버 진입 = 재그리기 요청");
         sb.on_event(&mv(0, 0), vp(), 200, 400, 0, 0, 1.0);
         assert!(sb.tick(2), "호버 이탈 = 재그리기 요청");
+    }
+
+    /// ★ 가속 부품(설정 넘김 · 순수): 처음 step번은 1배 · 같은 방향이 빨리 이어지면 배수 증가 · 방향 바꾸면 리셋 · 간격이 길면
+    /// 리셋 · 상한 max · 꺼져 있으면 늘 1.
+    #[test]
+    fn scroll_accel_streak_rules() {
+        use std::time::{Duration, Instant};
+        let cfg = FastScroll {
+            enabled: true,
+            step: 5,
+            max: 8,
+            ..FastScroll::default()
+        };
+        let mut a = ScrollAccel::new();
+        let t0 = Instant::now();
+        let mut t = t0;
+        let mut seen = Vec::new();
+        for _ in 0..15 {
+            seen.push(a.factor_at(1, t, &cfg));
+            t += Duration::from_millis(40);
+        }
+        assert_eq!(&seen[..5], &[1; 5], "처음은 그대로: {seen:?}");
+        assert_eq!(seen[5], 2, "{seen:?}");
+        assert_eq!(seen[10], 3, "{seen:?}");
+        assert_eq!(a.factor_at(-1, t, &cfg), 1, "방향 전환 = 1");
+        for _ in 0..5 {
+            t += Duration::from_millis(40);
+            a.factor_at(-1, t, &cfg);
+        }
+        assert_eq!(a.factor_at(-1, t + Duration::from_millis(40), &cfg), 2);
+        assert_eq!(
+            a.factor_at(-1, t + Duration::from_millis(cfg.window_ms + 500), &cfg),
+            1,
+            "간격이 길면 리셋"
+        );
+        let mut b = ScrollAccel::new();
+        let mut t = t0;
+        let mut last = 1;
+        for _ in 0..200 {
+            last = b.factor_at(1, t, &cfg);
+            t += Duration::from_millis(10);
+        }
+        assert_eq!(last, cfg.max, "상한");
+        let off = FastScroll::default();
+        let mut c = ScrollAccel::new();
+        for _ in 0..30 {
+            assert_eq!(c.factor_at(1, t, &off), 1, "꺼짐 = 늘 1");
+            t += Duration::from_millis(10);
+        }
+    }
+
+    /// ScrollBars 고속 휠(영역 override): 빠른 틱이 이어지면 이동량이 커진다 · 끄면 늘 delta/3 · HUD = 가속 중 1.0 → hold 뒤
+    /// fade 동안 줄다가 사라짐 · HUD 끔이면 안 보인다.
+    #[test]
+    fn scrollbars_fast_wheel_multiplies() {
+        use std::time::{Duration, Instant};
+        let vp = Rect::new(0, 0, 100, 100);
+        let mut slow = ScrollBars::new();
+        let mut fast = ScrollBars::new();
+        fast.set_fast_override(Some(FastScroll {
+            enabled: true,
+            ..FastScroll::default()
+        }));
+        let (mut ys, mut yf) = (0, 0);
+        for _ in 0..30 {
+            ys = slow
+                .on_event(
+                    &InputEvent::Wheel { delta: -120 },
+                    vp,
+                    100,
+                    100_000,
+                    0,
+                    ys,
+                    1.0,
+                )
+                .1;
+            yf = fast
+                .on_event(
+                    &InputEvent::Wheel { delta: -120 },
+                    vp,
+                    100,
+                    100_000,
+                    0,
+                    yf,
+                    1.0,
+                )
+                .1;
+        }
+        assert_eq!(ys, 30 * 40);
+        assert!(yf > ys, "fast {yf} > slow {ys}");
+        assert!(fast.hud().visible());
+        let cfg = fast.fast_cfg();
+        let now = Instant::now();
+        assert_eq!(fast.hud().alpha_at(now, &cfg), Some(1.0));
+        let mid = now + Duration::from_millis(cfg.hud_hold_ms + cfg.hud_fade_ms / 2);
+        let a = fast.hud().alpha_at(mid, &cfg).expect("fading");
+        assert!(a > 0.0 && a < 1.0, "{a}");
+        let end = now + Duration::from_millis(cfg.hud_hold_ms + cfg.hud_fade_ms + 5);
+        assert_eq!(fast.hud().alpha_at(end, &cfg), None);
+        let mut h = SpeedHud::default();
+        h.note_at(
+            4,
+            &FastScroll {
+                enabled: true,
+                hud: false,
+                ..FastScroll::default()
+            },
+            now,
+        );
+        assert!(!h.visible());
     }
 }
