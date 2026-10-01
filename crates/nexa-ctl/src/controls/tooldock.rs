@@ -185,6 +185,10 @@ pub struct ToolDock {
     hover_grip: Option<usize>,
     drag: Option<Drag>,
     actions: Vec<DockAction>,
+    /// ★ 그룹 사각형이 낡았다(10-01 nexa-sql ⑲): 글자 항목의 폭은 그릴 때 실측되는데(`Toolbar::label_w`) 글이 바뀌면 그룹 폭이
+    /// 달라져 항목이 사각형 밖으로 나간다 — 마우스 라우팅이 "그룹 사각형 안"이라 클릭이 안 닿았다. `paint`가 표시하고
+    /// 다음 사건·[`ToolDock::relayout_if_stale`]에서 다시 배치한다.
+    stale: std::cell::Cell<bool>,
     icon_px: i32,
 }
 
@@ -229,6 +233,7 @@ impl ToolDock {
             hover_grip: None,
             drag: None,
             actions: Vec::new(),
+            stale: std::cell::Cell::new(false),
             icon_px: super::toolbar::DEFAULT_ICON,
         }
     }
@@ -542,6 +547,16 @@ impl ToolDock {
 
     /// 도크 안 그룹 배치 — 행마다 왼쪽 정렬은 왼쪽부터, 오른쪽 정렬은 오른쪽 끝부터. 플로팅 그룹은 자리를 차지하지 않는다.
     /// 행 높이 = 도크 높이 ÷ 행 수(호스트가 아직 높이를 못 맞췄어도 겹치지 않게).
+    /// ★ 그려진 뒤 글자 폭이 바뀌어 그룹 사각형이 낡았으면 다시 배치(10-01) — 호스트가 paint 뒤에 불러 화면도 맞춘다. 반환 = 배치했는가.
+    pub fn relayout_if_stale(&mut self, inv: &mut Invalidations) -> bool {
+        if !self.stale.replace(false) {
+            return false;
+        }
+        self.relayout();
+        inv.push(self.base.bounds);
+        true
+    }
+
     fn relayout(&mut self) {
         let b = self.base.bounds;
         let grip = self.s(GRIP_W);
@@ -755,6 +770,8 @@ impl Widget for ToolDock {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 글자 폭이 바뀐 뒤 첫 사건이면 먼저 재배치(그룹 사각형 = 지금 폭) — 라우팅이 맞게.
+        self.relayout_if_stale(inv);
         let b = self.base.bounds;
         match *ev {
             InputEvent::MouseDown { x, y, .. } => {
@@ -867,6 +884,19 @@ impl Widget for ToolDock {
         let b = self.base.bounds;
         ctx.fill_rect(b, theme.chrome_bg);
         let ghosted = self.drag.as_ref().filter(|d| d.moved).map(|d| d.gi);
+        // ★ 글자 항목 폭 실측은 툴바 paint에서 — 그려진 뒤 권장 폭이 배치 폭과 다르면 낡음 표시(다음 사건·호스트가 재배치).
+        let check_stale = |dock: &Self| {
+            for &i in &dock.order {
+                if dock.is_floating_idx(i) {
+                    continue;
+                }
+                if dock.bars[i].preferred_width() != dock.bars[i].bounds().w {
+                    dock.stale.set(true);
+                    return;
+                }
+            }
+        };
+        let _ = &check_stale;
         for &i in &self.order {
             if self.is_floating_idx(i) {
                 continue;
@@ -900,6 +930,7 @@ impl Widget for ToolDock {
             }
         }
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
+        check_stale(self);
     }
 }
 
@@ -1114,5 +1145,31 @@ mod drag_cancel_tests {
         // 취소 뒤 MouseUp은 아무 일도 없다.
         d.on_event(&InputEvent::MouseUp { x: 0, y: 0 }, &mut inv);
         assert!(d.take_actions().is_empty());
+    }
+
+    /// ★ 10-01(nexa-sql ⑲): 글자 항목의 글이 길어지면 그룹 사각형이 낡는다 → `relayout_if_stale`가 권장 폭으로 다시.
+    #[test]
+    fn label_growth_relayouts_group() {
+        let g = ToolGroup::new(
+            "t",
+            "T",
+            vec![
+                ToolItem::text("a", "ab").with_dropdown(),
+                ToolItem::text("b", "cd").with_dropdown(),
+            ],
+        );
+        let mut dock = ToolDock::new(vec![g]);
+        let mut inv = Invalidations::default();
+        dock.set_bounds(Rect::new(0, 0, 800, 40), &mut inv);
+        let w0 = dock.bars[0].bounds().w;
+        // 글자 폭 실측이 없는 상태에서는 권장 폭 = 배치 폭.
+        assert_eq!(w0, dock.bars[0].preferred_width());
+        assert!(!dock.relayout_if_stale(&mut inv), "낡지 않음");
+        // 글이 길어졌다고(실측 폭이 커졌다고) 표시 → 낡음.
+        dock.bars[0].items_mut_for_test()[1].label_w.set(200);
+        dock.stale.set(true);
+        assert!(dock.relayout_if_stale(&mut inv));
+        assert_eq!(dock.bars[0].bounds().w, dock.bars[0].preferred_width());
+        assert!(dock.bars[0].bounds().w > w0);
     }
 }

@@ -117,7 +117,7 @@ pub struct ToolItem {
     /// ★ **글자 항목**(09-28 nexa-sql "탭 연결정보"): `icon = Glyph(글)`를 아이콘 슬롯이 아니라 **글 폭만큼** 넓게 그린다.
     /// 폭은 그릴 때 잰다(`label_w` · 물리 px) — 히트 판정·권장 폭은 마지막 실측을 쓴다.
     pub label: bool,
-    label_w: std::cell::Cell<i32>,
+    pub(crate) label_w: std::cell::Cell<i32>,
 }
 
 impl ToolItem {
@@ -331,6 +331,12 @@ impl Toolbar {
 
     /// 보이는 항목을 모두 담는 **권장 폭**(물리 px · 좌우 여백 6 포함) — 툴바 그룹 도크·플로팅 창 크기의 근거(09-17).
     #[must_use]
+    /// 시험용(10-01): 항목 가변 접근(글자 폭 실측 흉내).
+    #[doc(hidden)]
+    pub fn items_mut_for_test(&mut self) -> &mut Vec<ToolItem> {
+        &mut self.items
+    }
+
     pub fn preferred_width(&self) -> i32 {
         let mut w = self.s(6) * 2;
         for (i, it) in self.items.iter().enumerate() {
