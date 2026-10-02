@@ -13,9 +13,28 @@ use crate::theme::Theme;
 #[derive(Default, Debug)]
 pub struct Invalidations {
     rects: Vec<Rect>,
+    /// ★ 틱 요청(dir2 `widget.rs` 이식 · nexa-dir3 105차 10-03): 애니메이션·지연 판정이 있는 위젯이 "다음 프레임에 `tick`을 불러 달라"고
+    /// 신고한다 — 호스트가 자체 타이머 없이 `take_tick()`으로 프레임을 예약한다(위젯은 시계가 없다).
+    tick: bool,
 }
 
 impl Invalidations {
+    /// 다음 프레임 틱 요청(멱등).
+    pub fn request_tick(&mut self) {
+        self.tick = true;
+    }
+
+    /// 틱 요청이 있는가(읽기만).
+    #[must_use]
+    pub fn tick_requested(&self) -> bool {
+        self.tick
+    }
+
+    /// 틱 요청을 꺼내며 지운다(호스트 프레임 예약).
+    pub fn take_tick(&mut self) -> bool {
+        std::mem::take(&mut self.tick)
+    }
+
     /// 더러워진 영역 추가(빈 rect 무시 · 교차분 병합).
     pub fn push(&mut self, rect: Rect) {
         if rect.is_empty() {
@@ -77,5 +96,17 @@ mod tests {
         let mut inv = Invalidations::default();
         inv.push(Rect::new(0, 0, 0, 10));
         assert!(inv.is_empty());
+    }
+
+    #[test]
+    fn tick_request_is_idempotent_and_taken_once() {
+        let mut inv = Invalidations::default();
+        assert!(!inv.tick_requested() && !inv.take_tick());
+        inv.request_tick();
+        inv.request_tick();
+        assert!(inv.tick_requested());
+        assert!(inv.take_tick());
+        assert!(!inv.take_tick(), "꺼내면 지워진다");
+        assert!(inv.is_empty(), "틱은 rect가 아니다");
     }
 }

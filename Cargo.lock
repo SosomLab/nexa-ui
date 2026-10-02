@@ -73,6 +73,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexa-grid"
+version = "0.1.0"
+dependencies = [
+ "nexa-ctl",
+]
+
+[[package]]
 name = "nexa-sys"
 version = "0.1.0"
 

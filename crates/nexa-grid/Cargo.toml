@@ -1,0 +1,16 @@
+[package]
+name = "nexa-grid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "nexa 계열 가상 행 그리드 — VirtualRows<RowSource> 엔진(가상화·컬럼·정렬·선택·계층·인라인 이름 바꾸기·타입어헤드·고속 스크롤·보기 모드) (출처: nexa-dir2/crates/nexa-gui/src/{widgets/rows.rs, columns.rs, edit.rs, fastscroll.rs, typeahead.rs} · docs/21 G-1 · 의존: nexa-ctl)"
+
+[dependencies]
+nexa-ctl = { workspace = true }
+
+[lints]
+workspace = true

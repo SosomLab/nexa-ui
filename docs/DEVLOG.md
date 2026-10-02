@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (105차 · win · nexa-dir3 M2 T-25)** — ★ **`nexa-grid` 크레이트**(docs/21 G-1): dir2 `rows.rs`/`columns.rs`/`edit.rs`/`fastscroll.rs`/`typeahead.rs` 그대로 + `draw::Adapt`(nexa-ctl DrawCtx 어댑터) · nexa-ctl `Invalidations` 틱 요청 추가 · 시험 53(dir2 52 이식) → [journal §3](journal/2026-10-03.md)
 - **2026-10-03 (104차 · win · nexa-dir3 M2 T-22~24)** — ★ `MenuBar` 곁 표 확장(`set_shortcut` 단축키 열 · `set_checked`/`set_radio` ✓● · `set_enabled` · `open_menu_index`) · `ToolItem.checked` + `Toolbar::set_item_checked`(강조색 38 % 블렌드) · `TabBar::set_icons`/`set_tips`/`hover_tip` + `MiddleDown` 소비 · ★ **`StatusBar`** 신규(dir2 chrome.rs 이식 · 바뀔 때만 무효화) · 시험 391 · nexa-sql check ✓ → [journal §2](journal/2026-10-03.md)
 - **2026-10-03 (103차 · win · nexa-dir3 M2 T-20·21)** — ★ `InputEvent::{DoubleClick, MiddleDown, XButton}`(추가만 · 호스트 합성) · `set_wheel_lines`/`wheel_lines`(dir2 이식) · ★ **`RecordCtx`** 공용 기록형 테스트 백엔드(채움·글·클립·둥근·이미지 · `surface_size` · `all_inside`) · 시험 385 · nexa-sql check ✓ → [journal](journal/2026-10-03.md)
 - **2026-10-02 (102차 · mac · nexa-sql 109차)** — 🔧 **`SpeedHud` 크기 = 배율 비례**(nexa-sql 사용자 10-02 "macOS에서 마우스 가속 HUD의 크기가 다르다"): `paint`가 `text_height()`(**물리 px** = 크기 × 배율)를 `select_font_sized`의 증분(**논리 px** · 뒤에 배율이 다시 곱해진다)으로 그대로 넘겨 줄이는 양이 배율만큼 커졌다 — 글꼴 = `1 − 0.25 × scale`(1배 75 % · 1.5배 62.5 % · 2배 50 % · 4배 = 하한 1px) → 배율로 나눠 넘김(1배율에서는 식이 같아 Windows 모양 불변) · 시험 `speed_hud_size_scales_with_dpi`(단위 모형 `ScaleCtx` · 1·1.5·2배 캡슐 크기 · 옛 식이면 2배 = 48×28로 실패) · 맥 Retina 실측 캡슐 47×28 → 55×36 px(논리 높이 18 = Windows 캡처와 같음) · 시험 382.
