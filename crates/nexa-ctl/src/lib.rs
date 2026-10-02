@@ -61,9 +61,10 @@ pub use controls::{
     ScrollBars, SpeedHud, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
     WhitespaceMode, WhitespaceStyle,
 };
+pub use controls::{ProbeCtx, RecordCtx};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
-pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
+pub use event::{set_wheel_lines, wheel_lines, InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};

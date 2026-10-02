@@ -795,6 +795,127 @@ impl DrawCtx for ProbeCtx {
     }
 }
 
+/// ★ **기록형** [`DrawCtx`] 테스트 백엔드(nexa-dir3 CI-104 · 10-03) — 채움·글·클립·둥근 사각형을 모아 두고 단언한다.
+/// 종전에는 시험마다 기록 구조체를 새로 썼다(`tree.rs` `Rec` · `textbox.rs` `RecCtx` · …) — 공용으로 올린다.
+/// 글자 폭 = 글자수 × 7(결정적 · [`ProbeCtx`]와 같다) · `surface_size`는 지정 가능(팝업 클램프 시험).
+/// 픽셀은 비교하지 않는다(글꼴 래스터는 OS마다 다르다) — **사각형·문자열·클립**이 판정 대상이다.
+#[derive(Debug, Default, Clone)]
+pub struct RecordCtx {
+    /// `fill_rect`(알파 채움 포함) 호출 — (rect, color).
+    pub fills: Vec<(Rect, Color)>,
+    /// `text`/`text_opaque` 호출 — (x, y, clip, 문자열).
+    pub texts: Vec<(i32, i32, Rect, String)>,
+    /// `text`/`text_opaque`에 넘어온 클립 전부(순서대로).
+    pub clips: Vec<Rect>,
+    /// `fill_round_rect`(알파 포함) — (rect, radius, color).
+    pub round_rects: Vec<(Rect, i32, Color)>,
+    /// `stroke_round_rect`(알파 포함) — (rect, radius, color).
+    pub strokes: Vec<(Rect, i32, Color)>,
+    /// `polyline`(클립 포함) 호출 수.
+    pub polylines: usize,
+    /// `image`/`image_scaled` 호출 — 그려진 사각형.
+    pub images: Vec<Rect>,
+    /// 표면 크기(`None` = 모름).
+    pub surface: Option<(i32, i32)>,
+    /// 글자 높이(기본 16).
+    pub line_h: i32,
+}
+
+impl RecordCtx {
+    /// 표면 크기를 아는 기록기(팝업·툴팁 클램프 시험).
+    #[must_use]
+    pub fn with_surface(w: i32, h: i32) -> Self {
+        RecordCtx {
+            surface: Some((w, h)),
+            line_h: 16,
+            ..RecordCtx::default()
+        }
+    }
+
+    /// 기록 전부 비우기(한 기록기로 여러 프레임을 볼 때).
+    pub fn clear(&mut self) {
+        self.fills.clear();
+        self.texts.clear();
+        self.clips.clear();
+        self.round_rects.clear();
+        self.strokes.clear();
+        self.polylines = 0;
+        self.images.clear();
+    }
+
+    /// 그려진 문자열 전부(순서대로).
+    pub fn strings(&self) -> impl Iterator<Item = &str> + '_ {
+        self.texts.iter().map(|(_, _, _, s)| s.as_str())
+    }
+
+    /// 이 문자열(부분 일치)을 그렸는가.
+    #[must_use]
+    pub fn drew_text(&self, needle: &str) -> bool {
+        self.strings().any(|s| s.contains(needle))
+    }
+
+    /// 모든 사각형(채움·둥근·테두리·이미지)이 `bounds` 안인가 — "표면 밖 그리기 0" 판정.
+    #[must_use]
+    pub fn all_inside(&self, bounds: Rect) -> bool {
+        let inside = |r: &Rect| {
+            r.is_empty()
+                || (r.x >= bounds.x
+                    && r.y >= bounds.y
+                    && r.right() <= bounds.right()
+                    && r.bottom() <= bounds.bottom())
+        };
+        self.fills.iter().all(|(r, _)| inside(r))
+            && self.round_rects.iter().all(|(r, _, _)| inside(r))
+            && self.strokes.iter().all(|(r, _, _)| inside(r))
+            && self.images.iter().all(inside)
+            && self.clips.iter().all(inside)
+    }
+}
+
+impl DrawCtx for RecordCtx {
+    fn surface_size(&self) -> Option<(i32, i32)> {
+        self.surface
+    }
+    fn fill_rect(&mut self, r: Rect, c: Color) {
+        self.fills.push((r, c));
+    }
+    fn text_opaque(&mut self, x: i32, y: i32, clip: Rect, t: &str, _f: Color, b: Color) {
+        self.fills.push((clip, b));
+        self.clips.push(clip);
+        self.texts.push((x, y, clip, t.to_string()));
+    }
+    fn text(&mut self, x: i32, y: i32, clip: Rect, t: &str, _f: Color) {
+        self.clips.push(clip);
+        self.texts.push((x, y, clip, t.to_string()));
+    }
+    fn text_width(&mut self, text: &str) -> i32 {
+        text.chars().count() as i32 * 7
+    }
+    fn text_height(&mut self) -> i32 {
+        if self.line_h > 0 {
+            self.line_h
+        } else {
+            16
+        }
+    }
+    fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
+        self.round_rects.push((rect, radius, color));
+    }
+    fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, _width: f32) {
+        self.strokes.push((rect, radius, color));
+    }
+    fn polyline(&mut self, _pts: &[(i32, i32)], _color: Color, _width: f32) {
+        self.polylines += 1;
+    }
+    fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, _clip: Rect) {
+        self.images
+            .push(Rect::new(x, y, img.w as i32, img.h as i32));
+    }
+    fn image_scaled(&mut self, dst: Rect, _img: &crate::theme::IconImage, _clip: Rect) {
+        self.images.push(dst);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,5 +934,35 @@ mod tests {
     #[test]
     fn label_side_default_is_right() {
         assert_eq!(LabelSide::default(), LabelSide::Right);
+    }
+
+    /// 기록기: 채움·글·클립이 순서대로 남고 · `all_inside`가 표면 밖 사각형을 잡는다 · `clear`로 비운다.
+    #[test]
+    fn record_ctx_collects_and_judges_bounds() {
+        let mut rec = RecordCtx::with_surface(100, 50);
+        assert_eq!(rec.surface_size(), Some((100, 50)));
+        rec.fill_rect(Rect::new(0, 0, 10, 10), Color(0xFF000000));
+        rec.text(2, 2, Rect::new(0, 0, 50, 16), "hello", Color(0xFFFFFFFF));
+        rec.text_opaque(
+            2,
+            20,
+            Rect::new(0, 20, 50, 16),
+            "월드",
+            Color(0xFFFFFFFF),
+            Color(0xFF101010),
+        );
+        assert_eq!(rec.fills.len(), 2, "text_opaque는 배경 채움도 남긴다");
+        assert_eq!(rec.texts.len(), 2);
+        assert_eq!(rec.clips.len(), 2);
+        assert!(rec.drew_text("hell") && rec.drew_text("월드") && !rec.drew_text("x"));
+        assert_eq!(rec.text_width("월드"), 14);
+        assert!(rec.all_inside(Rect::new(0, 0, 100, 50)));
+        rec.fill_round_rect(Rect::new(90, 40, 20, 20), 4, Color(0));
+        assert!(
+            !rec.all_inside(Rect::new(0, 0, 100, 50)),
+            "표면 밖 둥근 사각형"
+        );
+        rec.clear();
+        assert!(rec.fills.is_empty() && rec.texts.is_empty() && rec.round_rects.is_empty());
     }
 }

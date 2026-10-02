@@ -113,6 +113,50 @@ pub enum InputEvent {
         /// y.
         y: i32,
     },
+    /// ★ 더블클릭(호스트가 OS 더블클릭 시간·거리로 **합성** — 파일 열기·폴더 진입·탭 닫기 · nexa-dir3 UIK-211 · 10-03).
+    /// 앞선 `MouseDown`/`MouseUp` 쌍은 그대로 보내고 둘째 `MouseDown` 자리에 이것이 온다(소비자마다 400 ms 판정을 복제하지 않게).
+    DoubleClick {
+        /// x.
+        x: i32,
+        /// y.
+        y: i32,
+        /// 범위 선택.
+        shift: bool,
+        /// 주 수식키.
+        primary: bool,
+    },
+    /// 가운데 버튼 누름(탭 닫기 · 새 탭에서 열기 — dir2 CMD-4xx).
+    MiddleDown {
+        /// x.
+        x: i32,
+        /// y.
+        y: i32,
+    },
+    /// 마우스 X 버튼(뒤로/앞으로 — dir2 CMD-421). `forward` = X2.
+    XButton {
+        /// x.
+        x: i32,
+        /// y.
+        y: i32,
+        /// X2(앞으로)면 참 · X1(뒤로)면 거짓.
+        forward: bool,
+    },
+}
+
+/// 휠 노치당 줄 수(dir2 `nexa-gui/event.rs` 이식 · nexa-dir3 10-03 — Windows `SPI_GETWHEELSCROLLLINES` 존중 · 다른 OS는 기본 3).
+/// 호스트가 기동 시 [`set_wheel_lines`]로 넣고, 스크롤 영역이 노치·픽셀 환산에 쓴다. 프로세스 전역(설정 스위치 문법).
+static WHEEL_LINES_SYS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(3);
+
+/// 시스템 값 주입(≤ 0 = 페이지 단위 → 10줄로 환산 · 1~20 클램프).
+pub fn set_wheel_lines(n: i32) {
+    let n = if n <= 0 { 10 } else { n.min(20) };
+    WHEEL_LINES_SYS.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 노치당 줄 수.
+#[must_use]
+pub fn wheel_lines() -> i32 {
+    WHEEL_LINES_SYS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// 분수 노치 휠 누적기 — 트랙패드 분수 delta를 잔여 누적(이월 손실 없음).
@@ -160,5 +204,45 @@ mod tests {
             total += w.add(30, 3);
         }
         assert_eq!(total, 9);
+    }
+
+    /// 휠 줄 수 전역: 기본 3 · 페이지 단위(≤ 0) = 10 · 상한 20. 전역이라 한 시험에서 순서대로 검사하고 기본으로 되돌린다.
+    #[test]
+    fn wheel_lines_clamps_and_restores() {
+        assert_eq!(wheel_lines(), 3);
+        set_wheel_lines(-1);
+        assert_eq!(wheel_lines(), 10);
+        set_wheel_lines(99);
+        assert_eq!(wheel_lines(), 20);
+        set_wheel_lines(3);
+        assert_eq!(wheel_lines(), 3);
+    }
+
+    /// 새 변형은 기존 변형과 구분된다(소비자가 `_ =>`로 흘려도 컴파일되고, 쓰면 좌표를 꺼낼 수 있다).
+    #[test]
+    fn new_mouse_variants_carry_coordinates() {
+        let d = InputEvent::DoubleClick {
+            x: 3,
+            y: 4,
+            shift: false,
+            primary: true,
+        };
+        let m = InputEvent::MiddleDown { x: 5, y: 6 };
+        let xb = InputEvent::XButton {
+            x: 7,
+            y: 8,
+            forward: true,
+        };
+        assert_ne!(
+            d,
+            InputEvent::MouseDown {
+                x: 3,
+                y: 4,
+                shift: false,
+                primary: true
+            }
+        );
+        assert!(matches!(m, InputEvent::MiddleDown { x: 5, y: 6 }));
+        assert!(matches!(xb, InputEvent::XButton { forward: true, .. }));
     }
 }
