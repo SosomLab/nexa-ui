@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| fix/speed-hud-dpi-scale | 2026-10-02 | 2026-10-02 → main(삭제) | 1 | 102차: `SpeedHud` 크기 = 배율 비례(물리 px 높이 → 논리 px 증분 = 배율로 나눔 · 2배율 글꼴 50 % → 75 %) · 시험 `speed_hud_size_scales_with_dpi` — nexa-sql 109차 mac |
 | feat/select-all-keep-click-guard | 2026-09-30 | 2026-09-30 → main(삭제) | 1 | 100차: `TextBox::set_select_all_keep_view` · `Button`/`Toolbar` 빠른 두 번 누름 차단(`set_default_click_guard_ms` · `set_rapid`) — nexa-sql 108차 |
 | feat/ctxmenu-select | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 97차: `ContextMenu::select(i)` = 프로그램 선택(hover · 보이게 스크롤 · 활성만) — nexa-sql 완성 팝업 건너편 컬럼(09-29) |
 | feat/textbox-keep-view | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 95~96차: `TextBox::set_text_keep_view`(본문 교체 + 캐럿 줄·열·세로 스크롤 유지) · 공백 표식 = 글자 칸 안 클립 · 좁은 탭 = 선(nexa-sql 포맷 미리보기 09-29) |

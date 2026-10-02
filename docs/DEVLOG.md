@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-02 (102차 · mac · nexa-sql 109차)** — 🔧 **`SpeedHud` 크기 = 배율 비례**(nexa-sql 사용자 10-02 "macOS에서 마우스 가속 HUD의 크기가 다르다"): `paint`가 `text_height()`(**물리 px** = 크기 × 배율)를 `select_font_sized`의 증분(**논리 px** · 뒤에 배율이 다시 곱해진다)으로 그대로 넘겨 줄이는 양이 배율만큼 커졌다 — 글꼴 = `1 − 0.25 × scale`(1배 75 % · 1.5배 62.5 % · 2배 50 % · 4배 = 하한 1px) → 배율로 나눠 넘김(1배율에서는 식이 같아 Windows 모양 불변) · 시험 `speed_hud_size_scales_with_dpi`(단위 모형 `ScaleCtx` · 1·1.5·2배 캡슐 크기 · 옛 식이면 2배 = 48×28로 실패) · 맥 Retina 실측 캡슐 47×28 → 55×36 px(논리 높이 18 = Windows 캡처와 같음) · 시험 382.
 - **2026-09-30 (100차 · win · nexa-sql 108차)** — ★ `TextBox::set_select_all_keep_view`(⌘/Ctrl+A·메뉴 전체 선택 뒤 화면 유지 = 자유 스크롤 표식 · 기본 거짓 · nexa-sql `editor.select_all_view`) · ★ **버튼 빠른 두 번 누름 차단**(`Button::fire_click` · 전역 `set_default_click_guard_ms`(350) · 인스턴스 `set_click_guard_ms` · 연타 허용 `set_rapid` · `Toolbar` 같은 항목 가드 · nexa-sql `ui.click_guard_ms`) · 시험 380.
 - **2026-09-29 (97차 · win · nexa-sql 102차 끝 8)** — `ContextMenu::select(i)` = 프로그램으로 항목을 선택 상태(hover · 보이게 스크롤 · 활성만)로 — nexa-sql 완성 팝업의 건너편 컬럼 1순위 선택(사용자 09-29) · 시험 `select_sets_hover_programmatically`.
 - **2026-09-29 (96차 · win · nexa-sql 102차 끝 7)** — 🔧 `TextBox` 공백 표식은 **그 글자 칸 안에만**(클립) · 탭 칸이 글리프보다 좁으면(정지점 직전) 칸 폭의 가는 선 — `→`가 다음 글자를 덮던 결함(nexa-sql 사용자 09-29) · 시험 `narrow_tab_mark_never_covers_next_char`.

@@ -209,7 +209,10 @@ impl SpeedHud {
         // ★ 크기(사용자 09-30) — 처음 50 %로 줄였다가 다시 50 % 키움 = 호출자 글꼴 높이의 75 %.
         let base_h = ctx.text_height();
         // (09-30 "50 % 키워서") 글꼴 = 호출자 높이의 75 % · 여백 6/3px · 가장자리 8px.
-        ctx.select_font_sized(FontSlot::Base, false, -(base_h as f32) * 0.25);
+        // ★ 단위(10-02 맥 Retina에서 HUD가 작게 보임): `text_height()` = 물리 px · `select_font_sized`의 증분 = 논리 px(뒤에
+        //   배율이 다시 곱해진다) → 배율로 나눠 넘긴다. 나누지 않으면 줄이는 양이 배율만큼 커져 2배율에서 50 %가 된다.
+        let delta = -(base_h as f32 / scale.max(0.01)) * 0.25;
+        ctx.select_font_sized(FontSlot::Base, false, delta);
         let th_txt = ctx.text_height();
         let tw = ctx.text_width(&label);
         let (px, py) = (sc(6, scale), sc(3, scale));
@@ -1109,5 +1112,64 @@ mod tests {
             now,
         );
         assert!(!h.visible());
+    }
+
+    /// 속도 HUD의 크기는 배율에 비례한다(10-02 맥 Retina: 물리 px 높이를 논리 px 증분으로 넘겨 2배율에서 글꼴이
+    /// 75 %가 아니라 50 %가 되던 결함) — 배율 1과 2에서 캡슐 크기가 정확히 2배.
+    #[test]
+    fn speed_hud_size_scales_with_dpi() {
+        use crate::theme::Color;
+        /// 실제 래스터와 같은 단위 모델: 슬롯 크기·증분 = 논리 px · 측정값 = 물리 px(크기 × 배율).
+        struct ScaleCtx {
+            scale: f32,
+            size: f32,
+            capsules: Vec<Rect>,
+        }
+        impl DrawCtx for ScaleCtx {
+            fn select_font(&mut self, _slot: FontSlot, _bold: bool) {
+                self.size = 16.0;
+            }
+            fn select_font_sized(&mut self, slot: FontSlot, bold: bool, delta_px: f32) {
+                self.select_font(slot, bold);
+                self.size = (self.size + delta_px).max(1.0);
+            }
+            fn fill_rect(&mut self, _r: Rect, _c: Color) {}
+            fn text_opaque(&mut self, _x: i32, _y: i32, _c: Rect, _t: &str, _f: Color, _b: Color) {}
+            fn text(&mut self, _x: i32, _y: i32, _c: Rect, _t: &str, _f: Color) {}
+            fn text_width(&mut self, text: &str) -> i32 {
+                (text.chars().count() as f32 * self.size * self.scale * 0.5).round() as i32
+            }
+            fn text_height(&mut self) -> i32 {
+                (self.size * self.scale).round() as i32
+            }
+            fn fill_round_rect(&mut self, rect: Rect, _radius: i32, _color: Color) {
+                self.capsules.push(rect);
+            }
+        }
+        let cfg = FastScroll {
+            enabled: true,
+            hud: true,
+            hud_hold_ms: 60_000,
+            ..FastScroll::default()
+        };
+        let mut hud = SpeedHud::default();
+        hud.note(12, &cfg);
+        let capsule = |scale: f32| {
+            let mut ctx = ScaleCtx {
+                scale,
+                size: 16.0,
+                capsules: Vec::new(),
+            };
+            let area = Rect::new(0, 0, sc(400, scale), sc(300, scale));
+            hud.paint(&mut ctx, &Theme::dark(), area, scale, &cfg);
+            assert_eq!(ctx.capsules.len(), 1, "scale {scale}");
+            ctx.capsules[0]
+        };
+        let (a, b, c) = (capsule(1.0), capsule(2.0), capsule(1.5));
+        // 배율 1: 글꼴 16 → 12(75 %) · 캡슐 높이 = 12 + 3×2.
+        assert_eq!(a.h, 18);
+        assert_eq!((b.w, b.h), (a.w * 2, a.h * 2), "1x {a:?} · 2x {b:?}");
+        // 배율 1.5: 글꼴 18(물리) + 여백 round(4.5) = 5 × 2.
+        assert_eq!(c.h, 28, "1.5x {c:?}");
     }
 }
