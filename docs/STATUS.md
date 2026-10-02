@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-10-03 (103차 · win · nexa-dir3 M2)** — 새 소비자 **nexa-dir3**(크로스플랫폼 파일 탐색기 · dir2 재구현) 착수: `InputEvent` 3변형 추가 · 휠 줄 수 전역 · `RecordCtx` 공용 기록기 · 시험 385. 다음 = MenuBar 체크/단축키 열 · Toolbar checked · TabBar 아이콘·툴팁 · StatusBar · PathBar · `nexa-grid`(dir3 TODO T-22~T-32). 복원 태그 `baseline/pre-nexa-dir3-2026-10-03`.
 - **2026-10-02 (102차 · mac · nexa-sql 109차)** — 🔧 `SpeedHud` 크기 = 배율 비례(`text_height()` 물리 px → `select_font_sized` 논리 px 증분 = 배율로 나눔 · 2배율에서 글꼴 50 % → 75 %) · 시험 `speed_hud_size_scales_with_dpi` · 382. **규칙: 측정값(물리 px)으로 글꼴 증분(논리 px)을 만들 때는 배율로 나눈다.**
 - **2026-09-30 (100차 · win · nexa-sql 108차)** — `TextBox::set_select_all_keep_view` · `Button` 연타 차단(`set_default_click_guard_ms`/`set_click_guard_ms`/`set_rapid`) + `Toolbar` 항목 가드 · 시험 380.
 - **2026-09-29 (97차 · win · nexa-sql 102차 끝 8)** — `ContextMenu::select(i)`(프로그램 선택) · 시험 +1.
