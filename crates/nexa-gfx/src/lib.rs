@@ -13,6 +13,7 @@ pub mod inflate;
 pub mod jpeg;
 pub(crate) mod names;
 pub mod surface;
+pub mod svg;
 pub mod text;
 
 pub use surface::{Color, IconImage, Surface};

@@ -143,7 +143,15 @@ impl DrawCtx for Adapt<'_> {
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
         self.0.polyline(pts, color, width);
     }
-    // push_clip/pop_clip · draw_image: nexa-ctl DrawCtx에 아직 없다(UIC-310·312 · T-31) — 기본 no-op. 이미지는 호스트가 IconImage로 그린다.
+    fn draw_image(&mut self, rect: Rect, hint: &str) {
+        self.0.draw_image_hint(rect, hint);
+    }
+    fn push_clip(&mut self, rect: Rect) {
+        self.0.push_clip(rect);
+    }
+    fn pop_clip(&mut self) {
+        self.0.pop_clip();
+    }
 }
 
 #[cfg(test)]

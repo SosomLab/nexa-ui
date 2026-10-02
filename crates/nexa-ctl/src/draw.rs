@@ -126,6 +126,20 @@ pub trait DrawCtx {
         let _ = (dst, img, clip);
     }
 
+    /// 경로 힌트의 이미지(PNG·BMP·GIF 파일)를 `rect` 안에 **비율 유지 가운데**로 — 디코드·캐시는 백엔드(UIC-312 · nexa-dir3 T-31/T-62).
+    /// 기본 = no-op(측정 전용 백엔드).
+    fn draw_image_hint(&mut self, rect: Rect, hint: &str) {
+        let _ = (rect, hint);
+    }
+
+    /// 클립 영역 교차 push(가로 스크롤 콘텐츠의 번짐 차단 · UIC-310). `pop_clip`과 쌍. 기본 = no-op.
+    fn push_clip(&mut self, rect: Rect) {
+        let _ = rect;
+    }
+
+    /// 직전 `push_clip` 복원. 기본 = no-op.
+    fn pop_clip(&mut self) {}
+
     /// 원/타원 AA 채움. 기본 = no-op.
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         let _ = (rect, color);

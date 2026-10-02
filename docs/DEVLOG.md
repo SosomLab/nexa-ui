@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (108차 · win · nexa-dir3 M5 T-62 C-2/T-31)** — ★ **`nexa-gfx::svg`**(최소 SVG 서브셋 파서 + CPU 스캔라인 래스터: rect/circle/line/polyline/polygon/path(M·L·H·V·C·A·Z)/text · 채움/스트로크(라운드 캡·조인) · nonzero 커버리지 AA · `render`/`render_natural` · 시험 5) · ★ nexa-ctl `DrawCtx::draw_image_hint`(경로 → 디코드 **캐시** `raster::image_cache` · 비율 유지 가운데) + `push_clip`/`pop_clip`(기본 no-op 자리) · nexa-grid `Adapt`가 `draw_image`/클립을 전달(InfoDock 인라인 이미지·이미지 미리보기가 실제로 그려진다) · 시험 green · nexa-sql check ✓ → [journal §5](journal/2026-10-03.md)
 - **2026-10-03 (106차 · win · nexa-dir3 M2 T-26·27)** — ★ **`nexa-explorer` 크레이트**: dir2 `PathBar`·`InfoDock`·`OverlayBars` 그대로 이식(시험 25) · nexa-grid `draw::DrawCtx`에 `push_clip/pop_clip/draw_image/glyph_opaque_lg` · U-2 dock ✅ · F-3 PathBar 승격 ✅ → [journal §4](journal/2026-10-03.md)
 - **2026-10-03 (105차 · win · nexa-dir3 M2 T-25)** — ★ **`nexa-grid` 크레이트**(docs/21 G-1): dir2 `rows.rs`/`columns.rs`/`edit.rs`/`fastscroll.rs`/`typeahead.rs` 그대로 + `draw::Adapt`(nexa-ctl DrawCtx 어댑터) · nexa-ctl `Invalidations` 틱 요청 추가 · 시험 53(dir2 52 이식) → [journal §3](journal/2026-10-03.md)
 - **2026-10-03 (104차 · win · nexa-dir3 M2 T-22~24)** — ★ `MenuBar` 곁 표 확장(`set_shortcut` 단축키 열 · `set_checked`/`set_radio` ✓● · `set_enabled` · `open_menu_index`) · `ToolItem.checked` + `Toolbar::set_item_checked`(강조색 38 % 블렌드) · `TabBar::set_icons`/`set_tips`/`hover_tip` + `MiddleDown` 소비 · ★ **`StatusBar`** 신규(dir2 chrome.rs 이식 · 바뀔 때만 무효화) · 시험 391 · nexa-sql check ✓ → [journal §2](journal/2026-10-03.md)

@@ -589,6 +589,30 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             .blend_image_scaled(dst.x, dst.y, dst.w, dst.h, img, Self::clip_of(clip));
     }
 
+    fn draw_image_hint(&mut self, rect: Rect, hint: &str) {
+        if rect.is_empty() || hint.is_empty() {
+            return;
+        }
+        let Some(img) = image_cache::get(hint) else {
+            return;
+        };
+        // 비율 유지 가운데(축소만 · 작은 그림은 원본 크기).
+        let (iw, ih) = (img.w as f32, img.h as f32);
+        let k = (rect.w as f32 / iw).min(rect.h as f32 / ih).min(1.0);
+        let (dw, dh) = (
+            ((iw * k).round() as i32).max(1),
+            ((ih * k).round() as i32).max(1),
+        );
+        let dst = Rect::new(
+            rect.x + (rect.w - dw) / 2,
+            rect.y + (rect.h - dh) / 2,
+            dw,
+            dh,
+        );
+        self.surface
+            .blend_image_scaled(dst.x, dst.y, dst.w, dst.h, &img, Self::clip_of(rect));
+    }
+
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         if rect.is_empty() {
             return;
@@ -716,6 +740,71 @@ impl RasterCtx<'_, '_, '_> {
                 seg_dist(x, y, ax, ay, bx, by) - half_w
             });
         }
+    }
+}
+
+/// 경로 힌트 → 디코드된 이미지 캐시(스레드 로컬 · 상한 32 · 실패도 기억해 매 프레임 재디코드를 막는다).
+/// 파일이 바뀌면(mtime·길이) 다시 읽는다 — 미리보기 임시 파일은 내용 해시 이름이라 사실상 불변.
+pub mod image_cache {
+    use crate::theme::IconImage;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    const MAX: usize = 32;
+    const MAX_PIXELS: usize = 16 * 1024 * 1024;
+
+    type Stamp = (u64, u64);
+    type Slot = (Stamp, Option<Rc<IconImage>>);
+
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Slot>> = RefCell::new(HashMap::new());
+    }
+
+    fn stamp(path: &str) -> Stamp {
+        std::fs::metadata(path)
+            .map(|m| {
+                let t = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_millis() as u64);
+                (t, m.len())
+            })
+            .unwrap_or((0, 0))
+    }
+
+    /// 경로의 이미지(없거나 디코드 실패 = None).
+    pub fn get(path: &str) -> Option<Rc<IconImage>> {
+        let st = stamp(path);
+        CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if let Some((s, img)) = c.get(path) {
+                if *s == st {
+                    return img.clone();
+                }
+            }
+            if c.len() >= MAX {
+                c.clear();
+            }
+            let img = std::fs::read(path)
+                .ok()
+                .and_then(|b| nexa_gfx::image::decode(&b, MAX_PIXELS).ok())
+                .map(Rc::new);
+            c.insert(path.to_string(), (st, img.clone()));
+            img
+        })
+    }
+
+    /// 캐시 비우기(시험 · 테마 전환 뒤 재렌더).
+    pub fn clear() {
+        CACHE.with(|c| c.borrow_mut().clear());
+    }
+
+    /// 캐시 항목 수(시험).
+    #[must_use]
+    pub fn len() -> usize {
+        CACHE.with(|c| c.borrow().len())
     }
 }
 
