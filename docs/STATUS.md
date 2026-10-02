@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-10-03 (109차 · win · nexa-dir3 M3)** — `svg::render_mask`(툴바 아이콘 알파 마스크).
 - **2026-10-03 (108차 · win · nexa-dir3 M5)** — **`nexa-gfx::svg`**(SVG 서브셋 CPU 래스터) · `DrawCtx::draw_image_hint` + 이미지 캐시 · Adapt 전달. 다음 = RasterCtx 클립 스택(UIC-310) · T-30 SVG 아이콘 소비.
 - **2026-10-03 (106차 · win · nexa-dir3 M2)** — **`nexa-explorer` 신설**(PathBar · InfoDock · OverlayBars · dir2 이식 · 시험 25). 다음 = Tooltip 관리자/Overlay(F-2) · nexa-dlg MessageBox/Prompt/Progress(F-4 잔여) · G-2.
 - **2026-10-03 (105차 · win · nexa-dir3 M2)** — **`nexa-grid` 신설**(G-1 완료 · dir2 가상 행 그리드 엔진 이식 · 시험 53) · nexa-ctl `Invalidations` 틱 요청. 다음 = G-2(`write_cell` · `RowSource::icon` · 타입어헤드/고속 스크롤 nexa-ctl 통일) · PathBar · InfoDock.

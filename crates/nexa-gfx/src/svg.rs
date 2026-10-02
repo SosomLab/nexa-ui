@@ -893,6 +893,27 @@ pub fn render(doc: &Doc, w: u32, h: u32, opts: RenderOpts, font: Option<&Font>) 
     IconImage::from_rgba(w, h, rgba)
 }
 
+/// **알파 마스크**(`w*h` 커버리지 0..255 · 모든 요소를 잉크 하나로 · 색은 버린다) — 툴바 `ToolIcon::Mask`처럼 테마색으로 틴트할 아이콘용
+/// (dir2 `svg_to_hicon` 자리 · nexa-dir3 T-30). 흰 잉크를 검정 배경에 그린 R 채널 = 커버리지.
+#[must_use]
+pub fn render_mask(doc: &Doc, w: u32, h: u32, font: Option<&Font>) -> Vec<u8> {
+    let mut mono = doc.clone();
+    for el in &mut mono.ops {
+        el.color = None;
+    }
+    let img = render(
+        &mono,
+        w,
+        h,
+        RenderOpts {
+            ink: Color::from_rgb(255, 255, 255),
+            bg: Color::from_rgb(0, 0, 0),
+        },
+        font,
+    );
+    img.rgba.chunks_exact(4).map(|p| p[0]).collect()
+}
+
 /// viewBox 크기 그대로(올림) 래스터 — 한 변 `max_side`를 넘으면 `None`(비정상 문서 보호).
 #[must_use]
 pub fn render_natural(
@@ -1004,6 +1025,22 @@ mod tests {
             (r, g, b)
         );
         assert_eq!(px(&img, 10, 10), (255, 255, 255), "스트로크 안쪽은 비었다");
+    }
+
+    /// 알파 마스크: 요소 색을 버리고 잉크 하나 · 채움 안 = 255 · 밖 = 0 · 경계 = 중간.
+    #[test]
+    fn render_mask_coverage() {
+        let svg = r##"<svg viewBox="0 0 8 8"><rect x="2" y="2" width="4" height="4" fill="#ff0000"/><rect x="0" y="6.5" width="8" height="1" fill="#00ff00"/></svg>"##;
+        let doc = parse(svg).expect("parse");
+        let m = render_mask(&doc, 8, 8, None);
+        assert_eq!(m.len(), 64);
+        assert_eq!(m[3 * 8 + 3], 255, "채움 안");
+        assert_eq!(m[0], 0, "밖");
+        assert!(
+            m[6 * 8 + 1] > 90 && m[6 * 8 + 1] < 170,
+            "반 픽셀 띠 = 중간 커버리지: {}",
+            m[6 * 8 + 1]
+        );
     }
 
     /// nonzero: 같은 방향 두 삼각형이 겹쳐도 커버리지는 1을 넘지 않는다(블렌드 포화 없음).
