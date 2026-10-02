@@ -118,6 +118,9 @@ pub struct ToolItem {
     /// 폭은 그릴 때 잰다(`label_w` · 물리 px) — 히트 판정·권장 폭은 마지막 실측을 쓴다.
     pub label: bool,
     pub(crate) label_w: std::cell::Cell<i32>,
+    /// ★ **토글 켜짐**(dir2 GUI-074 · nexa-dir3 103차 10-03): 슬롯 배경을 강조색 38 % 블렌드로 채운다(아이콘 색은 그대로 —
+    /// "파랑 필 + 흰 선" 시안은 dir2에서 원복된 이력). 라디오식 묶음(보기 모드 3)은 호스트가 id마다 `set_item_checked`로 하나만 켠다.
+    pub checked: bool,
 }
 
 impl ToolItem {
@@ -137,7 +140,15 @@ impl ToolItem {
             badge: None,
             label: false,
             label_w: std::cell::Cell::new(0),
+            checked: false,
         }
+    }
+
+    /// 시작부터 켜짐(체이닝) — 호스트가 [`Toolbar::set_item_checked`]로 바꾼다.
+    #[must_use]
+    pub fn checked(mut self, on: bool) -> Self {
+        self.checked = on;
+        self
     }
 
     /// 글자 항목(가변 폭 · 09-28): 현재 값을 글로 보이고 누르면 고르는 자리(nexa-sql 탭 연결정보). 색조·드롭다운·툴팁은 그대로 쓴다.
@@ -456,6 +467,34 @@ impl Toolbar {
         self.items.iter().any(|it| it.id == id && it.enabled)
     }
 
+    /// ★ 토글 켜짐/꺼짐(dir2 GUI-074 `set_checked`) — 바뀌었으면 무효화 + true. 미지 id = false.
+    pub fn set_item_checked(&mut self, id: &str, on: bool, inv: &mut Invalidations) -> bool {
+        if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
+            if it.checked != on {
+                it.checked = on;
+                inv.push(self.base.bounds);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 항목의 토글 상태. 없는 id = false.
+    #[must_use]
+    pub fn item_checked(&self, id: &str) -> bool {
+        self.items.iter().any(|it| it.id == id && it.checked)
+    }
+
+    /// 켜진 항목 id 전부(상태 동기 검증 · 덤프용).
+    #[must_use]
+    pub fn checked_ids(&self) -> Vec<&str> {
+        self.items
+            .iter()
+            .filter(|it| it.checked)
+            .map(|it| it.id.as_str())
+            .collect()
+    }
+
     /// 배지 글자(`None` = 지운다) — 같으면 아무 일도 없다.
     pub fn set_item_badge(&mut self, id: &str, badge: Option<&str>, inv: &mut Invalidations) {
         if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
@@ -681,6 +720,21 @@ impl Toolbar {
             // 식별은 아이콘 색(accent)과 눌림 1px 내림으로.
             let _ = (PRESS_BG_ALPHA, HOVER_BG_ALPHA);
             let pad = self.s(self.slot_pad);
+            // ★ 토글 켜짐 = 슬롯 배경을 강조색 38 % 블렌드(dir2 GUI-074 · 라이트 ≈ #ABCAF9 · 다크 ≈ #2A4A7A) — 아이콘 색은 그대로.
+            if it.checked {
+                let inset = self.s(1);
+                ctx.fill_round_rect_alpha(
+                    Rect::new(
+                        slot.x + inset,
+                        slot.y + inset,
+                        slot.w - inset * 2,
+                        slot.h - inset * 2,
+                    ),
+                    self.s(3),
+                    theme.accent,
+                    0.38,
+                );
+            }
             // 눌림 식별 — 아이콘을 1px 내려 그린다.
             let dy = i32::from(is_pressed);
             // 드롭다운 항목은 오른쪽 DROP_W를 ▾에 내주고 아이콘은 왼쪽 정사각 슬롯에.
@@ -822,6 +876,54 @@ mod tests {
 
     /// 4×4 더미 마스크.
     const MASK4: &[u8] = &[255; 16];
+
+    /// ★ 토글 켜짐(dir2 GUI-074 · nexa-dir3 103차): `set_item_checked`가 바뀔 때만 true + 무효화 · 켜진 항목은 강조색 블렌드 배경(둥근 사각형)이
+    /// 그려지고 꺼진 항목은 안 그려진다 · `checked_ids`.
+    #[test]
+    fn checked_toggle_draws_accent_blend_background() {
+        use crate::controls::RecordCtx;
+        let (mut t, mut inv) = bar();
+        assert!(!t.item_checked("refresh") && t.checked_ids().is_empty());
+        let mut rec = RecordCtx::with_surface(300, 60);
+        t.paint(&mut rec, &Theme::dark());
+        let before = rec
+            .round_rects
+            .iter()
+            .filter(|(_, _, c)| *c == Theme::dark().accent)
+            .count();
+        assert!(t.set_item_checked("refresh", true, &mut inv));
+        assert!(
+            !t.set_item_checked("refresh", true, &mut inv),
+            "같은 값 = 안 바뀜"
+        );
+        assert!(!t.set_item_checked("nope", true, &mut inv), "미지 id");
+        assert!(t.item_checked("refresh") && t.checked_ids() == vec!["refresh"]);
+        rec.clear();
+        t.paint(&mut rec, &Theme::dark());
+        let after = rec
+            .round_rects
+            .iter()
+            .filter(|(_, _, c)| *c == Theme::dark().accent)
+            .count();
+        assert_eq!(after, before + 1, "켜진 슬롯 하나만 블렌드 배경");
+        let slot = t.item_rect("refresh").unwrap();
+        assert!(
+            rec.round_rects
+                .iter()
+                .any(|(r, _, _)| r.x >= slot.x && r.right() <= slot.right()),
+            "슬롯 안"
+        );
+        assert!(t.set_item_checked("refresh", false, &mut inv));
+        rec.clear();
+        t.paint(&mut rec, &Theme::dark());
+        assert_eq!(
+            rec.round_rects
+                .iter()
+                .filter(|(_, _, c)| *c == Theme::dark().accent)
+                .count(),
+            before
+        );
+    }
 
     fn bar() -> (Toolbar, Invalidations) {
         let mut t = Toolbar::new(vec![

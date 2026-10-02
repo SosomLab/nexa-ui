@@ -15,12 +15,13 @@
 //! 가운데 클릭 닫기는 [`InputEvent`]에 버튼 구분이 없어 호스트가 [`TabBar::middle_down`]을 부른다.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
-use super::{draw_chevron_right, Control, ControlBase};
+use super::{draw_chevron_right, image_fit_contain, Control, ControlBase};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, WHEEL_DELTA};
 use crate::geom::{Point, Rect};
-use crate::theme::{Color, Theme};
+use crate::theme::{Color, IconImage, Theme};
 use crate::tokens::{hover_alpha, space, State};
 use crate::widget::{Invalidations, Widget};
 
@@ -103,6 +104,8 @@ const CLOSE_BOX: i32 = 16;
 const PIN_MARK: i32 = 6;
 /// 앞 표식([`TabBadge`]) 상자 한 변(논리 px).
 const BADGE_BOX: i32 = 18;
+/// 탭 아이콘 상자 한 변(논리 px · dir2 탭 아이콘 16).
+const ICON_BOX: i32 = 16;
 /// 휠 1노치당 스크롤(논리 px).
 const WHEEL_STEP: i32 = 48;
 
@@ -129,6 +132,10 @@ pub struct TabBar {
     title_colors: Vec<Option<Color>>,
     /// 탭별 앞 표식(부족분 = None).
     badges: Vec<TabBadge>,
+    /// ★ 탭별 **아이콘**(폴더·드라이브 · dir2 GUI-040 · nexa-dir3 103차 10-03) — 제목 앞 [`ICON_BOX`] 정사각에 contain. 부족분 = None.
+    icons: Vec<Option<Rc<IconImage>>>,
+    /// ★ 탭별 **툴팁 글**(전체 경로 · dir2 GUI-046) — 표시는 호스트([`TabBar::hover_tip`] → `draw_tooltip`). 부족분 = 없음.
+    tips: Vec<String>,
     active: usize,
     multiline: bool,
     show_new: bool,
@@ -180,6 +187,8 @@ impl TabBar {
             tab_colors: Vec::new(),
             title_colors: Vec::new(),
             badges: Vec::new(),
+            icons: Vec::new(),
+            tips: Vec::new(),
             active: 0,
             multiline: false,
             show_new: true,
@@ -339,6 +348,52 @@ impl TabBar {
             self.ensure_active.set(true);
             inv.push(self.base.bounds);
         }
+    }
+
+    /// ★ 탭별 아이콘(인덱스 정렬 · 부족분 = None · 같으면 무효화 없음). 폭은 다음 그리기에서 다시 잰다.
+    pub fn set_icons(&mut self, icons: Vec<Option<Rc<IconImage>>>, inv: &mut Invalidations) {
+        let same = self.icons.len() == icons.len()
+            && self.icons.iter().zip(&icons).all(|(a, b)| match (a, b) {
+                (None, None) => true,
+                (Some(x), Some(y)) => Rc::ptr_eq(x, y),
+                _ => false,
+            });
+        if !same {
+            self.icons = icons;
+            self.ensure_active.set(true);
+            inv.push(self.base.bounds);
+        }
+    }
+
+    /// 탭 `i`의 아이콘.
+    #[must_use]
+    pub fn icon(&self, i: usize) -> Option<&Rc<IconImage>> {
+        self.icons.get(i).and_then(Option::as_ref)
+    }
+
+    /// ★ 탭별 툴팁 글(인덱스 정렬 · 빈 글 = 없음). 그리기에 영향 없어 무효화하지 않는다.
+    pub fn set_tips(&mut self, tips: Vec<String>) {
+        self.tips = tips;
+    }
+
+    /// 탭 `i`의 툴팁 글(없으면 `""`).
+    #[must_use]
+    pub fn tip(&self, i: usize) -> &str {
+        self.tips.get(i).map_or("", String::as_str)
+    }
+
+    /// hover 중인 탭의 툴팁 — `(탭, 글, 탭 사각형)`. 글이 비었거나 탭 위가 아니면 None. 지연·그리기는 호스트(툴바와 같은 규약).
+    #[must_use]
+    pub fn hover_tip(&self) -> Option<(usize, &str, Rect)> {
+        let Some(Zone::Tab(i, _)) = self.hover else {
+            return None;
+        };
+        let tip = self.tip(i);
+        if tip.is_empty() {
+            return None;
+        }
+        let r = self.layout.borrow().tabs.get(i).copied()?;
+        Some((i, tip, r))
     }
 
     /// 탭 `i`의 앞 표식.
@@ -775,7 +830,12 @@ impl TabBar {
                 } else {
                     badge + gap
                 };
-                (pad + bd + m + ctx.text_width(t) + gap + close + pad).min(max_w)
+                let ic = if self.icon(i).is_some() {
+                    self.s(ICON_BOX) + gap
+                } else {
+                    0
+                };
+                (pad + ic + bd + m + ctx.text_width(t) + gap + close + pad).min(max_w)
             })
             .collect();
         let plus_w = if self.show_new { lh } else { 0 };
@@ -943,6 +1003,8 @@ impl Widget for TabBar {
                 Some(Zone::Badge(i)) => self.pending = Some(TabAction::BadgeContext(i)),
                 _ => {}
             },
+            // 가운데 버튼 = 닫기(103차 — `InputEvent::MiddleDown`이 생겨 호스트가 `middle_down`을 따로 부르지 않아도 된다).
+            InputEvent::MiddleDown { x, y } => self.middle_down(x, y, inv),
             InputEvent::MouseMove { x, y } => {
                 if self.drag.is_some() {
                     self.drag_move(x, y, inv);
@@ -1042,8 +1104,17 @@ impl Widget for TabBar {
                     }
                 }
             }
-            // 앞 표식(이미지 버튼) + 핀 점 표식 + 제목.
+            // 아이콘(폴더·드라이브) + 앞 표식(이미지 버튼) + 핀 점 표식 + 제목.
             let mut tx = cell.x + pad;
+            if let Some(img) = self.icon(i) {
+                let isz = self.s(ICON_BOX).min(cell.h.max(1));
+                let boxr = Rect::new(tx, cell.y + (cell.h - isz) / 2, isz, isz);
+                if fully_inside(boxr, clip) {
+                    let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
+                    ctx.image_scaled(fit, img, clip);
+                }
+                tx += isz + gap;
+            }
             let bkind = self.badge(i);
             if bkind != TabBadge::None {
                 let br = self.badge_rect(*cell);
@@ -1197,6 +1268,63 @@ mod tests {
 
     fn bar(titles: &[&str], active: usize) -> (TabBar, Invalidations) {
         bar_sized(titles, active, 600, 28, false)
+    }
+
+    /// ★ dir2 탭 기능(GUI-040·046 · nexa-dir3 103차): 아이콘이 탭 폭을 넓히고 제목 앞에 그려진다 · 툴팁은 hover 중인 탭에서만 ·
+    /// `MiddleDown` 사건으로 닫힌다 · 같은 아이콘 재설정 = 무효화 없음.
+    #[test]
+    fn icons_tips_and_middle_click() {
+        use crate::controls::RecordCtx;
+        let (mut t, _) = bar(&["a", "b"], 0);
+        let w_plain = t.tab_rect(0).unwrap().w;
+        let img = Rc::new(IconImage::swatch(16, (0, 0, 255)));
+        let mut inv = Invalidations::default();
+        t.set_icons(vec![Some(Rc::clone(&img)), None], &mut inv);
+        assert!(!inv.is_empty());
+        let mut inv2 = Invalidations::default();
+        t.set_icons(vec![Some(Rc::clone(&img)), None], &mut inv2);
+        assert!(inv2.is_empty(), "같은 아이콘 = 무효화 없음");
+        let mut rec = RecordCtx::with_surface(600, 28);
+        t.paint(&mut rec, &Theme::dark());
+        let r0 = t.tab_rect(0).unwrap();
+        let r1 = t.tab_rect(1).unwrap();
+        assert_eq!(r0.w, w_plain + 16 + 4, "아이콘 상자 + 간격");
+        assert_eq!(r1.w, w_plain, "아이콘 없는 탭은 그대로");
+        assert_eq!(rec.images.len(), 1, "아이콘 하나");
+        assert!(rec.images[0].x >= r0.x && rec.images[0].right() <= r0.right());
+        assert!(t.icon(0).is_some() && t.icon(1).is_none() && t.icon(9).is_none());
+        // 툴팁: hover 중인 탭 + 글이 있을 때만.
+        t.set_tips(vec!["C:/work/a".into(), String::new()]);
+        assert_eq!(t.tip(0), "C:/work/a");
+        assert_eq!(t.hover_tip(), None, "hover 없음");
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: r0.x + 4,
+                y: r0.y + 4,
+            },
+            &mut inv,
+        );
+        assert_eq!(
+            t.hover_tip().map(|(i, s, r)| (i, s.to_string(), r)),
+            Some((0, "C:/work/a".to_string(), r0))
+        );
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: r1.x + 4,
+                y: r1.y + 4,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.hover_tip(), None, "빈 글 = 없음");
+        // 가운데 클릭 = 닫기(탭 2개 · 잠기지 않음).
+        t.on_event(
+            &InputEvent::MiddleDown {
+                x: r1.x + 4,
+                y: r1.y + 4,
+            },
+            &mut inv,
+        );
+        assert_eq!(t.take_action(), Some(TabAction::Close(1)));
     }
 
     /// 미저장 점(09-28): 바뀔 때만 무효화 · 부족분 = false.

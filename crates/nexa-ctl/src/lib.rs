@@ -61,7 +61,7 @@ pub use controls::{
     ScrollBars, SpeedHud, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
     WhitespaceMode, WhitespaceStyle,
 };
-pub use controls::{ProbeCtx, RecordCtx};
+pub use controls::{ProbeCtx, RecordCtx, StatusBar};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
 pub use event::{set_wheel_lines, wheel_lines, InputEvent, Key, WheelAccum, WHEEL_DELTA};

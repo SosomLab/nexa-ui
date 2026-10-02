@@ -19,6 +19,7 @@ use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 /// 드롭다운 한 줄 — 액션 항목 또는 구분선.
 #[derive(Clone, Debug)]
@@ -101,6 +102,15 @@ pub struct MenuBar {
     /// 드롭다운 항목 라벨 폭 상한(논리 px · nexa-sql 사용자 09-22 "최근 파일 경로가 길면 가운데 …") — 넘는 라벨은
     /// [`crate::draw::ellipsize_middle`]로 줄인다 · 전체 보기 스위치(Alt)면 상한 없이 그대로.
     max_label_w: i32,
+    /// ★ 항목 id → 단축키 표기(오른쪽 열 · `text_dim` · dir2 GUI-063 · nexa-dir3 103차 10-03). 메뉴 정의와 별개로 두어
+    /// 키맵이 바뀌면 `set_shortcut`만 다시 부른다(메뉴 재구성 없음).
+    shortcuts: HashMap<String, String>,
+    /// 항목 id → 체크 상태(dir2 GUI-066 `set_checked`) — 표에 **있는** 항목만 체크 가능 항목으로 그린다.
+    checks: HashMap<String, bool>,
+    /// 체크 대신 **라디오 점**으로 그릴 id(보기 모드·테마·언어 그룹 — 호스트가 그룹의 id마다 `set_checked`로 하나만 켠다).
+    radios: HashSet<String>,
+    /// 메뉴별 단축키 열 폭 실측 캐시(측정 전엔 추정치).
+    measured_sc: RefCell<Vec<i32>>,
 }
 
 impl MenuBar {
@@ -120,6 +130,123 @@ impl MenuBar {
             picked: None,
             measured: RefCell::new((Vec::new(), Vec::new())),
             max_label_w: 480,
+            shortcuts: HashMap::new(),
+            checks: HashMap::new(),
+            radios: HashSet::new(),
+            measured_sc: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// 항목의 단축키 표기(`""` = 지움). 키맵 변경 때 호스트가 다시 부른다 — 메뉴를 다시 만들지 않는다.
+    pub fn set_shortcut(&mut self, id: &str, text: &str) {
+        if text.is_empty() {
+            self.shortcuts.remove(id);
+        } else {
+            self.shortcuts.insert(id.to_string(), text.to_string());
+        }
+        self.measured_sc.borrow_mut().clear();
+    }
+
+    /// 항목의 단축키 표기.
+    #[must_use]
+    pub fn shortcut_of(&self, id: &str) -> Option<&str> {
+        self.shortcuts.get(id).map(String::as_str)
+    }
+
+    /// ★ 체크 상태(dir2 GUI-066) — 최상위·하위 항목 공통(id로 찾는다). 라디오 그룹은 호스트가 id마다 부른다. 열려 있으면 다시 그린다.
+    pub fn set_checked(&mut self, id: &str, on: bool, inv: &mut Invalidations) {
+        if self.checks.insert(id.to_string(), on) != Some(on) && self.is_open() {
+            inv.push(self.popup_bounds());
+        }
+    }
+
+    /// 체크 가능 항목의 상태(표에 없으면 None).
+    #[must_use]
+    pub fn is_checked(&self, id: &str) -> Option<bool> {
+        self.checks.get(id).copied()
+    }
+
+    /// 이 id는 체크(✓) 대신 라디오 점(●)으로 그린다.
+    pub fn set_radio(&mut self, id: &str) {
+        self.radios.insert(id.to_string());
+    }
+
+    /// ★ 활성/비활성(dir2에는 없던 것 — nexa-ctl `Disabled` 변형을 id로 토글 · 최상위·하위 공통). 바뀌었으면 true.
+    pub fn set_enabled(&mut self, id: &str, on: bool, inv: &mut Invalidations) -> bool {
+        fn swap(entries: &mut [MenuEntry], id: &str, on: bool) -> bool {
+            let mut changed = false;
+            for e in entries.iter_mut() {
+                let next = match e {
+                    MenuEntry::Item(it) if !on && it.value == id => {
+                        Some(MenuEntry::Disabled(it.clone()))
+                    }
+                    MenuEntry::Disabled(it) if on && it.value == id => {
+                        Some(MenuEntry::Item(it.clone()))
+                    }
+                    MenuEntry::Sub(_, v) => {
+                        changed |= swap(v, id, on);
+                        None
+                    }
+                    _ => None,
+                };
+                if let Some(n) = next {
+                    *e = n;
+                    changed = true;
+                }
+            }
+            changed
+        }
+        let mut changed = false;
+        for m in &mut self.menus {
+            changed |= swap(&mut m.entries, id, on);
+        }
+        if changed && self.is_open() {
+            inv.push(self.popup_bounds());
+        }
+        changed
+    }
+
+    /// 프로그램으로 `i`번째 최상위 메뉴를 연다(호스트 Alt/F10 진입 · dir2 GUI-062).
+    pub fn open_menu_index(&mut self, i: usize, inv: &mut Invalidations) {
+        if i < self.menus.len() {
+            self.open_menu(i, inv);
+            self.hover_item = self.step_item(None, true);
+        }
+    }
+
+    /// 열린 최상위 메뉴 index.
+    #[must_use]
+    pub fn open_index(&self) -> Option<usize> {
+        self.open
+    }
+
+    /// 메뉴 i의 단축키 열 폭(실측 캐시 → 추정).
+    fn shortcut_w(&self, i: usize) -> i32 {
+        if let Some(w) = self.measured_sc.borrow().get(i) {
+            return *w;
+        }
+        self.menus.get(i).map_or(0, |m| {
+            m.entries
+                .iter()
+                .filter_map(|e| match e {
+                    MenuEntry::Item(it) | MenuEntry::Emph(it) | MenuEntry::Disabled(it) => {
+                        self.shortcuts.get(&it.value)
+                    }
+                    _ => None,
+                })
+                .map(|s| self.estimate_w(s))
+                .max()
+                .unwrap_or(0)
+        })
+    }
+
+    /// 단축키 열이 있으면 라벨과의 사이 간격을 더한 폭.
+    fn shortcut_col(&self, i: usize) -> i32 {
+        let w = self.shortcut_w(i);
+        if w > 0 {
+            w + self.s(24)
+        } else {
+            0
         }
     }
 
@@ -137,6 +264,7 @@ impl MenuBar {
         self.sub_open = None;
         self.hover_sub = None;
         *self.sub_measured.borrow_mut() = None;
+        self.measured_sc.borrow_mut().clear();
         let mut m = self.measured.borrow_mut();
         m.0.clear();
         m.1.clear();
@@ -207,7 +335,8 @@ impl MenuBar {
                 .max()
                 .unwrap_or(0)
         });
-        let w = (content_w + self.s(LEADING_ICON) + self.s(34)).max(self.s(POPUP_MIN_W));
+        let w = (content_w + self.shortcut_col(i) + self.s(LEADING_ICON) + self.s(34))
+            .max(self.s(POPUP_MIN_W));
         Rect::new(lr.x, self.base.bounds.bottom(), w, h)
     }
 
@@ -615,6 +744,24 @@ impl Widget for MenuBar {
                         })
                 })
                 .collect();
+            // 단축키 열 폭(메뉴별 최댓값).
+            *self.measured_sc.borrow_mut() = self
+                .menus
+                .iter()
+                .map(|d| {
+                    d.entries
+                        .iter()
+                        .filter_map(|e| match e {
+                            MenuEntry::Item(it) | MenuEntry::Emph(it) | MenuEntry::Disabled(it) => {
+                                self.shortcuts.get(&it.value)
+                            }
+                            _ => None,
+                        })
+                        .map(|s| ctx.text_width(s))
+                        .max()
+                        .unwrap_or(0)
+                })
+                .collect();
         }
 
         self.surface.set(ctx.surface_size());
@@ -696,16 +843,6 @@ impl MenuBar {
                     }
                     let cy = row.y + h / 2;
                     let tx = row.x + self.s(10);
-                    if let Some(img) = it.image.as_deref() {
-                        let isz = self.s(LEADING_ICON);
-                        let boxr = Rect::new(tx, cy - isz / 2, isz, isz);
-                        let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
-                        ctx.image_scaled(fit, img, row);
-                    }
-                    let tx = tx + self.s(LEADING_ICON) + self.s(6);
-                    let right_pad = if is_sub { self.s(22) } else { self.s(10) };
-                    let shown =
-                        crate::draw::ellipsize_middle(ctx, &it.label, row.right() - right_pad - tx);
                     let fg = if disabled {
                         theme.text_dim
                     } else if emph {
@@ -713,6 +850,46 @@ impl MenuBar {
                     } else {
                         theme.text
                     };
+                    if let Some(img) = it.image.as_deref() {
+                        let isz = self.s(LEADING_ICON);
+                        let boxr = Rect::new(tx, cy - isz / 2, isz, isz);
+                        let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
+                        ctx.image_scaled(fit, img, row);
+                    } else if self.checks.get(&it.value).copied() == Some(true) {
+                        // ✓ 또는 라디오 ●(앞 아이콘 자리 · 강조색 · dir2 GUI-063 체크 열).
+                        let isz = self.s(LEADING_ICON);
+                        let mark = if disabled {
+                            theme.text_dim
+                        } else {
+                            theme.accent
+                        };
+                        if self.radios.contains(&it.value) {
+                            let d = (isz / 2).max(4);
+                            ctx.fill_ellipse(Rect::new(tx + (isz - d) / 2, cy - d / 2, d, d), mark);
+                        } else {
+                            super::draw_check_mark(
+                                ctx,
+                                Rect::new(tx, cy - isz / 2, isz, isz),
+                                mark,
+                            );
+                        }
+                    }
+                    let tx = tx + self.s(LEADING_ICON) + self.s(6);
+                    // 단축키 열(오른쪽 정렬 · 흐린 글자) — 라벨 폭 상한에서 뺀다.
+                    let sc = if is_sub {
+                        None
+                    } else {
+                        self.shortcuts.get(&it.value)
+                    };
+                    let right_pad = if is_sub { self.s(22) } else { self.s(10) };
+                    let mut label_right = row.right() - right_pad;
+                    if let Some(sc) = sc {
+                        let sw = ctx.text_width(sc);
+                        let sx = row.right() - right_pad - sw;
+                        ctx.text(sx, cy - th / 2, row, sc, theme.text_dim);
+                        label_right = sx - self.s(16);
+                    }
+                    let shown = crate::draw::ellipsize_middle(ctx, &it.label, label_right - tx);
                     ctx.text(tx, cy - th / 2, row, &shown, fg);
                     if is_sub {
                         let a = self.s(10);
@@ -837,6 +1014,93 @@ mod tests {
         m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
         m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
         assert!(!m.is_open());
+    }
+
+    /// ★ dir2 메뉴 기능(GUI-063·066 · nexa-dir3 103차): 단축키 열이 오른쪽에 그려지고 팝업이 그만큼 넓어진다 · 체크 ✓/라디오 ●이
+    /// 켜진 항목에만 그려진다 · `set_checked`는 열린 팝업을 무효화한다 · 라벨은 단축키 열을 침범하지 않는다.
+    #[test]
+    fn shortcut_column_and_check_marks() {
+        use crate::controls::RecordCtx;
+        let (mut m, mut inv) = bar();
+        let l0 = m.label_rect(0);
+        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        let w0 = m.popup_rect().w;
+        m.set_shortcut("settings", "Ctrl+,");
+        m.set_shortcut("about", "");
+        assert_eq!(m.shortcut_of("settings"), Some("Ctrl+,"));
+        assert_eq!(m.shortcut_of("about"), None);
+        assert!(
+            m.popup_rect().w >= w0 && m.shortcut_col(0) > 0,
+            "단축키 열이 폭에 더해진다(추정치 · 최소 폭에 가릴 수 있다)"
+        );
+        let mut rec = RecordCtx::with_surface(800, 600);
+        m.paint(&mut rec, &Theme::dark());
+        assert!(
+            m.popup_rect().w >= w0 && m.shortcut_w(0) == 7 * 6,
+            "실측 뒤 단축키 열 폭 = 글자수 × 7"
+        );
+        assert!(rec.drew_text("Ctrl+,"), "단축키 표기");
+        let pop = m.popup_rect();
+        let sc = rec
+            .texts
+            .iter()
+            .find(|(_, _, _, s)| s == "Ctrl+,")
+            .map(|(x, ..)| *x)
+            .unwrap_or(0);
+        let label = rec
+            .texts
+            .iter()
+            .find(|(_, _, _, s)| s == "설정")
+            .map(|(x, ..)| *x + 7 * 2)
+            .unwrap_or(0);
+        assert!(
+            sc + 7 * 6 <= pop.right() && label < sc,
+            "오른쪽 정렬 · 라벨 왼쪽"
+        );
+        // 체크: 켜진 항목만 ✓(폴리라인) · 라디오는 ●(타원).
+        let marks_before = rec.polylines;
+        m.set_checked("gallery", true, &mut inv);
+        assert_eq!(m.is_checked("gallery"), Some(true));
+        assert!(!inv.is_empty(), "열린 팝업 무효화");
+        rec.clear();
+        m.paint(&mut rec, &Theme::dark());
+        assert!(rec.polylines > marks_before, "✓ 그려짐");
+        m.set_checked("gallery", false, &mut inv);
+        rec.clear();
+        m.paint(&mut rec, &Theme::dark());
+        assert_eq!(rec.polylines, marks_before, "꺼지면 안 그림");
+        m.set_radio("settings");
+        m.set_checked("settings", true, &mut inv);
+        rec.clear();
+        m.paint(&mut rec, &Theme::dark());
+        assert_eq!(rec.polylines, marks_before, "라디오는 폴리라인이 아니다");
+        assert!(rec.all_inside(Rect::new(0, 0, 800, 600)));
+    }
+
+    /// `set_enabled(false)`면 클릭해도 발화하지 않고 흐리게 · 다시 켜면 발화 · 하위 메뉴 항목도 id로 닿는다 · `open_menu_index`.
+    #[test]
+    fn set_enabled_toggles_and_open_menu_index() {
+        let (mut m, mut inv) = bar();
+        assert!(m.set_enabled("gallery", false, &mut inv));
+        assert!(
+            !m.set_enabled("gallery", false, &mut inv),
+            "같은 값 = 안 바뀜"
+        );
+        assert!(m.set_enabled("dup", false, &mut inv), "하위 메뉴 항목");
+        m.open_menu_index(0, &mut inv);
+        assert_eq!(m.open_index(), Some(0));
+        let pop = m.popup_rect();
+        let y = pop.y + m.s(POPUP_PAD) + m.s(ITEM_H) + m.s(ITEM_H) / 2;
+        m.on_event(&click(pop.x + 20, y), &mut inv);
+        assert!(
+            m.is_open() && m.take_picked().is_none(),
+            "비활성 = 발화 없음 · 열린 채"
+        );
+        assert!(m.set_enabled("gallery", true, &mut inv));
+        m.on_event(&click(pop.x + 20, y), &mut inv);
+        assert_eq!(m.take_picked().as_deref(), Some("gallery"));
+        m.open_menu_index(99, &mut inv);
+        assert!(!m.is_open(), "범위 밖 = 무시");
     }
 }
 
