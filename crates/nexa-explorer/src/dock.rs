@@ -487,6 +487,19 @@ impl InfoDock {
         self.active
     }
 
+    /// 활성 종류를 프로그램으로 전환(nexa-dir3 T-61 — 기동 명령 `dock.kind:<n>` · 메뉴). 범위 밖 = 무시 ·
+    /// 같은 값 = 무변화. 스트립 클릭과 같은 효과(선택 해제 · 내용 교체는 호스트).
+    pub fn set_active_kind(&mut self, kind: usize, inv: &mut Invalidations) -> bool {
+        if kind >= self.kinds.len() || kind == self.active {
+            return false;
+        }
+        self.active = kind;
+        self.sel = None;
+        self.sel_drag = false;
+        inv.push(self.bounds);
+        true
+    }
+
     /// 종류 스트립 아래 내용 영역(터미널 등 호스트 직접 렌더용 — M4-3).
     pub fn content_rect(&self) -> Rect {
         let strip_h = 1 + self.row_h.min((self.bounds.h - 1).max(0));
