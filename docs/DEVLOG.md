@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (106차 · win · nexa-dir3 M2 T-26·27)** — ★ **`nexa-explorer` 크레이트**: dir2 `PathBar`·`InfoDock`·`OverlayBars` 그대로 이식(시험 25) · nexa-grid `draw::DrawCtx`에 `push_clip/pop_clip/draw_image/glyph_opaque_lg` · U-2 dock ✅ · F-3 PathBar 승격 ✅ → [journal §4](journal/2026-10-03.md)
 - **2026-10-03 (105차 · win · nexa-dir3 M2 T-25)** — ★ **`nexa-grid` 크레이트**(docs/21 G-1): dir2 `rows.rs`/`columns.rs`/`edit.rs`/`fastscroll.rs`/`typeahead.rs` 그대로 + `draw::Adapt`(nexa-ctl DrawCtx 어댑터) · nexa-ctl `Invalidations` 틱 요청 추가 · 시험 53(dir2 52 이식) → [journal §3](journal/2026-10-03.md)
 - **2026-10-03 (104차 · win · nexa-dir3 M2 T-22~24)** — ★ `MenuBar` 곁 표 확장(`set_shortcut` 단축키 열 · `set_checked`/`set_radio` ✓● · `set_enabled` · `open_menu_index`) · `ToolItem.checked` + `Toolbar::set_item_checked`(강조색 38 % 블렌드) · `TabBar::set_icons`/`set_tips`/`hover_tip` + `MiddleDown` 소비 · ★ **`StatusBar`** 신규(dir2 chrome.rs 이식 · 바뀔 때만 무효화) · 시험 391 · nexa-sql check ✓ → [journal §2](journal/2026-10-03.md)
 - **2026-10-03 (103차 · win · nexa-dir3 M2 T-20·21)** — ★ `InputEvent::{DoubleClick, MiddleDown, XButton}`(추가만 · 호스트 합성) · `set_wheel_lines`/`wheel_lines`(dir2 이식) · ★ **`RecordCtx`** 공용 기록형 테스트 백엔드(채움·글·클립·둥근·이미지 · `surface_size` · `all_inside`) · 시험 385 · nexa-sql check ✓ → [journal](journal/2026-10-03.md)

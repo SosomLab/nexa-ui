@@ -82,6 +82,20 @@ pub trait DrawCtx {
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
         let _ = (pts, color, width);
     }
+    /// 클립 영역 **교차** push(가로 스크롤 콘텐츠의 왼쪽 번짐 차단 · dir2 10-02). `pop_clip`과 쌍. 기본 = no-op.
+    fn push_clip(&mut self, rect: Rect) {
+        let _ = rect;
+    }
+    /// 직전 `push_clip` 복원. 기본 = no-op.
+    fn pop_clip(&mut self) {}
+    /// 이미지(미리보기) — `hint`(경로)의 이미지를 `rect` 안 비율 유지 가운데. 디코드·캐시는 백엔드. 기본 = no-op.
+    fn draw_image(&mut self, rect: Rect, hint: &str) {
+        let _ = (rect, hint);
+    }
+    /// 큰 글리프 변형(패널 네비 바). 기본 = 같은 크기.
+    fn glyph_opaque_lg(&mut self, clip: Rect, text: &str, fg: Color, bg: Color) {
+        self.glyph_opaque(clip, text, fg, bg);
+    }
 }
 
 /// nexa-ctl `DrawCtx` → 그리드 어휘 어댑터. italic은 버린다(nexa-ctl `select_font`에 없음 · U-5) · `alpha` u8 → f32 ·
@@ -129,6 +143,7 @@ impl DrawCtx for Adapt<'_> {
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
         self.0.polyline(pts, color, width);
     }
+    // push_clip/pop_clip · draw_image: nexa-ctl DrawCtx에 아직 없다(UIC-310·312 · T-31) — 기본 no-op. 이미지는 호스트가 IconImage로 그린다.
 }
 
 #[cfg(test)]

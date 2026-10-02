@@ -1,0 +1,17 @@
+[package]
+name = "nexa-explorer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "파일 탐색기 위젯 묶음 — PathBar(브레드크럼·편집·자동완성) · InfoDock(정보/미리보기/터미널 스트립 + 텍스트/이미지 내용) · OverlayBars(오버레이 스크롤바) (출처: nexa-dir2/crates/nexa-gui/src/widgets/{pathbar,dock,overlaybar}.rs · 의존: nexa-ctl · nexa-grid)"
+
+[dependencies]
+nexa-ctl = { workspace = true }
+nexa-grid = { workspace = true }
+
+[lints]
+workspace = true

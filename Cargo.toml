@@ -13,6 +13,7 @@ members = [
   "crates/nexa-fs",    # 파일시스템 중립 모델 — 장소·열거·정렬·이름 규칙·로컬 시각 (의존 0 · OS 분기는 여기만 · docs/20)
   "crates/nexa-dlg",   # 대화상자 조립 — FilePicker(열기/저장) (의존: nexa-ctl · nexa-fs)
   "crates/nexa-grid",  # 가상 행 그리드 엔진 — dir2 rows/columns 이식 · VirtualRows<RowSource> (의존: nexa-ctl · docs/21 G-1)
+  "crates/nexa-explorer", # 파일 탐색기 위젯(PathBar·InfoDock·OverlayBars) — dir2 이식 (의존: nexa-ctl · nexa-grid)
   "crates/nexa-sys",   # OS 신호 — 배터리·원격 세션·동작 줄이기·CPU 코어 수 (의존 0 · 수동 FFI · nexa-sql D-60)
 ]
 
@@ -43,5 +44,6 @@ nexa-fs = { path = "crates/nexa-fs" }
 nexa-dlg = { path = "crates/nexa-dlg" }
 nexa-sys = { path = "crates/nexa-sys" }
 nexa-grid = { path = "crates/nexa-grid" }
+nexa-explorer = { path = "crates/nexa-explorer" }
 
 # 라이브러리 워크스페이스 — 릴리스 프로필은 소비 앱이 정한다(여기서는 기본값).
