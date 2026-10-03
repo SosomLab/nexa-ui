@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-04 (137차 · linux · nexa-dir3 상태줄 약어/색)** — nexa-ctl `StatusPart` · `StatusSeg::with_parts`(조각별 색 · 견본 폭 · 기본 불변) · 시험 +1 — journal 10-04 §4.
 - **2026-10-04 (136차 · linux · nexa-dir3 툴바 hover/크기)** — nexa-ctl `set_icon_scale` · `icon_draw_px` · `SoftStates.hover_icon_accent/hover_fill_toggle_only` · `ToolItem.toggle`(기본 = 종전) · 시험 +1 — journal 10-04 §3.
 - **2026-10-04 (135차 · linux · nexa-dir3 툴바 토글 정정)** — nexa-ctl `SoftStates.on_line_color`(테두리 색만 따로 · 기본 None = 종전) — journal 10-04 §2.
 - **2026-10-04 (134차 · linux · nexa-dir3 툴바 토글 색)** — nexa-ctl `SoftStates.on_color` · `on_icon` · `SWITCH_ON` 공개(기본 None = 종전) · 시험 +1 — journal 10-04 §1.

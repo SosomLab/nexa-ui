@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 137 · 47cdb77 | nexa-ctl | `StatusPart { text, color, hints }` · `StatusSeg::with_parts` · `StatusSeg.parts` — 조각 폭 = max(글, 견본) · 견본 조각 오른쪽 정렬 · 시험 +1 | 추가(구조체 필드 · 조각 없으면 종전) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 C/M/D/N · ↑ 빨강 ↓ 파랑 · 기본 너비 확보 — dir3 게이트(10-04 §11) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 136 · 9625a1a | nexa-ctl | `Toolbar/ToolDock::set_icon_scale` · `Toolbar::icon_draw_px` · `SoftStates.hover_icon_accent` · `hover_fill_toggle_only` · `ToolItem.toggle`(+ `.toggle(bool)`) · 시험 +1 | 추가(구조체 필드 · 기본 불변) | 영향 없음(미사용) · `cargo check` 통과(10-04 · 시험 미실행) · SoftStates/ToolItem을 리터럴로 만들게 되면 `..Default::default()` | 툴바 그림 90 % · hover 아이콘 강조색 · 토글만 회색 배경 — dir3 게이트(10-04 §8) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 135 · a729fc6 | nexa-ctl | Toolbar `SoftStates.on_line_color`(Option · None = 채움 색과 같음 = 종전) | 추가(구조체 필드 추가 · 기본 불변) | 영향 없음(SoftStates 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 툴바 토글 켜짐 = 강조색 옅은 채움 + 초록 테두리/아이콘 선 — dir3 게이트(10-04 §5) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 134 · 7ead512 | nexa-ctl | Toolbar `SoftStates.on_color` · `on_icon`(Option · None = 종전) · `controls::SWITCH_ON` 공개 · 꽉 찬 채움 hover/눌림 = 흰 막 · 시험 +1 | 추가(구조체 필드 추가 · 기본 불변) | 영향 없음(SoftStates 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 툴바 토글 켜짐 = 스위치 초록 + 흰 아이콘(`toolbar.on_color`) — dir3 게이트(10-04 §4) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) · SoftStates를 쓰게 되면 `..Default::default()`로 |
@@ -40,6 +41,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 137 | `cargo check`(47cdb77) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 136 | `cargo check`(9625a1a) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 135 | `cargo check`(a729fc6) | 통과 · 시험은 미실행(SoftStates 미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 134 | `cargo check`(7ead512) | 통과 · 시험은 미실행(SoftStates 미사용) |

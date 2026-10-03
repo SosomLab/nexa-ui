@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-04 (137차 · linux · nexa-dir3 상태줄 약어/색)** — StatusBar 칸 조각 · 조각별 색 · 폭 견본(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-04 (136차 · linux · nexa-dir3 툴바 hover/크기)** — Toolbar 그림 배율 · hover 아이콘 강조색 · 토글 항목만 hover 배경(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-04 (135차 · linux · nexa-dir3 툴바 토글 정정)** — Toolbar 켜짐 테두리 색 지정(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-04 (134차 · linux · nexa-dir3 툴바 토글 색)** — Toolbar 켜짐 색/아이콘 색 지정(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
