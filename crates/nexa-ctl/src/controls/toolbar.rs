@@ -255,6 +255,8 @@ pub struct SoftStates {
     pub on_color: Option<Color>,
     /// 켜진 칸의 아이콘 색(`None` = `on_icon_accent` 규칙 그대로). 진한 채움 위에서는 흰색을 준다.
     pub on_icon: Option<Color>,
+    /// 켜짐 **테두리** 색만 따로(135차 — `None` = 채움 색과 같다). 배경은 강조색 옅은 채움 그대로 두고 선만 초록으로 할 때.
+    pub on_line_color: Option<Color>,
 }
 
 impl Default for SoftStates {
@@ -270,6 +272,7 @@ impl Default for SoftStates {
             on_icon_accent: false,
             on_color: None,
             on_icon: None,
+            on_line_color: None,
         }
     }
 }
@@ -830,7 +833,13 @@ impl Toolbar {
                         let fill = (st.on_fill + st.step * step).min(1.0);
                         let line = (st.on_line + st.step * 2.0 * step).min(1.0);
                         ctx.fill_round_rect_alpha(pill, r, on, fill);
-                        ctx.stroke_round_rect_alpha(pill, r, on, 1.0, line);
+                        ctx.stroke_round_rect_alpha(
+                            pill,
+                            r,
+                            st.on_line_color.unwrap_or(on),
+                            1.0,
+                            line,
+                        );
                         // 이미 꽉 찬 채움(스위치식 진한 켜짐)은 더 진해질 수 없다 → hover/눌림은 흰 막을 얹어 밝힌다.
                         if st.on_fill >= 1.0 && step > 0.0 {
                             ctx.fill_round_rect_alpha(pill, r, Color(0x00FF_FFFF), 0.14 * step);
@@ -1047,6 +1056,26 @@ mod tests {
         }));
         assert!(count(&t, green) >= 1, "켜진 칸 = 지정 색");
         assert_eq!(count(&t, Theme::dark().accent), 0, "강조색 채움 없음");
+        // 선만 따로(135차): 채움 = 강조색 그대로 · 테두리 = 지정 색.
+        t.set_soft_states(Some(SoftStates {
+            on_line: 1.0,
+            on_line_color: Some(green),
+            ..SoftStates::default()
+        }));
+        let mut rec = RecordCtx::with_surface(300, 60);
+        t.paint(&mut rec, &Theme::dark());
+        assert!(rec
+            .round_rects
+            .iter()
+            .any(|(_, _, k)| *k == Theme::dark().accent));
+        assert!(
+            rec.strokes.iter().any(|(_, _, k)| *k == green),
+            "테두리 = 초록"
+        );
+        assert!(
+            !rec.round_rects.iter().any(|(_, _, k)| *k == green),
+            "채움은 초록 아님"
+        );
     }
 
     /// ★ 토글 켜짐(dir2 GUI-074 · nexa-dir3 103차): `set_item_checked`가 바뀔 때만 true + 무효화 · 켜진 항목은 강조색 블렌드 배경(둥근 사각형)이
