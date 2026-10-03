@@ -37,6 +37,7 @@ pub mod switch;
 pub mod tabbar;
 pub mod textbox;
 pub mod timeout_button;
+pub mod toast;
 pub mod toolbar;
 pub mod tooldock;
 pub mod tree;
@@ -65,6 +66,7 @@ pub use splitter::{SplitAxis, SplitEvent, Splitter};
 pub use statusbar::StatusBar;
 pub use switch::Switch;
 pub use tabbar::{TabAction, TabBadge, TabBar};
+pub use toast::{bar_remaining, life_alpha, ToastKind, Toasts};
 pub mod pairs;
 pub use pairs::{Pair, PairKind, PairOpts, PairTable};
 pub use textbox::{

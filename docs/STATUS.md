@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-10-03 (114차 · win · nexa-dir3 T-32)** — `controls::toast::{Toasts, ToastKind}` 범용 승격(UIK-213 · 시험 3).
 - **2026-10-03 (113차 · win · nexa-dir3 T-31 B)** — `DrawCtx::select_font_styled`(italic 합집합 · UIC-313) · `RecordCtx.fonts` 기록 · nexa-grid `Adapt` italic 전달 · 시험 +1.
 - **2026-10-03 (112차 · win · nexa-dir3 T-31)** — ★ `RasterCtx` 클립 스택 실제 구현(UIC-310 · 모든 어휘) · nexa-grid `paint_grid` 경계 클립 · 시험 +2.
 - **2026-10-03 (111차 · win · nexa-dir3 T-70)** — `SegProgress` 세그먼트 진행 바 · `Button::label`.
