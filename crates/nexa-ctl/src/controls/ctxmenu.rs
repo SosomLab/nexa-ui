@@ -637,12 +637,15 @@ impl ContextMenu {
             h = h.max(self.s(PAD_V) * 2 + self.row_h() * n as i32);
         }
         let sc = self.sc_w.get();
+        // 세로 스크롤 표시 자리(paint가 라벨 열에서 빼는 6) — 크기에 넣지 않으면 라벨이 그만큼 "넘친" 것으로 계산돼
+        // 넘치지도 않은 메뉴 아래에 가로 스크롤 표시가 늘 그려졌다(nexa-dir3 10-03).
         let extra = if sc > 0 { self.s(SC_GAP) + sc } else { 0 }
             + if self.has_arrows() {
                 self.s(ARROW_W)
             } else {
                 0
-            };
+            }
+            + if self.scrollable() { self.s(6) } else { 0 };
         let mut w =
             (self.icon_col() + self.fit_w.get() + extra + self.s(PAD_H) * 2).max(self.s(MIN_W));
         if let Some(m) = self.max_w {
@@ -1810,6 +1813,22 @@ mod tests {
         m.on_event(&InputEvent::HWheel { delta: 120 * 10 });
         assert_eq!(m.hscroll.get(), 0);
         assert!(m.is_open());
+    }
+
+    /// 행 수 상한으로 세로 스크롤이 생기면 그 표시 자리(6)만큼 넓어진다 → 라벨 열이 줄지 않아 가짜 가로 넘침이 없다.
+    #[test]
+    fn vertical_scroll_mark_is_part_of_the_width() {
+        let mk = || -> Vec<CtxItem> {
+            (0..8)
+                .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+                .collect()
+        };
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, mk(), Rect::new(0, 0, 800, 600), 200);
+        let w_all = m.rect.get().w;
+        m.set_max_rows(Some(3));
+        m.open_at(10, 10, mk(), Rect::new(0, 0, 800, 600), 200);
+        assert_eq!(m.rect.get().w, w_all + 6);
     }
 
     #[test]
