@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-03 (130차 · linux · nexa-dir3 T-127)** — nexa-grid 정렬 표시 오른쪽 끝 스위치(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (129차 · linux · nexa-dir3 T-121)** — TabBar 스크롤 버튼 자리 3택(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (128차 · linux · nexa-dir3 런처 · 경로 바)** — 앱 아이콘 조회(추가) · ⚠ PathBar Unix 루트 세그먼트(동작 변경 · Unix 한정 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (127차 · linux · nexa-dir3 도크 hover)** — InfoDock 종류 스트립 hover(추가 · InfoDock 소비자만 화면 변화 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
