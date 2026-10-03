@@ -12,7 +12,7 @@ use super::{Control, ControlBase};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
 use crate::geom::Rect;
-use crate::theme::Theme;
+use crate::theme::{Color, Theme};
 use crate::widget::{Invalidations, Widget};
 
 /// 기본 높이(논리 px · dir2 상태바 22).
@@ -23,15 +23,56 @@ const PAD_X: i32 = 8;
 /// 칸 안쪽 좌우 여백(논리 px).
 const SEG_PAD: i32 = 7;
 
+/// 칸 안 조각 사이 간격(논리 px).
+const PART_GAP: i32 = 4;
+
+/// 칸 안의 조각 하나(137차) — 색을 따로 주거나(예: 업로드 빨강 · 다운로드 파랑) **폭을 고정**할 수 있다.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StatusPart {
+    /// 표시 글.
+    pub text: String,
+    /// 글 색(`None` = 칸 기본색).
+    pub color: Option<Color>,
+    /// 폭 견본들 — 조각 폭 = 글과 견본 중 **가장 넓은 것**(값이 바뀌어도 칸 폭이 흔들리지 않게 · 견본이 있으면 글은 오른쪽 정렬).
+    pub hints: Vec<String>,
+}
+
+impl StatusPart {
+    /// 글만.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+
+    /// 색 지정(체이닝).
+    #[must_use]
+    pub fn color(mut self, color: Color) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// 폭 견본 지정(체이닝).
+    #[must_use]
+    pub fn hints(mut self, hints: Vec<String>) -> Self {
+        self.hints = hints;
+        self
+    }
+}
+
 /// 상태 바의 칸 하나.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusSeg {
     /// 호스트가 붙이는 식별자(클릭 통지에 그대로 돌아온다).
     pub id: String,
-    /// 표시 글.
+    /// 표시 글(조각이 있으면 덤프 · 비교용 — 그리기는 조각으로).
     pub text: String,
     /// 클릭할 수 있는가(false = hover·클릭 없음 · 흐린 글).
     pub clickable: bool,
+    /// 조각(137차) — 비어 있으면 `text` 한 덩어리(종전).
+    pub parts: Vec<StatusPart>,
 }
 
 impl StatusSeg {
@@ -42,6 +83,23 @@ impl StatusSeg {
             id: id.into(),
             text: text.into(),
             clickable: true,
+            parts: Vec::new(),
+        }
+    }
+
+    /// 조각으로 이루어진 클릭 가능한 칸(137차) — `text`는 조각 글을 빈칸으로 이은 것.
+    #[must_use]
+    pub fn with_parts(id: impl Into<String>, parts: Vec<StatusPart>) -> Self {
+        let text = parts
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            id: id.into(),
+            text,
+            clickable: true,
+            parts,
         }
     }
 
@@ -255,11 +313,32 @@ impl Widget for StatusBar {
         }
         // 칸: 폭 = 글 + 좌우 여백 · 칸 사이 1px 세로 선. 오른쪽 정렬이면 자리가 모자랄 때 **왼쪽 칸부터** 빠진다(맨 오른쪽 우선).
         let sp = self.s(SEG_PAD);
-        let widths: Vec<i32> = self
+        let gap = self.s(PART_GAP);
+        // 조각 폭 = 글과 견본 중 가장 넓은 것(값이 바뀌어도 칸이 흔들리지 않는다).
+        let part_ws: Vec<Vec<i32>> = self
             .segs
             .iter()
             .map(|s| {
-                if s.text.is_empty() {
+                s.parts
+                    .iter()
+                    .map(|p| {
+                        let mut w = ctx.text_width(&p.text);
+                        for h in &p.hints {
+                            w = w.max(ctx.text_width(h));
+                        }
+                        w
+                    })
+                    .collect()
+            })
+            .collect();
+        let widths: Vec<i32> = self
+            .segs
+            .iter()
+            .zip(&part_ws)
+            .map(|(s, pw)| {
+                if !pw.is_empty() {
+                    pw.iter().sum::<i32>() + gap * (pw.len() as i32 - 1) + 2 * sp
+                } else if s.text.is_empty() {
                     0
                 } else {
                     ctx.text_width(&s.text) + 2 * sp
@@ -317,7 +396,21 @@ impl Widget for StatusBar {
             } else {
                 theme.text_dim
             };
-            ctx.text(r.x + sp, ty, *r, &seg.text, color);
+            if seg.parts.is_empty() {
+                ctx.text(r.x + sp, ty, *r, &seg.text, color);
+            } else {
+                let mut x = r.x + sp;
+                for (p, w) in seg.parts.iter().zip(&part_ws[i]) {
+                    // 견본이 있는 조각(숫자) = 오른쪽 정렬 · 없으면 왼쪽.
+                    let tx = if p.hints.is_empty() {
+                        x
+                    } else {
+                        x + w - ctx.text_width(&p.text)
+                    };
+                    ctx.text(tx, ty, *r, &p.text, p.color.unwrap_or(color));
+                    x += w + gap;
+                }
+            }
         }
         *self.rects.borrow_mut() = rects;
         if !self.left.is_empty() {
@@ -449,6 +542,48 @@ mod tests {
         sb.set_segments(Vec::new(), &mut inv);
         click(&mut sb, lic);
         assert_eq!(sb.take_click(), None);
+    }
+
+    /// 조각(137차): 색을 따로 · 폭 견본이 있으면 값이 바뀌어도 칸 폭이 같다 · 견본 조각은 오른쪽 정렬.
+    #[test]
+    fn parts_keep_width_and_colors() {
+        let red = Color(0x00FF_0000);
+        let seg = |v: &str| {
+            StatusSeg::with_parts(
+                "net",
+                vec![
+                    StatusPart::new("N"),
+                    StatusPart::new(v)
+                        .color(red)
+                        .hints(vec!["1023.9 MB/s".into(), "999 B/s".into()]),
+                ],
+            )
+        };
+        let mut sb = StatusBar::new();
+        let mut inv = Invalidations::default();
+        sb.set_bounds(Rect::new(0, 0, 400, 22), &mut inv);
+        let width_of = |sb: &mut StatusBar, v: &str| {
+            let mut inv = Invalidations::default();
+            sb.set_segments(vec![seg(v)], &mut inv);
+            let mut rec = RecordCtx::with_surface(400, 60);
+            sb.paint(&mut rec, &Theme::dark());
+            assert!(rec.drew_text(v) && rec.drew_text("N"));
+            (sb.seg_rect("net").unwrap().w, rec)
+        };
+        let (w1, rec1) = width_of(&mut sb, "0 B/s");
+        let (w2, _) = width_of(&mut sb, "512.3 KB/s");
+        assert_eq!(w1, w2, "값이 바뀌어도 폭 불변");
+        // 폭 = N(1자) + 간격 4 + 견본(11자) + 좌우 여백 14 — RecordCtx 글자 폭 7.
+        assert_eq!(w1, 7 + 4 + 11 * 7 + 14);
+        let r = sb.seg_rect("net").unwrap();
+        let vx = rec1
+            .texts
+            .iter()
+            .find(|t| t.3 == "0 B/s")
+            .map(|t| t.0)
+            .unwrap();
+        assert_eq!(vx, r.right() - 7 - 5 * 7, "견본 조각 = 오른쪽 정렬");
+        assert_eq!(seg("x").text, "N x");
     }
 
     /// 왼쪽이 길면 오른쪽 글은 `x + pad`까지만 밀린다(겹침 허용 · dir2 규약).
