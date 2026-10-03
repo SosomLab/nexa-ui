@@ -236,6 +236,34 @@ const PRESS_BG_ALPHA: f32 = 0.20;
 /// 항목별 틴트 캐시 슬롯 — (틴트 색, 생성된 이미지).
 type TintSlot = Option<(Color, Rc<IconImage>)>;
 
+/// 부드러운 상태 표시의 농도(0..1)와 모서리 — [`Toolbar::set_soft_states`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoftStates {
+    /// hover(꺼진 칸) 채움 = 글자색 × 이 값(눌림 = 2배).
+    pub hover_fill: f32,
+    /// 켜짐 채움 = 강조색 × 이 값.
+    pub on_fill: f32,
+    /// 켜짐 테두리 = 강조색 × 이 값(1px).
+    pub on_line: f32,
+    /// hover/눌림 때 한 단계마다 채움에 더하는 양(테두리는 2배).
+    pub step: f32,
+    /// 모서리 반경(논리 px).
+    pub radius: i32,
+}
+
+impl Default for SoftStates {
+    /// 기본: hover 8 % · 켜짐 18 % + 테두리 55 % · 단계 12 %(켜짐+hover = 30 % / 79 %) · 반경 4.
+    fn default() -> Self {
+        Self {
+            hover_fill: 0.08,
+            on_fill: 0.18,
+            on_line: 0.55,
+            step: 0.12,
+            radius: 4,
+        }
+    }
+}
+
 /// 툴바 컨트롤.
 #[derive(Debug)]
 pub struct Toolbar {
@@ -257,6 +285,12 @@ pub struct Toolbar {
     bar_pad: i32,
     /// 항목 사이 간격(논리 px · 기본 4 · 117차 `set_item_gap`).
     item_gap: i32,
+    /// 아이콘 글리프 모드(118차 `set_icon_glyphs`): `Some(크기 증분 px)` = 글리프를 그 크기로 · **잉크 기준** 칸 가운데.
+    icon_glyph_delta: Option<f32>,
+    /// hover/눌림 = 칸 배경(`theme.sel_bg`) · 글리프 색은 그대로(118차 `set_hover_background` — dir2 네비 버튼 규약).
+    hover_bg: bool,
+    /// 부드러운 상태 표시(118차 `set_soft_states`) — 켜짐/hover/눌림을 옅은 채움 + 얇은 테두리 + 아이콘 색으로.
+    soft: Option<SoftStates>,
 }
 
 impl Toolbar {
@@ -277,10 +311,33 @@ impl Toolbar {
             slot_pad: SLOT_PAD,
             bar_pad: BAR_PAD,
             item_gap: 4,
+            icon_glyph_delta: None,
+            hover_bg: false,
+            soft: None,
         }
     }
 
     /// 여백 지정(슬롯 안쪽 · 바 위아래 · 논리 px) — 권장 높이 = 아이콘 + (slot + bar) × 2.
+    /// **아이콘 글리프 모드**(118차 · nexa-dir3 네비 버튼): `ToolIcon::Glyph`를 아이콘 글꼴 글리프로 보고 기본 글꼴 크기에
+    /// `delta_px`(논리 px)를 더한 크기로, 글리프 **잉크**가 칸 정중앙에 오게 그린다(`DrawCtx::glyph_center_y`).
+    /// `None` = 종전(본문 글꼴 크기 · 줄 상자 가운데).
+    pub fn set_icon_glyphs(&mut self, delta_px: Option<f32>) {
+        self.icon_glyph_delta = delta_px;
+    }
+
+    /// **부드러운 상태 표시**(118차 · nexa-dir3 사용자 10-03 "토글 상태·토글+호버가 예쁘지 않다"): `Some` = 칸마다 둥근 알약 —
+    /// hover = 글자색 옅은 채움 · 켜짐 = 강조색 옅은 채움 + 1px 테두리 + **아이콘을 강조색으로** · 켜짐+hover = 한 단계 진하게 ·
+    /// 눌림 = 한 단계 더. hover에 아이콘 색은 바뀌지 않는다(파란 배경 위 파란 아이콘 문제 해소). `None`(기본) = 종전.
+    pub fn set_soft_states(&mut self, style: Option<SoftStates>) {
+        self.soft = style;
+    }
+
+    /// hover/눌림 표시 방식(118차): true = 칸 배경을 `theme.sel_bg`로 채우고 글리프·아이콘 색은 그대로(dir2 X-27) ·
+    /// false(기본) = 배경 없이 아이콘 색을 accent로.
+    pub fn set_hover_background(&mut self, on: bool) {
+        self.hover_bg = on;
+    }
+
     /// 항목 사이 간격(논리 px · 음수는 0 · 기본 4) — 0이면 아이콘 칸이 맞닿는다(117차 · nexa-dir3 "아이콘 사이 간격을 설정으로").
     pub fn set_item_gap(&mut self, gap: i32) {
         self.item_gap = gap.max(0);
@@ -728,8 +785,50 @@ impl Toolbar {
             // 식별은 아이콘 색(accent)과 눌림 1px 내림으로.
             let _ = (PRESS_BG_ALPHA, HOVER_BG_ALPHA);
             let pad = self.s(self.slot_pad);
+            // 부드러운 상태 표시(118차 `set_soft_states`) — 칸 안쪽 1px 들여 둥근 알약으로. 그린 뒤에는 아래의 종전 표시(38 % 채움 ·
+            // hover 색 전환)를 건너뛰도록 깃발을 내린다. 켜짐 = 아이콘도 강조색(`soft_on`).
+            let mut soft_on = false;
+            let (is_hover, is_pressed, checked) = match self.soft.filter(|_| it.enabled) {
+                Some(st) => {
+                    let inset = self.s(1);
+                    let pill = Rect::new(
+                        slot.x + inset,
+                        slot.y + inset,
+                        slot.w - inset * 2,
+                        slot.h - inset * 2,
+                    );
+                    let r = self.s(st.radius);
+                    let step = if is_pressed {
+                        2.0
+                    } else if is_hover {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    if it.checked {
+                        soft_on = true;
+                        let fill = (st.on_fill + st.step * step).min(1.0);
+                        let line = (st.on_line + st.step * 2.0 * step).min(1.0);
+                        ctx.fill_round_rect_alpha(pill, r, theme.accent, fill);
+                        ctx.stroke_round_rect_alpha(pill, r, theme.accent, 1.0, line);
+                    } else if step > 0.0 {
+                        ctx.fill_round_rect_alpha(pill, r, theme.text, st.hover_fill * step);
+                    }
+                    (false, false, false)
+                }
+                None => (is_hover, is_pressed, it.checked),
+            };
+            // hover 배경 방식(118차 `set_hover_background`): 켜져 있고 쓸 수 있는 칸이면 배경을 채운다 — 이때 아이콘 색은 바꾸지 않는다.
+            let (is_hover, is_pressed) = if self.hover_bg {
+                if it.enabled && (is_hover || is_pressed) {
+                    ctx.fill_rect(slot, theme.sel_bg);
+                }
+                (false, false)
+            } else {
+                (is_hover, is_pressed)
+            };
             // ★ 토글 켜짐 = 슬롯 배경을 강조색 38 % 블렌드(dir2 GUI-074 · 라이트 ≈ #ABCAF9 · 다크 ≈ #2A4A7A) — 아이콘 색은 그대로.
-            if it.checked {
+            if checked {
                 let inset = self.s(1);
                 ctx.fill_round_rect_alpha(
                     Rect::new(
@@ -777,7 +876,7 @@ impl Toolbar {
                     // ★ 글자 항목(`label`)은 hover에도 색조 그대로(nexa-sql 09-28 "마우스 오버시 푸른색으로 바꿀 필요 없음").
                     let color = if !it.enabled {
                         theme.text_dim
-                    } else if (is_hover || is_pressed) && !it.label {
+                    } else if soft_on || ((is_hover || is_pressed) && !it.label) {
                         theme.accent
                     } else {
                         match it.tone {
@@ -788,16 +887,28 @@ impl Toolbar {
                             ToolTone::Custom(c) => c,
                         }
                     };
-                    ctx.select_font(FontSlot::Base, false);
-                    let gw = ctx.text_width(g);
-                    let gh = ctx.text_height();
-                    ctx.text(
-                        icon_area.x + (icon_area.w - gw) / 2,
-                        icon_area.y + (icon_area.h - gh) / 2,
-                        slot,
-                        g,
-                        color,
-                    );
+                    match self.icon_glyph_delta.filter(|_| !it.label) {
+                        Some(delta) => {
+                            // 아이콘 글리프: 지정 크기 · 잉크가 칸 정중앙(가로 = 전진 폭 가운데).
+                            ctx.select_font_sized(FontSlot::Base, false, delta);
+                            let gw = ctx.text_width(g);
+                            let gy = ctx.glyph_center_y(g, icon_area.y, icon_area.h);
+                            ctx.text(icon_area.x + (icon_area.w - gw) / 2, gy, slot, g, color);
+                            ctx.select_font(FontSlot::Base, false);
+                        }
+                        None => {
+                            ctx.select_font(FontSlot::Base, false);
+                            let gw = ctx.text_width(g);
+                            let gh = ctx.text_height();
+                            ctx.text(
+                                icon_area.x + (icon_area.w - gw) / 2,
+                                icon_area.y + (icon_area.h - gh) / 2,
+                                slot,
+                                g,
+                                color,
+                            );
+                        }
+                    }
                 }
                 ToolIcon::Image(img) => {
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
@@ -815,7 +926,7 @@ impl Toolbar {
                     // SVG 유래 = 테마 기준색 · hover/pressed = 선색 변경(accent) · 비활성 = 흐림.
                     let color = if !it.enabled {
                         theme.text_dim
-                    } else if is_hover || is_pressed {
+                    } else if soft_on || is_hover || is_pressed {
                         theme.accent
                     } else {
                         match it.tone {

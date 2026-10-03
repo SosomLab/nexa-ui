@@ -274,6 +274,13 @@ impl ToolDock {
         self.relayout();
     }
 
+    /// 모든 그룹 툴바의 상태 표시 방식([`Toolbar::set_soft_states`]).
+    pub fn set_soft_states(&mut self, style: Option<super::toolbar::SoftStates>) {
+        for b in &mut self.bars {
+            b.set_soft_states(style);
+        }
+    }
+
     /// 모든 그룹 툴바의 항목 사이 간격([`Toolbar::set_item_gap`]).
     pub fn set_item_gap(&mut self, gap: i32) {
         for b in &mut self.bars {

@@ -722,6 +722,20 @@ impl Font {
             })
     }
 
+    /// 글리프 **잉크의 세로 범위**(기준선 기준 px · `(위, 아래)` · 위쪽이 음수) — 폴백 얼굴까지 찾는다. 외곽선이 없으면 `None`.
+    /// 아이콘 글꼴 글리프(Segoe MDL2 등)를 칸의 정중앙에 놓을 때 쓴다 — 본문 글꼴의 줄 높이로 가운데를 잡으면 1~2 px 어긋난다(118차).
+    #[must_use]
+    pub fn ink_v(&self, ch: char, size: f32) -> Option<(f32, f32)> {
+        let i = self.face_index_for(ch);
+        let g = self.faces[i]
+            .glyph_id(ch)
+            .with_scale_and_position(size, ab_glyph::point(0.0, 0.0));
+        self.faces[i].outline_glyph(g).map(|og| {
+            let b = og.px_bounds();
+            (b.min.y, b.max.y)
+        })
+    }
+
     /// 테스트용: 글리프 커버리지 합(잉크 양 · rgb면 채널 평균).
     #[must_use]
     pub fn glyph_ink(&self, ch: char, size: f32, bold: bool) -> f32 {

@@ -46,6 +46,13 @@ pub trait DrawCtx {
         let _ = (slot, bold);
     }
 
+    /// 아이콘 글리프(첫 글자)의 **잉크**가 `y..y+h`의 세로 가운데에 오도록 `text`에 넘길 y(118차).
+    /// 기본 = 줄 상자 가운데(`(h − text_height) / 2` — 측정 전용 백엔드 · 잉크를 모르는 백엔드).
+    fn glyph_center_y(&mut self, text: &str, y: i32, h: i32) -> i32 {
+        let _ = text;
+        y + (h - self.text_height()) / 2
+    }
+
     /// 슬롯 + 굵게 + **기울임**(UIC-313 · dir2 `select_font(slot, bold, italic)` 합집합 · 10-03 nexa-dir3 T-31) —
     /// 인자 italic은 슬롯 설정(`SlotFont.italic`) 위에 **강제**로 얹는다(헤더 이탤릭 같은 장식). 기본 = italic 무시.
     fn select_font_styled(&mut self, slot: FontSlot, bold: bool, italic: bool) {

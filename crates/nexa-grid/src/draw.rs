@@ -116,8 +116,16 @@ pub fn set_icon_resolver(f: Option<std::rc::Rc<IconResolver>>) {
     ICON_RESOLVER.with(|r| *r.borrow_mut() = f);
 }
 
-/// 글리프 크기 증분(논리 px) — 목록 글꼴 12 em(16 px) 대비 dir2 쉐브론 9 DIP(12 px).
-const GLYPH_DELTA_PX: f32 = -4.0;
+thread_local! {
+    /// 글리프 크기 증분(논리 px · 목록 글꼴 크기에 더한다) — 기본 −4. 호스트가 [`set_glyph_delta`]로 맞춘다
+    /// (dir2 = 아이콘 글꼴 em 9 고정 → 목록 글꼴 px가 16이면 −7).
+    static GLYPH_DELTA_PX: std::cell::Cell<f32> = const { std::cell::Cell::new(-4.0) };
+}
+
+/// 디스클로저/아이콘 글리프의 크기 증분(논리 px · 목록 글꼴 기준 · 118차). UI 스레드 전용.
+pub fn set_glyph_delta(delta_px: f32) {
+    GLYPH_DELTA_PX.with(|d| d.set(delta_px));
+}
 
 impl std::fmt::Debug for Adapt<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -147,17 +155,14 @@ impl DrawCtx for Adapt<'_> {
     /// 디스클로저/아이콘 글리프 — dir2 규약(MDL2 쉐브론 9 DIP · 본문 12 DIP보다 작게 · 셀 가운데). 그린 뒤 목록 글꼴로 복귀.
     fn glyph_opaque(&mut self, clip: Rect, text: &str, fg: Color, bg: Color) {
         self.0.fill_rect(clip, bg);
+        let delta = GLYPH_DELTA_PX.with(std::cell::Cell::get);
         self.0
-            .select_font_sized(nexa_ctl::FontSlot::PeerList, false, GLYPH_DELTA_PX);
+            .select_font_sized(nexa_ctl::FontSlot::PeerList, false, delta);
         let w = self.0.text_width(text);
-        let h = self.0.text_height();
-        self.0.text(
-            clip.x + (clip.w - w).max(0) / 2,
-            clip.y + (clip.h - h) / 2,
-            clip,
-            text,
-            fg,
-        );
+        // 세로 = 글리프 잉크가 칸 정중앙(아이콘 글꼴 메트릭과 본문 글꼴 줄 높이가 달라 줄 상자 가운데는 1~2 px 어긋난다).
+        let y = self.0.glyph_center_y(text, clip.y, clip.h);
+        self.0
+            .text(clip.x + (clip.w - w).max(0) / 2, y, clip, text, fg);
         self.0.select_font(nexa_ctl::FontSlot::PeerList, false);
     }
     /// 행 아이콘 — 등록된 리졸버가 준 이미지를 `size`×`size`로(없으면 false = 호출자 폴백).

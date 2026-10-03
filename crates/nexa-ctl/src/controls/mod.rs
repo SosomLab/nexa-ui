@@ -75,7 +75,7 @@ pub use textbox::{
     WhitespaceMode, WhitespaceStyle,
 };
 pub use timeout_button::{FiredBy, TimeoutButton};
-pub use toolbar::{DropClick, ToolIcon, ToolItem, ToolTone, Toolbar, DEFAULT_ICON};
+pub use toolbar::{DropClick, SoftStates, ToolIcon, ToolItem, ToolTone, Toolbar, DEFAULT_ICON};
 pub use tooldock::{DockAction, DockLayout, ToolDock, ToolGroup};
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};
 

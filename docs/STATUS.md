@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-10-03 (118차 · win · nexa-dir3 네비/툴바 디자인)** — `Font::ink_v` · `DrawCtx::glyph_center_y`(잉크 가운데) · `Toolbar::set_icon_glyphs/set_hover_background/set_soft_states` · nexa-grid `set_glyph_delta`(전부 옵션 · nexa-sql 불변).
 - **2026-10-03 (117차 · win · nexa-dir3 툴바 그룹 도크)** — `Toolbar::set_item_gap` · `ToolDock::set_gaps/set_padding/set_item_checked/all_items`(기본값 = 종전 · nexa-sql 불변 · 시험 +1).
 - **2026-10-03 (116차 · win · nexa-dir3 GAP-003)** — nexa-grid 행 아이콘 리졸버(`IconResolver` · `set_icon_resolver` · `Adapt::draw_icon`이 실제로 그린다).
 - **2026-10-03 (115차 · win · nexa-dir3 사용자 피드백)** — nexa-font 아이콘 글꼴 체인(Segoe MDL2 · Fluent Icons → PUA 두부 해소) · nexa-grid `set_marker_glyphs`(디스클로저 글리프 교체) · `Adapt::glyph_opaque`(작게 · 셀 가운데).

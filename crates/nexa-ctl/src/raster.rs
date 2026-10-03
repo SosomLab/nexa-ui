@@ -636,6 +636,18 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.font.text_box_height(self.px_size()).ceil() as i32
     }
 
+    fn glyph_center_y(&mut self, text: &str, y: i32, h: i32) -> i32 {
+        let size = self.px_size() * self.mono_mult;
+        let asc = self.font.ascent(size);
+        match text.chars().next().and_then(|c| self.font.ink_v(c, size)) {
+            // 기준선 = y_top + ascent · 잉크 가운데 = 기준선 + (위 + 아래)/2 → 칸 가운데에 맞춘다.
+            Some((top, bottom)) => {
+                (y as f32 + h as f32 / 2.0 - asc - (top + bottom) / 2.0).round() as i32
+            }
+            None => y + (h - self.text_height()) / 2,
+        }
+    }
+
     fn text_center_y(&mut self, y: i32, h: i32) -> i32 {
         // 잉크 가운데: 기준선 = 행 가운데 + 숫자 높이/2 → top = 기준선 − 어센트. 글꼴·OS가 달라도 같은 자리.
         let size = self.px_size();
