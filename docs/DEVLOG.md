@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-04 (136차 · linux · nexa-dir3 툴바 hover/크기)** — nexa-ctl `set_icon_scale` · `icon_draw_px` · `SoftStates.hover_icon_accent/hover_fill_toggle_only` · `ToolItem.toggle`(기본 = 종전) · 시험 +1 — journal 10-04 §3.
 - **2026-10-04 (135차 · linux · nexa-dir3 툴바 토글 정정)** — nexa-ctl `SoftStates.on_line_color`(테두리 색만 따로 · 기본 None = 종전) — journal 10-04 §2.
 - **2026-10-04 (134차 · linux · nexa-dir3 툴바 토글 색)** — nexa-ctl `SoftStates.on_color` · `on_icon` · `SWITCH_ON` 공개(기본 None = 종전) · 시험 +1 — journal 10-04 §1.
 - **2026-10-03 (133차 · linux · nexa-dir3 T-94/95)** — nexa-ctl StatusBar 칸(`set_segments` · `set_segments_leading` · `seg_rect` · `take_click` · `StatusSeg`) · ⚠ clippy 빨강 a01406b → fca3c66 복구 — journal 10-03 §30.
