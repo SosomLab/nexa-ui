@@ -315,6 +315,9 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
     if want.is_empty() {
         return None;
     }
+    // 접두가 맞는 파일이 여럿이면(굵기·기울임·변형별 파일) **보통(Regular) 얼굴**을 고른다(119차 — 종전 = 정렬상 첫 파일이라
+    // `JetBrainsMonoNerdFont-Bold.ttf`나 `D2Coding…-ligature.ttf`가 잡혔다).
+    let mut best: Option<((u32, usize), &Path)> = None;
     for path in font_files() {
         let ext_ok = path
             .extension()
@@ -327,13 +330,33 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
             continue;
         };
         let got = norm(stem);
-        if got == want || got.starts_with(&want) {
-            if let Some(bytes) = map_font(path) {
-                return Some((bytes, 0));
+        if let Some(rest) = got.strip_prefix(want.as_str()) {
+            let rank = (family_rank(rest), rest.len());
+            if best.as_ref().is_none_or(|(b, _)| rank < *b) {
+                best = Some((rank, path));
             }
         }
     }
-    None
+    let (_, path) = best?;
+    map_font(path).map(|bytes| (bytes, 0))
+}
+
+/// 패밀리 이름 뒤에 남은 파일명 꼬리의 순위(작을수록 좋음): 0 = 없음(정확히 그 이름) · 1 = `regular` · 2 = 굵기·기울임 표시가
+/// 없는 꼬리(버전 표기 등) · 3 = 굵기·기울임 얼굴(Bold · Italic · Light …).
+fn family_rank(rest: &str) -> u32 {
+    const STYLED: [&str; 12] = [
+        "bold", "italic", "oblique", "light", "thin", "medium", "black", "heavy", "semi", "extra",
+        "ultra", "demi",
+    ];
+    if rest.is_empty() {
+        0
+    } else if rest == "regular" {
+        1
+    } else if STYLED.iter().any(|t| rest.contains(t)) {
+        3
+    } else {
+        2
+    }
 }
 
 /// 시스템 한글 UI 본.
@@ -769,5 +792,27 @@ mod tests {
         assert!(m.font.covers('A'));
         let u = ui_font(None).expect("UI 본");
         assert!(u.font.covers('한'));
+    }
+
+    /// 패밀리 꼬리 순위: 정확 일치 < regular < 버전 꼬리 < 굵기·기울임(119차 — Bold/ligature가 먼저 잡히던 문제).
+    #[test]
+    fn family_rank_prefers_regular_face() {
+        assert!(family_rank("") < family_rank("regular"));
+        assert!(family_rank("regular") < family_rank("ver1.3.220180524"));
+        assert!(family_rank("ver1.3.220180524") < family_rank("bold"));
+        assert_eq!(family_rank("bolditalic"), 3);
+        assert_eq!(family_rank("semibold"), 3);
+        assert_eq!(
+            family_rank("monoregular"),
+            2,
+            "변형 꼬리(Mono)는 보통 얼굴보다 뒤 · 굵기 얼굴보다 앞"
+        );
+        // 같은 순위면 짧은 꼬리(리가처 판보다 일반 판).
+        let a = (family_rank("ver1.3.220180524"), "ver1.3.220180524".len());
+        let b = (
+            family_rank("ver1.3.220180524ligature"),
+            "ver1.3.220180524ligature".len(),
+        );
+        assert!(a < b);
     }
 }

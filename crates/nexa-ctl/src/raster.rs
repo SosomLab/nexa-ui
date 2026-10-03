@@ -420,6 +420,17 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.cur.italic |= italic;
     }
 
+    fn select_font_sized_styled(
+        &mut self,
+        slot: FontSlot,
+        bold: bool,
+        italic: bool,
+        delta_px: f32,
+    ) {
+        self.select_font_sized(slot, bold, delta_px);
+        self.cur.italic |= italic;
+    }
+
     fn select_font_sized(&mut self, slot: FontSlot, bold: bool, delta_px: f32) {
         self.select_font(slot, bold);
         // 증분은 슬롯 크기 **위에** 얹는다 — 사용자가 글꼴 크기를 키우면 제목도 같이 큰다.

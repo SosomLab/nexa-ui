@@ -894,6 +894,15 @@ impl DrawCtx for RecordCtx {
     fn select_font_sized(&mut self, slot: FontSlot, bold: bool, _delta_px: f32) {
         self.fonts.push((slot, bold, false));
     }
+    fn select_font_sized_styled(
+        &mut self,
+        slot: FontSlot,
+        bold: bool,
+        italic: bool,
+        _delta_px: f32,
+    ) {
+        self.fonts.push((slot, bold, italic));
+    }
     fn fill_rect(&mut self, r: Rect, c: Color) {
         self.fills.push((r, c));
     }

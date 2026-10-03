@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (119차 · win · nexa-dir3 캡처 판정)** — nexa-font `find_font_by_family` + `family_rank`(정확 < regular < 표시 없음 < 굵기/기울임 · 짧은 꼬리 · ⚠ 동작 변경) · nexa-ctl `DrawCtx::select_font_sized_styled` · `SoftStates.on_icon_accent` + 기본 농도 26/12/20 % · `Toolbar::set_side_margin` · 시험 +1 — journal 10-03 §16.
 - **2026-10-03 (118차 · win · nexa-dir3 네비/툴바 디자인)** — nexa-gfx `Font::ink_v` · nexa-ctl `DrawCtx::glyph_center_y`(RasterCtx = 잉크 정중앙) · `Toolbar::set_icon_glyphs(delta)`/`set_hover_background`/`set_soft_states(SoftStates)` · `ToolDock::set_soft_states` · nexa-grid `set_glyph_delta` + 잉크 가운데 · 전부 옵션(기본 불변) · nexa-sql cargo check 확인 — journal 10-03 §15.
 - **2026-10-03 (117차 · win · nexa-dir3 툴바 그룹 도크)** — `Toolbar::set_item_gap`(기본 4) · `ToolDock::set_item_gap`/`set_gaps(group, row)`(기본 4 · 0 · 행 간격 변경 = `Resized`)/`gaps`/`set_padding(slot, bar)`/`set_item_checked`/`item_checked`/`all_items` · 시험 +1 `gaps_and_padding_are_configurable` · nexa-sql cargo check 확인 — journal 10-03 §14.
 - **2026-10-03 (116차 · win · nexa-dir3 GAP-003)** — nexa-grid `IconResolver`(키 · 힌트 · 크기 → `Rc<IconImage>`) + `set_icon_resolver`(thread_local) · `Adapt::draw_icon` = 리졸버 이미지를 size×size `image_scaled`(없으면 false — 종전 늘 false) · 시험 `adapt_forwards_to_ctl_ctx` 확장 — journal 10-03 §13.

@@ -249,17 +249,21 @@ pub struct SoftStates {
     pub step: f32,
     /// 모서리 반경(논리 px).
     pub radius: i32,
+    /// 켜진 칸의 아이콘을 강조색으로 칠할지(false = 본문색 그대로 — 강조색 채움 위에서 더 또렷하다 · dir2 규약).
+    pub on_icon_accent: bool,
 }
 
 impl Default for SoftStates {
-    /// 기본: hover 8 % · 켜짐 18 % + 테두리 55 % · 단계 12 %(켜짐+hover = 30 % / 79 %) · 반경 4.
+    /// 기본(119차 캡처 검토로 재조정): hover 8 % · 켜짐 26 % + 테두리 12 %(거의 안 보임 — 나란한 켜짐 칸이 "사슬"처럼
+    /// 보이지 않게) · 단계 20 %(켜짐+hover = 46 % / 52 % — 테두리가 이때 드러난다) · 반경 4 · 아이콘 = 본문색.
     fn default() -> Self {
         Self {
             hover_fill: 0.08,
-            on_fill: 0.18,
-            on_line: 0.55,
-            step: 0.12,
+            on_fill: 0.26,
+            on_line: 0.12,
+            step: 0.20,
             radius: 4,
+            on_icon_accent: false,
         }
     }
 }
@@ -289,6 +293,8 @@ pub struct Toolbar {
     icon_glyph_delta: Option<f32>,
     /// hover/눌림 = 칸 배경(`theme.sel_bg`) · 글리프 색은 그대로(118차 `set_hover_background` — dir2 네비 버튼 규약).
     hover_bg: bool,
+    /// 양끝 여백(논리 px · 기본 6 · 119차 `set_side_margin`).
+    side: i32,
     /// 부드러운 상태 표시(118차 `set_soft_states`) — 켜짐/hover/눌림을 옅은 채움 + 얇은 테두리 + 아이콘 색으로.
     soft: Option<SoftStates>,
 }
@@ -313,6 +319,7 @@ impl Toolbar {
             item_gap: 4,
             icon_glyph_delta: None,
             hover_bg: false,
+            side: 6,
             soft: None,
         }
     }
@@ -330,6 +337,12 @@ impl Toolbar {
     /// 눌림 = 한 단계 더. hover에 아이콘 색은 바뀌지 않는다(파란 배경 위 파란 아이콘 문제 해소). `None`(기본) = 종전.
     pub fn set_soft_states(&mut self, style: Option<SoftStates>) {
         self.soft = style;
+    }
+
+    /// 양끝 여백(논리 px · 음수는 0 · 기본 6) — 0이면 첫 칸이 툴바 왼쪽 끝에 붙는다(119차 · nexa-dir3 네비 버튼: dir2처럼
+    /// 버튼 4개가 26 px 간격으로 왼쪽 끝부터).
+    pub fn set_side_margin(&mut self, px: i32) {
+        self.side = px.max(0);
     }
 
     /// hover/눌림 표시 방식(118차): true = 칸 배경을 `theme.sel_bg`로 채우고 글리프·아이콘 색은 그대로(dir2 X-27) ·
@@ -414,7 +427,7 @@ impl Toolbar {
     }
 
     pub fn preferred_width(&self) -> i32 {
-        let mut w = self.s(6) * 2;
+        let mut w = self.s(self.side) * 2;
         for (i, it) in self.items.iter().enumerate() {
             if it.visible {
                 w += self.item_w(i) + self.gap_before(i);
@@ -457,7 +470,7 @@ impl Toolbar {
         let y = b.y + (b.h - slot) / 2;
         if self.items[i].right {
             // 오른쪽 끝부터 — 뒤(오른쪽)의 보이는 right 항목 폭+간격만큼 밀린다.
-            let mut x = b.right() - self.s(6);
+            let mut x = b.right() - self.s(self.side);
             for j in ((i + 1)..self.items.len()).rev() {
                 let it = &self.items[j];
                 if it.right && it.visible {
@@ -467,7 +480,7 @@ impl Toolbar {
             x -= self.item_w(i);
             Rect::new(x, y, self.item_w(i), slot)
         } else {
-            let mut x = b.x + self.s(6);
+            let mut x = b.x + self.s(self.side);
             for j in 0..i {
                 let it = &self.items[j];
                 if !it.right && it.visible {
@@ -484,7 +497,7 @@ impl Toolbar {
     pub fn left_items_end(&self) -> i32 {
         let last = self.items.iter().rposition(|it| !it.right && it.visible);
         let Some(last) = last else {
-            return self.base.bounds.x + self.s(6);
+            return self.base.bounds.x + self.s(self.side);
         };
         self.slot_rect(last).right()
     }
@@ -806,7 +819,7 @@ impl Toolbar {
                         0.0
                     };
                     if it.checked {
-                        soft_on = true;
+                        soft_on = st.on_icon_accent;
                         let fill = (st.on_fill + st.step * step).min(1.0);
                         let line = (st.on_line + st.step * 2.0 * step).min(1.0);
                         ctx.fill_round_rect_alpha(pill, r, theme.accent, fill);

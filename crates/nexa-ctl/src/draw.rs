@@ -46,6 +46,19 @@ pub trait DrawCtx {
         let _ = (slot, bold);
     }
 
+    /// 슬롯 + 굵게 + 기울임 + **크기 증분**(119차 · 터미널의 이탤릭 셀 — `select_font_sized`와 `select_font_styled`의 합).
+    /// 기본 = 기울임 무시.
+    fn select_font_sized_styled(
+        &mut self,
+        slot: FontSlot,
+        bold: bool,
+        italic: bool,
+        delta_px: f32,
+    ) {
+        let _ = italic;
+        self.select_font_sized(slot, bold, delta_px);
+    }
+
     /// 아이콘 글리프(첫 글자)의 **잉크**가 `y..y+h`의 세로 가운데에 오도록 `text`에 넘길 y(118차).
     /// 기본 = 줄 상자 가운데(`(h − text_height) / 2` — 측정 전용 백엔드 · 잉크를 모르는 백엔드).
     fn glyph_center_y(&mut self, text: &str, y: i32, h: i32) -> i32 {
