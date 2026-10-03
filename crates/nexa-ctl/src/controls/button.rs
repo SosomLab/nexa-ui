@@ -252,6 +252,12 @@ impl Button {
         self.label = Some(label.into());
     }
 
+    /// 현재 라벨(없으면 빈 문자열 · 시험·카운트다운 버튼).
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.label.as_deref().unwrap_or("")
+    }
+
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
