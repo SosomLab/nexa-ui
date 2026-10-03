@@ -23,6 +23,9 @@ pub struct InfoDock {
     active: usize,
     /// 스트립 라벨 x 범위 캐시(히트 테스트 — 텍스트 측정은 paint에서만).
     ranges: std::cell::RefCell<Vec<(i32, i32)>>,
+    /// 종류 스트립 hover(127차 · nexa-dir3 사용자 10-03 "정보/미리보기/터미널에도 탭처럼 호버링"): 마우스가 올라간 칸 —
+    /// 종류 인덱스 · `kinds.len()` = → 버튼. 활성 칸은 이미 강조돼 있어 hover 표시는 그 밖의 칸에만 한다.
+    strip_hover: Option<usize>,
     lines: Vec<String>,
     /// 이미지 미리보기 경로(Some = 라인 대신 이미지 — M4-2).
     image: Option<String>,
@@ -114,6 +117,7 @@ impl InfoDock {
             kinds: vec![title.into()],
             active: 0,
             ranges: std::cell::RefCell::new(Vec::new()),
+            strip_hover: None,
             lines: Vec::new(),
             image: None,
             pending_goto: false,
@@ -591,6 +595,9 @@ impl InfoDock {
             } else if active {
                 // 비활성 패널 — 활성 종류는 무채색으로만 표시(활성 패널과 구분)
                 (theme.text, theme.sel_bg_inactive)
+            } else if self.strip_hover == Some(i) {
+                // hover = 탭 바와 같은 상태 레이어(글자색을 배경에 얇게 섞는다) + 글자는 본문색.
+                (theme.text, strip_hover_bg(theme))
             } else {
                 (theme.text_dim, crate::theme::header_bg(theme))
             };
@@ -608,6 +615,8 @@ impl InfoDock {
                     (theme.text, theme.accent)
                 } else if active {
                     (theme.text, theme.sel_bg_inactive)
+                } else if self.strip_hover == Some(self.kinds.len()) {
+                    (theme.text, strip_hover_bg(theme))
                 } else {
                     (theme.text_dim, crate::theme::header_bg(theme))
                 };
@@ -620,6 +629,33 @@ impl InfoDock {
             x += self.pad_x;
         }
         *self.ranges.borrow_mut() = ranges;
+    }
+
+    /// 스트립의 어느 칸 위인가(종류 인덱스 · `kinds.len()` = → 버튼 · 밖 = None) — paint가 캐시한 범위로 판정.
+    fn strip_hit(&self, x: i32, y: i32) -> Option<usize> {
+        let b = self.bounds;
+        if b.h <= 1
+            || y < b.y
+            || y >= b.y + 1 + self.row_h.min(b.h - 1)
+            || x < b.x
+            || x >= b.right()
+        {
+            return None;
+        }
+        let (glo, ghi) = self.goto_range.get();
+        if ghi > glo && x >= glo && x < ghi {
+            return Some(self.kinds.len());
+        }
+        self.ranges
+            .borrow()
+            .iter()
+            .position(|(lo, hi)| x >= *lo && x < *hi)
+    }
+
+    /// 지금 hover 중인 스트립 칸(시험 · 호스트 덤프용).
+    #[must_use]
+    pub fn strip_hover(&self) -> Option<usize> {
+        self.strip_hover
     }
 
     /// 호스트용 스트립 재도장(10-02): 터미널처럼 호스트가 내용 영역을 직접 그린 뒤 부분 행이 스트립
@@ -715,6 +751,13 @@ impl Widget for InfoDock {
                         }
                     }
                     return;
+                }
+                // 종류 스트립 hover(127차): 칸이 바뀔 때만 스트립을 다시 그린다 · 스트립 밖/창 밖 = 해제.
+                let over = self.strip_hit(x, y);
+                if over != self.strip_hover {
+                    self.strip_hover = over;
+                    let b = self.bounds;
+                    inv.push(Rect::new(b.x, b.y, b.w, (self.row_h + 1).min(b.h)));
                 }
                 // ↗ hover 색 입힘(07-26 — X-27 sel_bg 토큰. 변경 시에만 무효화)
                 let hp = self.popout_on
@@ -994,6 +1037,12 @@ impl InfoDock {
     }
 }
 
+/// 스트립 hover 배경 = 머리 배경에 글자색을 hover 상태 레이어 농도만큼 섞은 색(탭 바 hover와 같은 농도 · 불투명 —
+/// 스트립 글자는 `text_opaque`로 그린다).
+fn strip_hover_bg(theme: &Theme) -> crate::theme::Color {
+    crate::theme::header_bg(theme).lerp(theme.text, nexa_ctl::tokens::hover_alpha(false, 1.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1093,6 +1142,62 @@ mod tests {
         assert_eq!(d.scroll, 8, "max_scroll 클램프");
         d.on_event(&InputEvent::Wheel { delta: 120 * 50 }, &mut inv);
         assert_eq!(d.scroll, 0, "0 클램프");
+    }
+
+    /// 스트립 hover(127차): 비활성 종류 칸과 → 버튼 위에서만 표시가 바뀐다 · 칸이 바뀔 때만 무효화 · 벗어나면 해제.
+    #[test]
+    fn strip_cells_hover_like_tabs() {
+        let mut d = InfoDock::new("Info", 20, 6);
+        let mut inv = Invalidations::default();
+        d.set_kinds(
+            vec!["Info".into(), "Preview".into(), "Terminal".into()],
+            &mut inv,
+        );
+        d.set_bounds(Rect::new(0, 100, 400, 200), &mut inv);
+        let theme = Theme::dark();
+        let mut rec = nexa_ctl::RecordCtx::with_surface(400, 300);
+        d.paint(&mut rec, &theme); // 칸 범위 캐시
+        let ranges = d.ranges.borrow().clone();
+        assert_eq!(ranges.len(), 3);
+        let mid = |i: usize| (ranges[i].0 + ranges[i].1) / 2;
+        let _ = inv.drain().count();
+        d.on_event(&InputEvent::MouseMove { x: mid(1), y: 110 }, &mut inv);
+        assert_eq!(d.strip_hover(), Some(1));
+        assert_eq!(inv.drain().count(), 1, "칸 진입 = 무효화 1회");
+        d.on_event(
+            &InputEvent::MouseMove {
+                x: mid(1) + 1,
+                y: 111,
+            },
+            &mut inv,
+        );
+        assert_eq!(inv.drain().count(), 0, "같은 칸 = 무비용");
+        // hover 칸은 hover 배경 · 다른 비활성 칸은 머리 배경.
+        rec.clear();
+        d.paint(&mut rec, &theme);
+        let hover_bg = strip_hover_bg(&theme);
+        assert_ne!(hover_bg, crate::theme::header_bg(&theme));
+        assert!(
+            rec.fills.iter().any(|(_, c)| *c == hover_bg),
+            "hover 배경이 그려진다"
+        );
+        // → 버튼 · 활성 칸(표시는 활성 강조 그대로) · 내용 영역 = 해제.
+        let (glo, ghi) = d.goto_range.get();
+        d.on_event(
+            &InputEvent::MouseMove {
+                x: (glo + ghi) / 2,
+                y: 110,
+            },
+            &mut inv,
+        );
+        assert_eq!(d.strip_hover(), Some(3));
+        d.on_event(&InputEvent::MouseMove { x: mid(0), y: 110 }, &mut inv);
+        assert_eq!(d.strip_hover(), Some(0));
+        d.on_event(&InputEvent::MouseMove { x: mid(1), y: 200 }, &mut inv);
+        assert_eq!(d.strip_hover(), None);
+        d.on_event(&InputEvent::MouseMove { x: mid(1), y: 110 }, &mut inv);
+        d.on_event(&InputEvent::MouseMove { x: -1, y: -1 }, &mut inv);
+        assert_eq!(d.strip_hover(), None, "창 밖 = 해제");
     }
 
     #[test]
