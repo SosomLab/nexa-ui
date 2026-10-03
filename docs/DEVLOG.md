@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (129차 · linux · nexa-dir3 T-121)** — nexa-ctl `ScrollButtons { End · Start · Split }` · `TabBar::set_scroll_buttons`(기본 End = 종전) · 시험 +1 — journal 10-03 §26.
 - **2026-10-03 (128차 · linux · nexa-dir3 런처 · 경로 바)** — nexa-fs `app_icon_file`(.desktop → 테마/pixmaps → 일반 실행 아이콘) · ⚠ PathBar Unix 루트 `/` = 첫 세그먼트(세그먼트 수 +1) · 시험 +1/갱신 — journal 10-03 §25.
 - **2026-10-03 (127차 · linux · nexa-dir3 도크 hover)** — nexa-explorer InfoDock `strip_hover`(종류 칸 hover · 탭 바와 같은 농도) · 시험 +1 — journal 10-03 §24.
 - **2026-10-03 (126차 · linux · nexa-dir3 T-115)** — nexa-ctl `SplitBand` · `Splitter::set_band/band/hover_progress/is_animating/pointer_gone`(기본 불변) · 시험 +1 — journal 10-03 §23.
