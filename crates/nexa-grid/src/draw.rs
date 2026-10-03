@@ -99,8 +99,22 @@ pub trait DrawCtx {
 }
 
 /// nexa-ctl `DrawCtx` → 그리드 어휘 어댑터. italic은 `select_font_styled`로 전달(113차 · UIC-313 — 종전 U-5 "버림" 해소) · `alpha` u8 → f32 ·
-/// `draw_icon`은 false(아이콘은 G-2에서 `RowSource` 쪽 `IconImage`로).
+/// `draw_icon` = 호스트가 등록한 [`set_icon_resolver`](116차 · 없으면 false).
 pub struct Adapt<'a>(pub &'a mut dyn nexa_ctl::DrawCtx);
+
+/// 행 아이콘 리졸버 — `(키, 로드 힌트, 한 변 px)` → 이미지(없으면 `None` = 안 그림 · 칸은 비워 둔다).
+/// 키/힌트의 뜻은 `RowSource::icon`을 구현한 호스트가 정한다(dir2: 키 = `dir`/`file`/확장자/파일별 경로 · `L|` 접두 = 큰 아이콘).
+pub type IconResolver = dyn Fn(&str, &str, i32) -> Option<std::rc::Rc<nexa_ctl::IconImage>>;
+
+thread_local! {
+    static ICON_RESOLVER: std::cell::RefCell<Option<std::rc::Rc<IconResolver>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 행 아이콘 리졸버 등록/해제(116차 · nexa-dir3 GAP-003 — dir2 M1-7 셸 아이콘). [`Adapt::draw_icon`]이 부른다. UI 스레드 전용.
+pub fn set_icon_resolver(f: Option<std::rc::Rc<IconResolver>>) {
+    ICON_RESOLVER.with(|r| *r.borrow_mut() = f);
+}
 
 /// 글리프 크기 증분(논리 px) — 목록 글꼴 12 em(16 px) 대비 dir2 쉐브론 9 DIP(12 px).
 const GLYPH_DELTA_PX: f32 = -4.0;
@@ -145,6 +159,16 @@ impl DrawCtx for Adapt<'_> {
             fg,
         );
         self.0.select_font(nexa_ctl::FontSlot::PeerList, false);
+    }
+    /// 행 아이콘 — 등록된 리졸버가 준 이미지를 `size`×`size`로(없으면 false = 호출자 폴백).
+    fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) -> bool {
+        let resolver = ICON_RESOLVER.with(|r| r.borrow().clone());
+        let Some(img) = resolver.and_then(|f| f(key, hint, size)) else {
+            return false;
+        };
+        let rc = Rect::new(x, y, size, size);
+        self.0.image_scaled(rc, &img, rc);
+        true
     }
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         self.0.fill_ellipse(rect, color);
@@ -214,6 +238,28 @@ mod tests {
                 (nexa_ctl::FontSlot::PeerList, false, false), // … 뒤 목록 글꼴 복귀
             ]
         );
+        // 행 아이콘: 리졸버가 없으면 false · 있으면 그 이미지를 size×size로(116차).
+        {
+            let mut a = Adapt(&mut rec);
+            assert!(!a.draw_icon(4, 4, 16, "dir", "C:/x"));
+            let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let seen2 = seen.clone();
+            set_icon_resolver(Some(std::rc::Rc::new(move |k: &str, h: &str, s: i32| {
+                seen2.borrow_mut().push((k.to_string(), h.to_string(), s));
+                (k == "dir")
+                    .then(|| std::rc::Rc::new(nexa_ctl::IconImage::from_rgba(1, 1, vec![255; 4])))
+            })));
+            assert!(a.draw_icon(4, 4, 16, "dir", "C:/x"));
+            assert!(!a.draw_icon(4, 4, 16, "txt", "C:/y.txt"));
+            set_icon_resolver(None);
+            assert!(!a.draw_icon(4, 4, 16, "dir", "C:/x"));
+            assert_eq!(seen.borrow().len(), 2);
+            assert_eq!(
+                seen.borrow()[0],
+                ("dir".to_string(), "C:/x".to_string(), 16)
+            );
+        }
+        assert_eq!(rec.images, vec![Rect::new(4, 4, 16, 16)]);
         // 글리프는 셀 가운데(가로) — RecordCtx 글자 폭 7.
         let g = rec.texts.iter().find(|t| t.3 == "▶").expect("glyph text");
         assert_eq!(g.0, (20 - 7) / 2);
