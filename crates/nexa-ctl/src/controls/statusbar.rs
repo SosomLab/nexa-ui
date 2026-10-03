@@ -2,7 +2,11 @@
 //!
 //! 왼쪽 글(본문색) + 오른쪽 글(흐린 색 · 오른쪽 정렬 — 왼쪽 글과 겹치면 오른쪽 글이 `x + pad`까지만 온다). 배경 `chrome_bg` ·
 //! **위** 1px `border` · [`FontSlot::Status`]. [`StatusBar::set_text`]는 **바뀔 때만** 무효화한다(상태줄은 매 입력마다 갱신되므로
-//! 같은 글이면 그리지 않는 것이 dir2 교훈). 입력 사건은 받지 않는다(표시 전용 — 구획·클릭은 호스트가 필요해지면 더한다).
+//! 같은 글이면 그리지 않는 것이 dir2 교훈).
+//!
+//! **칸(세그먼트 · 133차 nexa-dir3 상태줄 구성)**: [`StatusBar::set_segments`]로 칸을 주면 오른쪽 글 대신 칸들을 그린다 —
+//! 기본은 오른쪽 끝에 붙여(첫 칸이 맨 왼쪽) · [`StatusBar::set_segments_leading`]이면 왼쪽부터(패널 아래 "탭 상태바").
+//! 칸은 hover 배경 · 좌클릭/우클릭 통지([`StatusBar::take_click`])를 가진다. 칸이 없으면 종전 그대로(입력 무시).
 
 use super::{Control, ControlBase};
 use crate::draw::{DrawCtx, FontSlot};
@@ -16,12 +20,55 @@ pub const DEFAULT_H: i32 = 22;
 /// 좌우 여백(논리 px).
 const PAD_X: i32 = 8;
 
+/// 칸 안쪽 좌우 여백(논리 px).
+const SEG_PAD: i32 = 7;
+
+/// 상태 바의 칸 하나.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusSeg {
+    /// 호스트가 붙이는 식별자(클릭 통지에 그대로 돌아온다).
+    pub id: String,
+    /// 표시 글.
+    pub text: String,
+    /// 클릭할 수 있는가(false = hover·클릭 없음 · 흐린 글).
+    pub clickable: bool,
+}
+
+impl StatusSeg {
+    /// 클릭 가능한 칸.
+    #[must_use]
+    pub fn new(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            text: text.into(),
+            clickable: true,
+        }
+    }
+
+    /// 표시 전용 칸.
+    #[must_use]
+    pub fn label(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            clickable: false,
+            ..Self::new(id, text)
+        }
+    }
+}
+
 /// 상태 바 컨트롤.
 #[derive(Debug, Default)]
 pub struct StatusBar {
     base: ControlBase,
     left: String,
     right: String,
+    segs: Vec<StatusSeg>,
+    /// 칸을 왼쪽부터 놓는가(기본 = 오른쪽 끝에 붙임).
+    leading: bool,
+    /// 마지막으로 그린 칸 자리(글 폭은 그릴 때만 알 수 있다 — 입력 판정은 이 자리를 쓴다).
+    rects: std::cell::RefCell<Vec<Rect>>,
+    hover: Option<usize>,
+    pressed: Option<usize>,
+    click: Option<(String, bool)>,
 }
 
 impl StatusBar {
@@ -66,6 +113,54 @@ impl StatusBar {
         &self.right
     }
 
+    /// 칸 목록 — **바뀔 때만** 무효화. 칸이 하나라도 있으면 오른쪽 글 대신 칸을 그린다. 바뀌었으면 true.
+    pub fn set_segments(&mut self, segs: Vec<StatusSeg>, inv: &mut Invalidations) -> bool {
+        if self.segs == segs {
+            return false;
+        }
+        if self.segs.len() != segs.len() {
+            self.hover = None;
+            self.pressed = None;
+        }
+        self.segs = segs;
+        inv.push(self.base.bounds);
+        true
+    }
+
+    /// 칸을 왼쪽부터 놓는다(패널 아래 상태바) — 이때 왼쪽 글은 칸들 뒤(오른쪽)에 온다.
+    pub fn set_segments_leading(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.leading != on {
+            self.leading = on;
+            inv.push(self.base.bounds);
+        }
+    }
+
+    /// 칸 목록.
+    #[must_use]
+    pub fn segments(&self) -> &[StatusSeg] {
+        &self.segs
+    }
+
+    /// 마지막으로 그린 그 칸의 자리(아직 그리지 않았거나 없는 칸 = `None`).
+    #[must_use]
+    pub fn seg_rect(&self, id: &str) -> Option<Rect> {
+        let i = self.segs.iter().position(|s| s.id == id)?;
+        self.rects.borrow().get(i).copied().filter(|r| r.w > 0)
+    }
+
+    /// 칸 클릭 통지 `(id, 우클릭인가)` — 한 번만 돌려준다.
+    pub fn take_click(&mut self) -> Option<(String, bool)> {
+        self.click.take()
+    }
+
+    fn seg_at(&self, x: i32, y: i32) -> Option<usize> {
+        let rects = self.rects.borrow();
+        self.segs
+            .iter()
+            .zip(rects.iter())
+            .position(|(s, r)| s.clickable && r.contains(crate::geom::Point { x, y }))
+    }
+
     /// 권장 높이(물리 px · 배율 반영).
     #[must_use]
     pub fn preferred_height(&self) -> i32 {
@@ -100,7 +195,40 @@ impl Widget for StatusBar {
         }
     }
 
-    fn on_event(&mut self, _ev: &InputEvent, _inv: &mut Invalidations) {}
+    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        if self.segs.is_empty() {
+            return;
+        }
+        match *ev {
+            InputEvent::MouseMove { x, y } => {
+                let h = self.seg_at(x, y);
+                if h != self.hover {
+                    self.hover = h;
+                    inv.push(self.base.bounds);
+                }
+            }
+            InputEvent::MouseDown { x, y, .. } | InputEvent::DoubleClick { x, y, .. } => {
+                self.pressed = self.seg_at(x, y);
+                if self.pressed.is_some() {
+                    inv.push(self.base.bounds);
+                }
+            }
+            InputEvent::MouseUp { x, y } => {
+                if let Some(p) = self.pressed.take() {
+                    if self.seg_at(x, y) == Some(p) {
+                        self.click = Some((self.segs[p].id.clone(), false));
+                    }
+                    inv.push(self.base.bounds);
+                }
+            }
+            InputEvent::RightDown { x, y } => {
+                if let Some(i) = self.seg_at(x, y) {
+                    self.click = Some((self.segs[i].id.clone(), true));
+                }
+            }
+            _ => {}
+        }
+    }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let b = self.base.bounds;
@@ -113,13 +241,87 @@ impl Widget for StatusBar {
         let pad = self.s(PAD_X);
         let ty = ctx.text_center_y(b.y + 1, b.h - 1);
         let clip = Rect::new(b.x, b.y + 1, b.w, b.h - 1);
-        if !self.right.is_empty() {
-            let rw = ctx.text_width(&self.right);
-            let rx = (b.right() - pad - rw).max(b.x + pad);
-            ctx.text(rx, ty, clip, &self.right, theme.text_dim);
+        if self.segs.is_empty() {
+            self.rects.borrow_mut().clear();
+            if !self.right.is_empty() {
+                let rw = ctx.text_width(&self.right);
+                let rx = (b.right() - pad - rw).max(b.x + pad);
+                ctx.text(rx, ty, clip, &self.right, theme.text_dim);
+            }
+            if !self.left.is_empty() {
+                ctx.text(b.x + pad, ty, clip, &self.left, theme.text);
+            }
+            return;
         }
+        // 칸: 폭 = 글 + 좌우 여백 · 칸 사이 1px 세로 선. 오른쪽 정렬이면 자리가 모자랄 때 **왼쪽 칸부터** 빠진다(맨 오른쪽 우선).
+        let sp = self.s(SEG_PAD);
+        let widths: Vec<i32> = self
+            .segs
+            .iter()
+            .map(|s| {
+                if s.text.is_empty() {
+                    0
+                } else {
+                    ctx.text_width(&s.text) + 2 * sp
+                }
+            })
+            .collect();
+        let mut rects = vec![Rect::new(0, 0, 0, 0); self.segs.len()];
+        let left_w = if self.left.is_empty() {
+            0
+        } else {
+            ctx.text_width(&self.left) + 2 * pad
+        };
+        let mut left_x = b.x + pad;
+        let mut left_clip = clip;
+        if self.leading {
+            let mut x = b.x;
+            for (i, w) in widths.iter().enumerate() {
+                if *w == 0 || x + w > b.right() {
+                    continue;
+                }
+                rects[i] = Rect::new(x, b.y + 1, *w, b.h - 1);
+                x += w + 1;
+            }
+            left_x = x + pad;
+            left_clip = Rect::new(x, b.y + 1, (b.right() - x).max(0), b.h - 1);
+        } else {
+            let mut x = b.right();
+            let min_x = b.x + left_w.min(b.w / 2);
+            for (i, w) in widths.iter().enumerate().rev() {
+                if *w == 0 || x - w < min_x {
+                    continue;
+                }
+                x -= w;
+                rects[i] = Rect::new(x, b.y + 1, *w, b.h - 1);
+                x -= 1;
+            }
+            left_clip = Rect::new(b.x, b.y + 1, (x - b.x).max(0), b.h - 1);
+        }
+        for (i, (seg, r)) in self.segs.iter().zip(&rects).enumerate() {
+            if r.w == 0 {
+                continue;
+            }
+            let hot = seg.clickable && (self.hover == Some(i) || self.pressed == Some(i));
+            if hot {
+                ctx.fill_rect(*r, theme.sel_bg_inactive);
+            }
+            // 칸 경계(오른쪽 정렬 = 칸 왼쪽 · 왼쪽 정렬 = 칸 오른쪽).
+            let line_x = if self.leading { r.right() } else { r.x - 1 };
+            ctx.fill_rect(
+                Rect::new(line_x, b.y + 5, 1, (b.h - 9).max(1)),
+                theme.border,
+            );
+            let color = if hot || self.leading {
+                theme.text
+            } else {
+                theme.text_dim
+            };
+            ctx.text(r.x + sp, ty, *r, &seg.text, color);
+        }
+        *self.rects.borrow_mut() = rects;
         if !self.left.is_empty() {
-            ctx.text(b.x + pad, ty, clip, &self.left, theme.text);
+            ctx.text(left_x, ty, left_clip, &self.left, theme.text);
         }
     }
 }
@@ -170,6 +372,83 @@ mod tests {
         );
         assert!(rec.all_inside(Rect::new(0, 100, 400, 22)));
         assert_eq!(sb.preferred_height(), 22);
+    }
+
+    /// 칸(133차): 오른쪽 끝에 붙고(첫 칸이 맨 왼쪽) · 좌클릭/우클릭 통지 · 표시 전용 칸은 클릭 없음 · 좁으면 왼쪽 칸부터 빠진다 ·
+    /// 왼쪽부터 놓기(탭 상태바) · 칸이 없으면 입력 무시.
+    #[test]
+    fn segments_layout_and_clicks() {
+        let mut sb = StatusBar::new();
+        let mut inv = Invalidations::default();
+        sb.set_bounds(Rect::new(0, 100, 400, 22), &mut inv);
+        sb.set_text("left", "ignored", &mut inv);
+        let segs = vec![
+            StatusSeg::label("tab", "Tab 1/2"),
+            StatusSeg::new("mem", "12 MB"),
+            StatusSeg::new("lic", "Free"),
+        ];
+        assert!(sb.set_segments(segs.clone(), &mut inv));
+        let mut inv2 = Invalidations::default();
+        assert!(!sb.set_segments(segs, &mut inv2) && inv2.is_empty());
+        assert_eq!(sb.seg_rect("lic"), None, "그리기 전");
+        let mut rec = RecordCtx::with_surface(400, 200);
+        sb.paint(&mut rec, &Theme::dark());
+        assert!(rec.drew_text("Free") && rec.drew_text("12 MB") && rec.drew_text("left"));
+        assert!(
+            !rec.drew_text("ignored"),
+            "칸이 있으면 오른쪽 글은 안 그린다"
+        );
+        let (tab, mem, lic) = (
+            sb.seg_rect("tab").unwrap(),
+            sb.seg_rect("mem").unwrap(),
+            sb.seg_rect("lic").unwrap(),
+        );
+        assert_eq!(lic.right(), 400);
+        assert_eq!(lic.w, 4 * 7 + 14);
+        assert!(tab.right() < mem.x && mem.right() < lic.x);
+        let click = |sb: &mut StatusBar, r: Rect| {
+            let mut inv = Invalidations::default();
+            let (x, y) = (r.x + 3, r.y + 3);
+            sb.on_event(
+                &InputEvent::MouseDown {
+                    x,
+                    y,
+                    shift: false,
+                    primary: false,
+                },
+                &mut inv,
+            );
+            sb.on_event(&InputEvent::MouseUp { x, y }, &mut inv);
+        };
+        click(&mut sb, mem);
+        assert_eq!(sb.take_click(), Some(("mem".to_string(), false)));
+        assert_eq!(sb.take_click(), None);
+        click(&mut sb, tab);
+        assert_eq!(sb.take_click(), None, "표시 전용 칸");
+        sb.on_event(
+            &InputEvent::RightDown {
+                x: lic.x + 2,
+                y: lic.y + 2,
+            },
+            &mut inv,
+        );
+        assert_eq!(sb.take_click(), Some(("lic".to_string(), true)));
+        // 좁으면 왼쪽 칸부터 빠진다(맨 오른쪽 = 라이선스가 남는다).
+        sb.set_bounds(Rect::new(0, 100, 90, 22), &mut inv);
+        let mut rec = RecordCtx::with_surface(400, 200);
+        sb.paint(&mut rec, &Theme::dark());
+        assert!(sb.seg_rect("lic").is_some() && sb.seg_rect("tab").is_none());
+        // 왼쪽부터.
+        sb.set_bounds(Rect::new(0, 100, 400, 22), &mut inv);
+        sb.set_segments_leading(true, &mut inv);
+        let mut rec = RecordCtx::with_surface(400, 200);
+        sb.paint(&mut rec, &Theme::dark());
+        assert_eq!(sb.seg_rect("tab").unwrap().x, 0);
+        assert!(sb.seg_rect("mem").unwrap().x > sb.seg_rect("tab").unwrap().right());
+        // 칸 없음 = 종전(입력 무시 · 오른쪽 글).
+        sb.set_segments(Vec::new(), &mut inv);
+        click(&mut sb, lic);
+        assert_eq!(sb.take_click(), None);
     }
 
     /// 왼쪽이 길면 오른쪽 글은 `x + pad`까지만 밀린다(겹침 허용 · dir2 규약).

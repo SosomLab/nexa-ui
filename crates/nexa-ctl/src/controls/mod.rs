@@ -63,7 +63,7 @@ pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::{fast_scroll, set_fast_scroll, FastScroll, ScrollAccel, ScrollBars, SpeedHud};
 pub use splitter::{SplitAxis, SplitBand, SplitEvent, Splitter};
-pub use statusbar::StatusBar;
+pub use statusbar::{StatusBar, StatusSeg};
 pub use switch::Switch;
 pub use tabbar::{ScrollButtons, TabAction, TabBadge, TabBar};
 pub use toast::{bar_remaining, life_alpha, ToastKind, Toasts};
