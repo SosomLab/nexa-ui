@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (115차 · win · nexa-dir3 사용자 피드백)** — nexa-font Windows 기호 후보에 `segmdl2.ttf`·`SegoeIcons.ttf`(PUA U+E700~ · 네비/쉐브론 두부 해소) · nexa-grid `set_marker_glyphs`/`marker_glyphs`(thread_local · 기본 MDL2 E76C/E70D) · `Adapt::glyph_opaque`(목록 글꼴 −4 px · 셀 가운데 · 복귀) · 시험 기대 갱신 — journal 10-03 §12.
 - **2026-10-03 (114차 · win · nexa-dir3 T-32)** — `nexa_ctl::controls::toast::{Toasts, ToastKind, life_alpha, bar_remaining}` 범용 승격(nexa-sql `toast.rs` 카드 관리자 · dir3 사본 이관 · 앱 도메인 0) · 시험 3 — journal 10-03 §11.
 - **2026-10-03 (113차 · win · nexa-dir3 T-31 B)** — `DrawCtx::select_font_styled(slot, bold, italic)`(기본 = italic 무시 · `RasterCtx` = 슬롯 설정 위 강제) · `RecordCtx.fonts` 호출 기록 · nexa-grid `Adapt`가 italic 전달(U-5 해소) · 시험 +1 — journal 10-03 §10.
 - **2026-10-03 (112차 · win · nexa-dir3 T-31)** — ★ `RasterCtx` **클립 스택 실제 구현**(`push_clip` 교차 쌓기 · `pop_clip` · `clip_top/clip_depth` · 모든 그리기 어휘가 꼭대기 안에서만 · `rr_fill/rr_stroke` clip 인자) · nexa-grid `paint_grid` = `push_clip(bounds)` 감싸기 · 시험 +2 — journal 10-03 §9.
