@@ -2160,6 +2160,14 @@ impl<S: RowSource> Widget for VirtualRows<S> {
 impl<S: RowSource> VirtualRows<S> {
     /// 그리기 본체(dir2 `Widget::paint` 그대로) — 호스트가 그리드 어휘 백엔드를 직접 넘길 때(시험 기록기)도 쓴다.
     pub fn paint_grid(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        // 셀·배지·HUD 전부 자기 경계 안에서만(UIC-310 클립 스택 · dir2 10-02 가로 스크롤 번짐 차단 ·
+        // nexa-dir3 10-03 RecordCtx 시험 적발 "열이 패널을 넘침"). 백엔드가 no-op이면 종전과 같다.
+        ctx.push_clip(self.bounds);
+        self.paint_grid_inner(ctx, theme);
+        ctx.pop_clip();
+    }
+
+    fn paint_grid_inner(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.select_font(crate::draw::FontSlot::List, false, false); // 파일 목록 슬롯(X-12)
         let b = self.bounds;
         if self.mode == ViewMode::Tiles {

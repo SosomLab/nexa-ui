@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약.
 
+- **2026-10-03 (112차 · win · nexa-dir3 T-31)** — ★ `RasterCtx` 클립 스택 실제 구현(UIC-310 · 모든 어휘) · nexa-grid `paint_grid` 경계 클립 · 시험 +2.
 - **2026-10-03 (111차 · win · nexa-dir3 T-70)** — `SegProgress` 세그먼트 진행 바 · `Button::label`.
 - **2026-10-03 (110차 · win · nexa-dir3 사용자 피드백)** — `Font::em_to_px`(em → 높이 px).
 - **2026-10-03 (109차 · win · nexa-dir3 M3)** — `svg::render_mask`(툴바 아이콘 알파 마스크).

@@ -75,6 +75,9 @@ pub struct RasterCtx<'s, 'b, 'f> {
     tab_origin: Option<i32>,
     /// 이번 프레임의 캐럿 표시 위상(08-13 — 깜빡임). 호스트가 시각·포커스로 주입.
     caret_on: bool,
+    /// 클립 스택(UIC-310 · 10-03 nexa-dir3 T-31) — `push_clip`은 꼭대기와 **교차**해 쌓고, 모든 그리기는
+    /// 꼭대기 사각형 밖을 건드리지 않는다. 비어 있으면 종전과 같다(표면 전체).
+    clips: Vec<Rect>,
 }
 
 impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
@@ -105,6 +108,27 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
             mono_mult: 1.0,
             tab_origin: None,
             caret_on: true,
+            clips: Vec::new(),
+        }
+    }
+
+    /// 지금 유효한 클립(스택 꼭대기 · 없으면 None = 표면 전체).
+    #[must_use]
+    pub fn clip_top(&self) -> Option<Rect> {
+        self.clips.last().copied()
+    }
+
+    /// 클립 스택 깊이(시험 · 짝 맞춤 점검).
+    #[must_use]
+    pub fn clip_depth(&self) -> usize {
+        self.clips.len()
+    }
+
+    /// `rect`를 현재 클립으로 자른 사각형(클립이 없으면 그대로 · 교차가 없으면 빈 사각형).
+    fn clipped(&self, rect: Rect) -> Rect {
+        match self.clips.last() {
+            Some(c) => rect.intersection(c),
+            None => rect,
         }
     }
 
@@ -233,7 +257,15 @@ fn round_sdf(rect: Rect, r: i32) -> impl Fn(f32, f32) -> f32 + Copy {
 
 /// ★ 라운드 채움 — 안쪽은 단색 띠 · SDF는 네 모서리 r×r만(09-16 계측: 편집기 배경 전면 SDF가 프레임의 80% = 5ms).
 ///   직선 변은 픽셀 경계에 정확히 놓여 커버리지가 안 1 · 밖 0이므로 전면 SDF 결과와 픽셀 단위로 같다(테스트).
-fn rr_fill(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, alpha: f32) {
+///   `clip`(클립 스택 꼭대기)이 있으면 띠·모서리 순회 영역을 그 안으로 자른다 — 모양(SDF)은 원래 `rect` 기준 그대로.
+fn rr_fill(
+    s: &mut Surface<'_>,
+    rect: Rect,
+    radius: i32,
+    color: Color,
+    alpha: f32,
+    clip: Option<Rect>,
+) {
     if rect.is_empty() {
         return;
     }
@@ -241,16 +273,17 @@ fn rr_fill(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, alpha: f3
     if a <= 0.0 {
         return;
     }
+    let cut = |r: Rect| clip.map_or(r, |c| r.intersection(&c));
     let r = round_r(rect, radius);
     let (x, y, w, h) = (rect.x, rect.y, rect.w, rect.h);
     if r <= 0 {
-        solid_band(s, rect, color, a);
+        solid_band(s, cut(rect), color, a);
         return;
     }
     // 가운데 가로 띠(전폭) + 위/아래 띠의 가운데(모서리 제외) — 겹침 없음(반투명도 한 번만).
-    solid_band(s, Rect::new(x, y + r, w, h - 2 * r), color, a);
-    solid_band(s, Rect::new(x + r, y, w - 2 * r, r), color, a);
-    solid_band(s, Rect::new(x + r, y + h - r, w - 2 * r, r), color, a);
+    solid_band(s, cut(Rect::new(x, y + r, w, h - 2 * r)), color, a);
+    solid_band(s, cut(Rect::new(x + r, y, w - 2 * r, r)), color, a);
+    solid_band(s, cut(Rect::new(x + r, y + h - r, w - 2 * r, r)), color, a);
     let sdf = round_sdf(rect, r);
     for c in [
         Rect::new(x, y, r, r),
@@ -258,15 +291,26 @@ fn rr_fill(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, alpha: f3
         Rect::new(x, y + h - r, r, r),
         Rect::new(x + w - r, y + h - r, r, r),
     ] {
-        cov_fill(s, c, color, a, &sdf);
+        cov_fill(s, cut(c), color, a, &sdf);
     }
 }
 
 /// ★ 라운드 외곽선 — 커버리지는 경계에서 `half_w + 0.5`px 안에만 있으므로 가장자리 띠 4개만 순회한다(안쪽 가운데는 건너뜀).
-fn rr_stroke(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, width: f32, alpha: f32) {
+///   `clip`은 [`rr_fill`]과 같은 뜻(순회 영역만 자른다).
+#[allow(clippy::too_many_arguments)]
+fn rr_stroke(
+    s: &mut Surface<'_>,
+    rect: Rect,
+    radius: i32,
+    color: Color,
+    width: f32,
+    alpha: f32,
+    clip: Option<Rect>,
+) {
     if rect.is_empty() {
         return;
     }
+    let cut = |r: Rect| clip.map_or(r, |c| r.intersection(&c));
     let r = round_r(rect, radius);
     let half_w = width / 2.0;
     let pad = half_w.ceil() as i32 + 1;
@@ -281,7 +325,7 @@ fn rr_stroke(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, width: 
     let stroke = move |x: f32, y: f32| sdf(x, y).abs() - half_w;
     let (x, y, w, h) = (area.x, area.y, area.w, area.h);
     if band * 2 >= w || band * 2 >= h {
-        cov_fill(s, area, color, alpha, &stroke);
+        cov_fill(s, cut(area), color, alpha, &stroke);
         return;
     }
     for b in [
@@ -290,7 +334,7 @@ fn rr_stroke(s: &mut Surface<'_>, rect: Rect, radius: i32, color: Color, width: 
         Rect::new(x, y + band, band, h - 2 * band),
         Rect::new(x + w - band, y + band, band, h - 2 * band),
     ] {
-        cov_fill(s, b, color, alpha, &stroke);
+        cov_fill(s, cut(b), color, alpha, &stroke);
     }
 }
 
@@ -376,7 +420,17 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.cur.size = (self.cur.size + delta_px).max(1.0);
     }
 
+    fn push_clip(&mut self, rect: Rect) {
+        let r = self.clipped(rect);
+        self.clips.push(r);
+    }
+
+    fn pop_clip(&mut self) {
+        self.clips.pop();
+    }
+
     fn fill_rect(&mut self, rect: Rect, color: Color) {
+        let rect = self.clipped(rect);
         if rect.is_empty() {
             return;
         }
@@ -415,6 +469,10 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             (a.0.max(b.0).max(c.0) - a.0.min(b.0).min(c.0)).ceil() as i32 + 2,
             (a.1.max(b.1).max(c.1) - a.1.min(b.1).min(c.1)).ceil() as i32 + 2,
         );
+        let rect = self.clipped(rect);
+        if rect.is_empty() {
+            return;
+        }
         // 내부 = 세 거리 모두 양수(정규화 후) → dist = -(최솟값): 내부 음수·외부 양수.
         self.coverage_fill(rect, color, move |x, y| {
             -(s * edge(a, b, x, y))
@@ -428,6 +486,10 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn text(&mut self, x: i32, y: i32, clip: Rect, text: &str, fg: Color) {
+        let clip = self.clipped(clip);
+        if clip.is_empty() {
+            return;
+        }
         let size = self.px_size();
         let origin = self.tab_origin.map_or(x as f32, |o| o as f32);
         // 광학 보정 — 슬롯 얼굴(고정폭)은 보정 크기로, 폴백(기본 얼굴)은 명목 크기로.
@@ -581,10 +643,18 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
+        let clip = self.clipped(clip);
+        if clip.is_empty() {
+            return;
+        }
         self.surface.blend_image(x, y, img, Self::clip_of(clip));
     }
 
     fn image_scaled(&mut self, dst: Rect, img: &crate::theme::IconImage, clip: Rect) {
+        let clip = self.clipped(clip);
+        if clip.is_empty() {
+            return;
+        }
         self.surface
             .blend_image_scaled(dst.x, dst.y, dst.w, dst.h, img, Self::clip_of(clip));
     }
@@ -609,8 +679,12 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             dw,
             dh,
         );
+        let clip = self.clipped(rect);
+        if clip.is_empty() {
+            return;
+        }
         self.surface
-            .blend_image_scaled(dst.x, dst.y, dst.w, dst.h, &img, Self::clip_of(rect));
+            .blend_image_scaled(dst.x, dst.y, dst.w, dst.h, &img, Self::clip_of(clip));
     }
 
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
@@ -622,7 +696,8 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             rect.y as f32 + rect.h as f32 / 2.0,
         );
         let (rx, ry) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
-        self.coverage_fill(rect, color, move |x, y| {
+        let area = self.clipped(rect);
+        self.coverage_fill(area, color, move |x, y| {
             // 근사 SDF — 정규화 거리에 짧은 반경을 곱한다(원에 가까울수록 정확).
             let nx = (x - cx) / rx;
             let ny = (y - cy) / ry;
@@ -639,7 +714,8 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             rect.y as f32 + rect.h as f32 / 2.0,
         );
         let (rx, ry) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
-        self.coverage_fill(rect, color, move |x, y| {
+        let area = self.clipped(rect);
+        self.coverage_fill(area, color, move |x, y| {
             let nx = (x - cx) / rx;
             let ny = (y - cy) / ry;
             let d = ((nx * nx + ny * ny).sqrt() - 1.0) * rx.min(ry); // 음수 = 안쪽
@@ -664,7 +740,8 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         };
         let (sx, sy) = dir(start_deg);
         let (ex, ey) = dir(start_deg + sweep_deg.min(180.0));
-        self.coverage_fill(rect, color, move |x, y| {
+        let area = self.clipped(rect);
+        self.coverage_fill(area, color, move |x, y| {
             let (px, py) = (x - cx, y - cy);
             let nx = px / rx;
             let ny = py / ry;
@@ -678,10 +755,12 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
-        rr_fill(self.surface, rect, radius, color, 1.0);
+        let clip = self.clip_top();
+        rr_fill(self.surface, rect, radius, color, 1.0, clip);
     }
 
     fn fill_rect_alpha(&mut self, rect: Rect, color: Color, alpha: f32) {
+        let rect = self.clipped(rect);
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
@@ -690,11 +769,13 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: f32) {
-        rr_fill(self.surface, rect, radius, color, alpha);
+        let clip = self.clip_top();
+        rr_fill(self.surface, rect, radius, color, alpha, clip);
     }
 
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
-        rr_stroke(self.surface, rect, radius, color, width, 1.0);
+        let clip = self.clip_top();
+        rr_stroke(self.surface, rect, radius, color, width, 1.0, clip);
     }
 
     fn stroke_round_rect_alpha(
@@ -705,14 +786,17 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         width: f32,
         alpha: f32,
     ) {
-        rr_stroke(self.surface, rect, radius, color, width, alpha);
+        let clip = self.clip_top();
+        rr_stroke(self.surface, rect, radius, color, width, alpha, clip);
     }
 
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
-        self.polyline_in(pts, color, width, None);
+        let clip = self.clip_top();
+        self.polyline_in(pts, color, width, clip);
     }
 
     fn polyline_clipped(&mut self, pts: &[(i32, i32)], color: Color, width: f32, clip: Rect) {
+        let clip = self.clipped(clip);
         self.polyline_in(pts, color, width, Some(clip));
     }
 }
@@ -870,7 +954,14 @@ mod round_rect_tests {
             for alpha in [1.0f32, 0.5] {
                 let mut a = vec![bg; w * h];
                 let mut b = vec![bg; w * h];
-                rr_fill(&mut Surface::new(&mut a, w, h), rect, radius, color, alpha);
+                rr_fill(
+                    &mut Surface::new(&mut a, w, h),
+                    rect,
+                    radius,
+                    color,
+                    alpha,
+                    None,
+                );
                 full_fill(&mut b, w, h, rect, radius, color, alpha);
                 assert_eq!(a, b, "fill {rect:?} r={radius} a={alpha}");
                 for width in [1.0f32, 2.0, 3.0] {
@@ -883,11 +974,179 @@ mod round_rect_tests {
                         color,
                         width,
                         alpha,
+                        None,
                     );
                     full_stroke(&mut b, w, h, rect, radius, color, width, alpha);
                     assert_eq!(a, b, "stroke {rect:?} r={radius} w={width} a={alpha}");
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+    use crate::theme::IconImage;
+
+    const BG: u32 = 0xFF10_2030;
+
+    /// 클립 밖은 한 픽셀도 바뀌지 않고 안에는 뭔가 그려졌는가.
+    fn assert_only_inside(buf: &[u32], w: usize, clip: Rect, what: &str) {
+        let mut inside_changed = false;
+        for (i, px) in buf.iter().enumerate() {
+            let (x, y) = ((i % w) as i32, (i / w) as i32);
+            let inside = x >= clip.x && x < clip.right() && y >= clip.y && y < clip.bottom();
+            if inside {
+                inside_changed |= *px != BG;
+            } else {
+                assert_eq!(*px, BG, "{what}: 클립 밖 ({x},{y})이 바뀜");
+            }
+        }
+        assert!(inside_changed, "{what}: 클립 안에 아무것도 안 그려짐");
+    }
+
+    /// `rr_fill`/`rr_stroke`의 clip = 전면 그리기 뒤 클립 밖을 배경으로 되돌린 결과와 픽셀 단위로 같다.
+    #[test]
+    fn round_rect_clip_equals_masked_full() {
+        let (w, h) = (60usize, 40usize);
+        let color = Color::from_rgb(220, 90, 30);
+        let rect = Rect::new(5, 5, 50, 30);
+        let clip = Rect::new(12, 8, 20, 25);
+        for alpha in [1.0f32, 0.4] {
+            let mut a = vec![BG; w * h];
+            let mut b = vec![BG; w * h];
+            rr_fill(
+                &mut Surface::new(&mut a, w, h),
+                rect,
+                8,
+                color,
+                alpha,
+                Some(clip),
+            );
+            rr_fill(&mut Surface::new(&mut b, w, h), rect, 8, color, alpha, None);
+            mask(&mut b, w, clip);
+            assert_eq!(a, b, "fill a={alpha}");
+            let mut a = vec![BG; w * h];
+            let mut b = vec![BG; w * h];
+            rr_stroke(
+                &mut Surface::new(&mut a, w, h),
+                rect,
+                8,
+                color,
+                2.0,
+                alpha,
+                Some(clip),
+            );
+            rr_stroke(
+                &mut Surface::new(&mut b, w, h),
+                rect,
+                8,
+                color,
+                2.0,
+                alpha,
+                None,
+            );
+            mask(&mut b, w, clip);
+            assert_eq!(a, b, "stroke a={alpha}");
+        }
+    }
+
+    fn mask(buf: &mut [u32], w: usize, clip: Rect) {
+        for (i, px) in buf.iter_mut().enumerate() {
+            let (x, y) = ((i % w) as i32, (i / w) as i32);
+            if !(x >= clip.x && x < clip.right() && y >= clip.y && y < clip.bottom()) {
+                *px = BG;
+            }
+        }
+    }
+
+    /// 모든 그리기 어휘가 클립 스택 꼭대기를 지킨다 · 중첩은 교차 · pop은 복원(시스템 글꼴이 없으면 건너뜀).
+    #[test]
+    fn push_clip_bounds_every_primitive() {
+        let Some(loaded) = nexa_font::ui_font(None) else {
+            eprintln!("시스템 UI 글꼴 없음 — 건너뜀");
+            return;
+        };
+        let font = &loaded.font;
+        let (w, h) = (48usize, 48usize);
+        let full = Rect::new(0, 0, 48, 48);
+        let clip = Rect::new(10, 12, 16, 14);
+        let red = Color::from_rgb(255, 0, 0);
+        let img = IconImage {
+            w: 48,
+            h: 48,
+            rgba: vec![255u8; 48 * 48 * 4],
+        };
+        type Op = fn(&mut RasterCtx<'_, '_, '_>, Rect, Color, &IconImage);
+        let ops: [(&str, Op); 12] = [
+            ("fill_rect", |c, r, k, _| c.fill_rect(r, k)),
+            ("fill_rect_alpha", |c, r, k, _| c.fill_rect_alpha(r, k, 0.5)),
+            ("fill_round_rect", |c, r, k, _| c.fill_round_rect(r, 6, k)),
+            ("stroke_round_rect", |c, r, k, _| {
+                c.stroke_round_rect(Rect::new(r.x + 15, r.y + 15, 20, 20), 4, k, 3.0)
+            }),
+            ("fill_ellipse", |c, r, k, _| c.fill_ellipse(r, k)),
+            ("stroke_ellipse", |c, r, k, _| {
+                c.stroke_ellipse(Rect::new(r.x + 12, r.y + 12, 24, 24), k, 3.0)
+            }),
+            ("fill_pie", |c, r, k, _| c.fill_pie(r, 0.0, 270.0, k)),
+            ("fill_triangle", |c, r, k, _| {
+                c.fill_triangle((r.x, r.y), (r.right(), r.y), (r.x, r.bottom()), k)
+            }),
+            ("polyline", |c, r, k, _| {
+                c.polyline(
+                    &[(r.x, r.y), (r.right(), r.bottom()), (r.right(), r.y)],
+                    k,
+                    3.0,
+                )
+            }),
+            ("text", |c, r, k, _| {
+                c.text(r.x, r.y, r, "MMMMMMMM\nMMMM", k)
+            }),
+            ("text_opaque", |c, r, k, _| {
+                c.text_opaque(r.x, r.y, r, "MMMM", k, Color::from_rgb(0, 255, 0))
+            }),
+            ("image", |c, r, _, i| c.image(r.x, r.y, i, r)),
+        ];
+        for (name, op) in ops {
+            let mut buf = vec![BG; w * h];
+            {
+                let mut s = Surface::new(&mut buf, w, h);
+                let mut ctx = RasterCtx::new(&mut s, font, 1.0);
+                ctx.push_clip(clip);
+                op(&mut ctx, full, red, &img);
+                ctx.pop_clip();
+                assert_eq!(ctx.clip_depth(), 0, "{name}: pop 뒤 깊이");
+            }
+            assert_only_inside(&buf, w, clip, name);
+        }
+        // 중첩 = 교차 · pop = 바로 아래 클립으로 복원 · 빈 교차 = 아무것도 안 그림.
+        let mut buf = vec![BG; w * h];
+        {
+            let mut s = Surface::new(&mut buf, w, h);
+            let mut ctx = RasterCtx::new(&mut s, font, 1.0);
+            ctx.push_clip(clip);
+            ctx.push_clip(Rect::new(20, 0, 48, 48));
+            assert_eq!(ctx.clip_top(), Some(Rect::new(20, 12, 6, 14)));
+            ctx.fill_rect(full, red);
+            ctx.pop_clip();
+            assert_eq!(ctx.clip_top(), Some(clip));
+            ctx.push_clip(Rect::new(40, 40, 8, 8));
+            assert!(ctx.clip_top().is_some_and(|r| r.is_empty()));
+            ctx.fill_rect(full, Color::from_rgb(0, 0, 255));
+            ctx.pop_clip();
+            ctx.pop_clip();
+            assert_eq!(ctx.clip_top(), None);
+        }
+        assert_only_inside(&buf, w, Rect::new(20, 12, 6, 14), "nested");
+        // 클립이 없으면 종전과 같이 표면 전체.
+        let mut buf = vec![BG; w * h];
+        {
+            let mut s = Surface::new(&mut buf, w, h);
+            let mut ctx = RasterCtx::new(&mut s, font, 1.0);
+            ctx.fill_rect(full, red);
+        }
+        assert!(buf.iter().all(|p| *p != BG));
     }
 }

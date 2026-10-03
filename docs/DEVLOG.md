@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (112차 · win · nexa-dir3 T-31)** — ★ `RasterCtx` **클립 스택 실제 구현**(`push_clip` 교차 쌓기 · `pop_clip` · `clip_top/clip_depth` · 모든 그리기 어휘가 꼭대기 안에서만 · `rr_fill/rr_stroke` clip 인자) · nexa-grid `paint_grid` = `push_clip(bounds)` 감싸기 · 시험 +2 — journal 10-03 §9.
 - **2026-10-03 (111차 · win · nexa-dir3 T-70)** — ★ `nexa_ctl::SegProgress`(세그먼트 진행 바 — dir2 `paint_segments` 이식 · 크기 비례 · 5색 · 최소 3px · `allocate_widths`) · `Button::label()` · 시험 +2 → [journal §8](journal/2026-10-03.md)
 - **2026-10-03 (110차 · win · nexa-dir3 사용자 피드백)** — `nexa_gfx::Font::em_to_px`(em → ab_glyph 전체 높이 px · 맑은 고딕 12 em = 16 px) + `em_to_px_with` 순수 계산 · dir2/GDI 크기 숫자를 그대로 쓰는 앱이 같은 시각 크기로 그리게 → [journal §7](journal/2026-10-03.md)
 - **2026-10-03 (109차 · win · nexa-dir3 M3 T-30)** — `nexa_gfx::svg::render_mask`(알파 마스크 — 요소 색을 버리고 잉크 하나 · 툴바 `ToolIcon::Mask` 테마 틴트용 · dir2 `svg_to_hicon` 자리) · 시험 `render_mask_coverage` → [journal §6](journal/2026-10-03.md)
