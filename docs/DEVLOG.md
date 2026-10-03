@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-04 (134차 · linux · nexa-dir3 툴바 토글 색)** — nexa-ctl `SoftStates.on_color` · `on_icon` · `SWITCH_ON` 공개(기본 None = 종전) · 시험 +1 — journal 10-04 §1.
 - **2026-10-03 (133차 · linux · nexa-dir3 T-94/95)** — nexa-ctl StatusBar 칸(`set_segments` · `set_segments_leading` · `seg_rect` · `take_click` · `StatusSeg`) · ⚠ clippy 빨강 a01406b → fca3c66 복구 — journal 10-03 §30.
 - **2026-10-03 (132차 · linux · nexa-dir3 T-126)** — nexa-grid `RowSource::cell_icon`(아이콘 셀 · 리졸버 재사용 · 글 폴백 · 기본 None) — journal 10-03 §29.
 - **2026-10-03 (131차 · linux · nexa-dir3 T-123)** — nexa-grid `set_col_drag_marker`(놓일 열 자리 강조 · 기본 꺼짐) · `col_dragging` · `col_drag_slot` · 컬럼 드래그 첫 시험 — journal 10-03 §28.

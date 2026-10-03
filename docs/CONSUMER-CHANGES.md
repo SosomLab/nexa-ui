@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 134 · 7ead512 | nexa-ctl | Toolbar `SoftStates.on_color` · `on_icon`(Option · None = 종전) · `controls::SWITCH_ON` 공개 · 꽉 찬 채움 hover/눌림 = 흰 막 · 시험 +1 | 추가(구조체 필드 추가 · 기본 불변) | 영향 없음(SoftStates 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 툴바 토글 켜짐 = 스위치 초록 + 흰 아이콘(`toolbar.on_color`) — dir3 게이트(10-04 §4) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) · SoftStates를 쓰게 되면 `..Default::default()`로 |
 | 133 · a01406b + fca3c66 | nexa-ctl | StatusBar 칸 — `StatusSeg` · `set_segments`(오른쪽) · `set_segments_leading`(왼쪽) · `seg_rect` · `take_click`(좌/우 클릭) · hover · 좁으면 왼쪽 칸부터 생략 · ⚠ a01406b는 clippy 실패 상태로 push → fca3c66 복구 | 추가(칸이 없으면 종전 그대로) | 영향 없음(새 API 미사용) · `cargo check` 통과(10-03 · 시험 미실행) · **a01406b 단독 체크아웃은 clippy -D warnings 실패**(fca3c66 이상 사용) | 상태줄 칸 · 탭 상태바(T-94 · T-95) — 진행 중 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 132 · 244da33 | nexa-grid | `RowSource::cell_icon(index, key) -> Option<(키, 힌트)>`(트레이트 기본 None) — Some이면 글 대신 아이콘(가운데 · 들여쓰기 폭) · 리졸버 재사용 · 못 주면 글 폴백 | 추가(트레이트 기본 메서드 · 기본 불변) | 영향 없음(nexa-grid 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | 파일 목록 상태 열 아이콘 — dir3 게이트(§116) · Windows OneDrive 실기 필요 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 131 · 471f013 | nexa-grid | `set_col_drag_marker(bool)` · `col_dragging()` · `col_drag_slot()` — 끄는 동안 놓일 열 자리(머리 + 본문) 강조 + 좌우 1 px 선 · 시험 +1(컬럼 드래그 첫 시험) | 추가(기본 꺼짐 = 종전 고스트만) | 영향 없음(nexa-grid 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | 패널 목록 컬럼 이동 표식 · Esc 취소 판정 — dir3 게이트(§114) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
@@ -37,6 +38,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 134 | `cargo check`(7ead512) | 통과 · 시험은 미실행(SoftStates 미사용) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 133 | `cargo check`(fca3c66) | 통과 · 시험은 미실행(추가만) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 132 | `cargo check`(244da33) | 통과 · 시험은 미실행(nexa-grid 미사용) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 131 | `cargo check`(471f013) | 통과 · 시험은 미실행(nexa-grid 미사용) |
