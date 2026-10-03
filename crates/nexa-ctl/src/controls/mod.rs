@@ -65,7 +65,7 @@ pub use scroll::{fast_scroll, set_fast_scroll, FastScroll, ScrollAccel, ScrollBa
 pub use splitter::{SplitAxis, SplitBand, SplitEvent, Splitter};
 pub use statusbar::StatusBar;
 pub use switch::Switch;
-pub use tabbar::{TabAction, TabBadge, TabBar};
+pub use tabbar::{ScrollButtons, TabAction, TabBadge, TabBar};
 pub use toast::{bar_remaining, life_alpha, ToastKind, Toasts};
 pub mod pairs;
 pub use pairs::{Pair, PairKind, PairOpts, PairTable};

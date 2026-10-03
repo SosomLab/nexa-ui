@@ -49,6 +49,18 @@ pub enum TabAction {
     BadgeContext(usize),
 }
 
+/// 단일행 탭 바가 넘칠 때 ◀ ▶ 스크롤 버튼의 자리(129차 · nexa-dir3 사용자 10-03).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ScrollButtons {
+    /// 둘 다 오른쪽 끝(기본 · 종전).
+    #[default]
+    End,
+    /// 둘 다 왼쪽 끝.
+    Start,
+    /// ◀ = 왼쪽 끝 · ▶ = 오른쪽 끝.
+    Split,
+}
+
 /// 탭 제목 **앞**의 표식 — 이미지 버튼 모양(둥근 상자 + 플러그 글리프 · hover/눌림 상태 레이어).
 /// 탭마다 다른 상태(예: 탭 전용 DB 세션)를 한눈에 구별하게 한다(nexa-sql 09-18).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -138,6 +150,8 @@ pub struct TabBar {
     tips: Vec<String>,
     active: usize,
     multiline: bool,
+    /// 단일행 넘침일 때 ◀ ▶ 버튼 자리(129차).
+    scroll_buttons: ScrollButtons,
     show_new: bool,
     /// 마지막 탭도 닫을 수 있는가(기본 false — dir2 규약).
     close_last: bool,
@@ -191,6 +205,7 @@ impl TabBar {
             tips: Vec::new(),
             active: 0,
             multiline: false,
+            scroll_buttons: ScrollButtons::End,
             show_new: true,
             close_last: false,
             row_h: DEFAULT_ROW_H,
@@ -410,6 +425,20 @@ impl TabBar {
         }
         let cell = self.layout.borrow().tabs.get(i).copied()?;
         Some(self.badge_rect(cell))
+    }
+
+    /// 단일행 넘침일 때 ◀ ▶ 버튼 자리(129차 · 기본 [`ScrollButtons::End`] = 종전). 다중행에서는 쓰이지 않는다.
+    pub fn set_scroll_buttons(&mut self, place: ScrollButtons) {
+        if self.scroll_buttons != place {
+            self.scroll_buttons = place;
+            self.ensure_active.set(true);
+        }
+    }
+
+    /// 지금 ◀ ▶ 버튼 자리.
+    #[must_use]
+    pub fn scroll_buttons(&self) -> ScrollButtons {
+        self.scroll_buttons
     }
 
     /// 다중행 모드(true = 폭 초과 시 줄바꿈 · false = 단일행 + ◀▶ 스크롤).
@@ -871,8 +900,23 @@ impl TabBar {
             if content > b.w {
                 let bw = lh.min(b.w / 2);
                 strip.w = (b.w - bw * 2).max(0);
-                lay.left_btn = Rect::new(strip.right(), b.y, bw, lh);
-                lay.right_btn = Rect::new(strip.right() + bw, b.y, bw, lh);
+                // ◀ ▶ 자리(129차): 오른쪽 끝(기본) · 왼쪽 끝 · 양 끝(◀ 왼쪽 · ▶ 오른쪽).
+                match self.scroll_buttons {
+                    ScrollButtons::End => {
+                        lay.left_btn = Rect::new(strip.right(), b.y, bw, lh);
+                        lay.right_btn = Rect::new(strip.right() + bw, b.y, bw, lh);
+                    }
+                    ScrollButtons::Start => {
+                        lay.left_btn = Rect::new(b.x, b.y, bw, lh);
+                        lay.right_btn = Rect::new(b.x + bw, b.y, bw, lh);
+                        strip.x = b.x + bw * 2;
+                    }
+                    ScrollButtons::Split => {
+                        lay.left_btn = Rect::new(b.x, b.y, bw, lh);
+                        strip.x = b.x + bw;
+                        lay.right_btn = Rect::new(strip.right(), b.y, bw, lh);
+                    }
+                }
             }
             lay.strip = strip;
             let max_scroll = (content - strip.w).max(0);
@@ -1186,9 +1230,18 @@ impl Widget for TabBar {
 
         // ◀ ▶ (단일행 넘침) — 띠 밖으로 나간 탭을 덮고 그린다.
         if !lay.left_btn.is_empty() {
-            let btns = lay.left_btn.union(&lay.right_btn);
-            ctx.fill_rect(btns, theme.chrome_bg);
-            ctx.fill_rect(Rect::new(btns.x, btns.y, 1, btns.h), theme.border);
+            // 버튼 바탕 + 띠 쪽 가장자리 구분선(End = 묶음 왼쪽 · Start = 묶음 오른쪽 · Split = 각 버튼의 띠 쪽).
+            ctx.fill_rect(lay.left_btn, theme.chrome_bg);
+            ctx.fill_rect(lay.right_btn, theme.chrome_bg);
+            let (lb, rb) = (lay.left_btn, lay.right_btn);
+            let edges: [Option<i32>; 2] = match self.scroll_buttons {
+                ScrollButtons::End => [Some(lb.x), None],
+                ScrollButtons::Start => [Some(rb.right() - 1), None],
+                ScrollButtons::Split => [Some(lb.right() - 1), Some(rb.x)],
+            };
+            for x in edges.into_iter().flatten() {
+                ctx.fill_rect(Rect::new(x, lb.y, 1, lb.h), theme.border);
+            }
             let scroll = self.scroll_x.get();
             let max = (lay.content_w - strip.w).max(0);
             for (z, r, enabled) in [
@@ -1518,6 +1571,60 @@ mod tests {
         assert_eq!(lay.strip, Rect::new(0, 0, 600, 28));
         assert_eq!(t.preferred_height(), DEFAULT_ROW_H);
         assert_eq!(t.lines(), 1);
+    }
+
+    /// ◀ ▶ 자리 3가지(129차): 버튼·띠 rect · 히트 · 활성 탭이 띠 안 · 기본 = 오른쪽 끝(종전).
+    #[test]
+    fn scroll_buttons_placement_start_and_split() {
+        let titles: Vec<String> = (0..8).map(|i| format!("tab-{i}")).collect();
+        let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+        let (mut t, mut inv) = bar_sized(&refs, 7, 200, 28, false);
+        assert_eq!(t.scroll_buttons(), ScrollButtons::End);
+        let mut rec = crate::RecordCtx::with_surface(200, 28);
+        let mut rects = |t: &mut TabBar, place| {
+            t.set_scroll_buttons(place);
+            rec.clear();
+            t.paint(&mut rec, &Theme::dark());
+            let lay = t.layout.borrow();
+            (lay.strip, lay.left_btn, lay.right_btn)
+        };
+        let (strip, lb, rb) = rects(&mut t, ScrollButtons::Start);
+        assert_eq!(
+            (strip, lb, rb),
+            (
+                Rect::new(56, 0, 144, 28),
+                Rect::new(0, 0, 28, 28),
+                Rect::new(28, 0, 28, 28)
+            )
+        );
+        let r7 = t.tab_rect(7).unwrap();
+        assert!(r7.x >= strip.x && r7.right() <= strip.right(), "{r7:?}");
+        let (strip, lb, rb) = rects(&mut t, ScrollButtons::Split);
+        assert_eq!(
+            (strip, lb, rb),
+            (
+                Rect::new(28, 0, 144, 28),
+                Rect::new(0, 0, 28, 28),
+                Rect::new(172, 0, 28, 28)
+            )
+        );
+        let r7 = t.tab_rect(7).unwrap();
+        assert!(r7.x >= strip.x && r7.right() <= strip.right(), "{r7:?}");
+        // 왼쪽 버튼 클릭 = 뒤로 스크롤(자리와 무관하게 같은 동작).
+        let before = t.scroll_x();
+        t.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: 14,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        t.on_event(&InputEvent::MouseUp { x: 10, y: 14 }, &mut inv);
+        assert!(t.scroll_x() < before, "{} → {}", before, t.scroll_x());
+        let (strip, lb, _) = rects(&mut t, ScrollButtons::End);
+        assert_eq!((strip.x, lb.x), (0, 144));
     }
 
     #[test]
