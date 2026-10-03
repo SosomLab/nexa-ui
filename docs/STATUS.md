@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-03 (132차 · linux · nexa-dir3 T-126)** — 아이콘 셀 `RowSource::cell_icon`(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (131차 · linux · nexa-dir3 T-123)** — 컬럼 드래그 표식(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (130차 · linux · nexa-dir3 T-127)** — nexa-grid 정렬 표시 오른쪽 끝 스위치(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (129차 · linux · nexa-dir3 T-121)** — TabBar 스크롤 버튼 자리 3택(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).

@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 132 · 244da33 | nexa-grid | `RowSource::cell_icon(index, key) -> Option<(키, 힌트)>`(트레이트 기본 None) — Some이면 글 대신 아이콘(가운데 · 들여쓰기 폭) · 리졸버 재사용 · 못 주면 글 폴백 | 추가(트레이트 기본 메서드 · 기본 불변) | 영향 없음(nexa-grid 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | 파일 목록 상태 열 아이콘 — dir3 게이트(§116) · Windows OneDrive 실기 필요 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 131 · 471f013 | nexa-grid | `set_col_drag_marker(bool)` · `col_dragging()` · `col_drag_slot()` — 끄는 동안 놓일 열 자리(머리 + 본문) 강조 + 좌우 1 px 선 · 시험 +1(컬럼 드래그 첫 시험) | 추가(기본 꺼짐 = 종전 고스트만) | 영향 없음(nexa-grid 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | 패널 목록 컬럼 이동 표식 · Esc 취소 판정 — dir3 게이트(§114) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 130 · c7a84a3 | nexa-grid | `set_sort_mark_trailing(bool)` · `sort_mark(key)` — 정렬 표시를 헤더 칸 오른쪽 끝(강조색) · 다중일 때만 순번 · 제목 클립 · 자동 맞춤 글 · 시험 +1 | 추가(기본 꺼짐 = 종전 `▲ 이름 ①`) | 영향 없음(nexa-grid 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | 패널 목록 머리 `이름 ▲` · `이름 ▲1` — dir3 게이트(§112) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 129 · d3e6dbe | nexa-ctl | `ScrollButtons { End · Start · Split }` · `TabBar::set_scroll_buttons` · `scroll_buttons()` — 단일행 넘침 때 ◀▶ 자리 · 시험 +1 | 추가(기본 End = 종전) | 영향 없음(새 API 미사용 · 기본 불변) · `cargo check` 통과(10-03 · 시험 미실행) | 설정 `tabs.scroll_buttons`(한 줄 옵션일 때) — dir3 게이트(§111) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
@@ -35,6 +36,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 132 | `cargo check`(244da33) | 통과 · 시험은 미실행(nexa-grid 미사용) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 131 | `cargo check`(471f013) | 통과 · 시험은 미실행(nexa-grid 미사용) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 130 | `cargo check`(c7a84a3) | 통과 · 시험은 미실행(nexa-grid 미사용) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 129 | `cargo check`(d3e6dbe) | 통과 · 시험은 미실행(기본 불변) |
