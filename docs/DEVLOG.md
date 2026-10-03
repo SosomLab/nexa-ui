@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (117차 · win · nexa-dir3 툴바 그룹 도크)** — `Toolbar::set_item_gap`(기본 4) · `ToolDock::set_item_gap`/`set_gaps(group, row)`(기본 4 · 0 · 행 간격 변경 = `Resized`)/`gaps`/`set_padding(slot, bar)`/`set_item_checked`/`item_checked`/`all_items` · 시험 +1 `gaps_and_padding_are_configurable` · nexa-sql cargo check 확인 — journal 10-03 §14.
 - **2026-10-03 (116차 · win · nexa-dir3 GAP-003)** — nexa-grid `IconResolver`(키 · 힌트 · 크기 → `Rc<IconImage>`) + `set_icon_resolver`(thread_local) · `Adapt::draw_icon` = 리졸버 이미지를 size×size `image_scaled`(없으면 false — 종전 늘 false) · 시험 `adapt_forwards_to_ctl_ctx` 확장 — journal 10-03 §13.
 - **2026-10-03 (115차 · win · nexa-dir3 사용자 피드백)** — nexa-font Windows 기호 후보에 `segmdl2.ttf`·`SegoeIcons.ttf`(PUA U+E700~ · 네비/쉐브론 두부 해소) · nexa-grid `set_marker_glyphs`/`marker_glyphs`(thread_local · 기본 MDL2 E76C/E70D) · `Adapt::glyph_opaque`(목록 글꼴 −4 px · 셀 가운데 · 복귀) · 시험 기대 갱신 — journal 10-03 §12.
 - **2026-10-03 (114차 · win · nexa-dir3 T-32)** — `nexa_ctl::controls::toast::{Toasts, ToastKind, life_alpha, bar_remaining}` 범용 승격(nexa-sql `toast.rs` 카드 관리자 · dir3 사본 이관 · 앱 도메인 0) · 시험 3 — journal 10-03 §11.

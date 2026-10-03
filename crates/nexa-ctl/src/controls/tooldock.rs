@@ -190,6 +190,10 @@ pub struct ToolDock {
     /// 다음 사건·[`ToolDock::relayout_if_stale`]에서 다시 배치한다.
     stale: std::cell::Cell<bool>,
     icon_px: i32,
+    /// 그룹 사이 간격(논리 px · 기본 [`GROUP_GAP`] · 117차 `set_gaps`).
+    group_gap: i32,
+    /// 행 사이 간격(논리 px · 기본 0).
+    row_gap: i32,
 }
 
 impl Drag {
@@ -235,7 +239,56 @@ impl ToolDock {
             actions: Vec::new(),
             stale: std::cell::Cell::new(false),
             icon_px: super::toolbar::DEFAULT_ICON,
+            group_gap: GROUP_GAP,
+            row_gap: 0,
         }
+    }
+
+    /// 그룹 사이 · 행 사이 간격(논리 px · 음수는 0) — 기본 = 4 · 0(117차 · nexa-dir3 "툴바 간격을 설정으로"). 바뀌면 다시 배치하고
+    /// 행 간격이 바뀌면 권장 높이가 달라지므로 [`DockAction::Resized`]를 보고한다.
+    pub fn set_gaps(&mut self, group_gap: i32, row_gap: i32) {
+        let (g, r) = (group_gap.max(0), row_gap.max(0));
+        if (g, r) == (self.group_gap, self.row_gap) {
+            return;
+        }
+        let row_changed = r != self.row_gap;
+        self.group_gap = g;
+        self.row_gap = r;
+        self.relayout();
+        if row_changed {
+            self.actions.push(DockAction::Resized);
+        }
+    }
+
+    /// 지금 간격 (그룹, 행) — 논리 px.
+    #[must_use]
+    pub fn gaps(&self) -> (i32, i32) {
+        (self.group_gap, self.row_gap)
+    }
+
+    /// 모든 그룹 툴바의 여백 — `slot_pad` = 아이콘 칸 좌우(아이콘 사이 간격의 절반) · `bar_pad` = 툴바 양끝([`Toolbar::set_padding`]).
+    pub fn set_padding(&mut self, slot_pad: i32, bar_pad: i32) {
+        for b in &mut self.bars {
+            b.set_padding(slot_pad, bar_pad);
+        }
+        self.relayout();
+    }
+
+    /// 모든 그룹 툴바의 항목 사이 간격([`Toolbar::set_item_gap`]).
+    pub fn set_item_gap(&mut self, gap: i32) {
+        for b in &mut self.bars {
+            b.set_item_gap(gap);
+        }
+        self.relayout();
+    }
+
+    /// 토글 항목의 켜짐 표시(모든 그룹에서 id로) — 바뀐 것이 있으면 true.
+    pub fn set_item_checked(&mut self, id: &str, on: bool, inv: &mut Invalidations) -> bool {
+        let mut changed = false;
+        for b in &mut self.bars {
+            changed |= b.set_item_checked(id, on, inv);
+        }
+        changed
     }
 
     /// 아이콘 크기(논리 px) — 모든 그룹에.
@@ -249,7 +302,8 @@ impl ToolDock {
     /// 권장 높이(논리 px) — 그룹 툴바 높이 × 행 수.
     #[must_use]
     pub fn preferred_height(&self) -> i32 {
-        self.bar_height() * self.rows() as i32
+        let rows = self.rows() as i32;
+        self.bar_height() * rows + self.row_gap * (rows - 1).max(0)
     }
 
     fn bar_height(&self) -> i32 {
@@ -520,6 +574,21 @@ impl ToolDock {
         }
     }
 
+    /// 토글 항목이 켜져 있는가(어느 그룹이든).
+    #[must_use]
+    pub fn item_checked(&self, id: &str) -> bool {
+        self.bars.iter().any(|b| b.item_checked(id))
+    }
+
+    /// 모든 그룹의 항목(도크 순서 · 구분자 포함) — 호스트 점검·덤프용.
+    #[must_use]
+    pub fn all_items(&self) -> Vec<ToolItem> {
+        self.order
+            .iter()
+            .flat_map(|&i| self.bars[i].items().iter().cloned())
+            .collect()
+    }
+
     #[must_use]
     pub fn item_enabled(&self, id: &str) -> bool {
         self.bars.iter().any(|b| b.item_enabled(id))
@@ -560,13 +629,14 @@ impl ToolDock {
     fn relayout(&mut self) {
         let b = self.base.bounds;
         let grip = self.s(GRIP_W);
-        let gap = self.s(GROUP_GAP);
+        let gap = self.s(self.group_gap);
+        let rgap = self.s(self.row_gap);
         let mut inv = Invalidations::default();
         let nrows = self.rows();
-        let row_h = (b.h / nrows as i32).max(1);
+        let row_h = ((b.h - rgap * (nrows as i32 - 1)) / nrows as i32).max(1);
         self.row_h = row_h;
         for r in 0..nrows {
-            let ry = b.y + r as i32 * row_h;
+            let ry = b.y + r as i32 * (row_h + rgap);
             let mut x = b.x + self.s(2);
             let mut rx = b.right() - self.s(2);
             for &i in &self.order.clone() {
@@ -616,7 +686,7 @@ impl ToolDock {
         if y < b.y {
             return Some(0);
         }
-        let r = ((y - b.y) / row_h) as usize;
+        let r = ((y - b.y) / (row_h + self.s(self.row_gap)).max(1)) as usize;
         Some(r.min(self.rows()))
     }
 
@@ -956,6 +1026,62 @@ mod tests {
         let mut inv = Invalidations::default();
         d.set_bounds(Rect::new(0, 0, 800, 28), &mut inv);
         d
+    }
+
+    /// 간격 설정(117차): 그룹 간격 0 = 그룹이 그립 폭만 두고 맞닿는다 · 행 간격 = 권장 높이와 행 y에 반영 · 칸 여백 0 = 아이콘이 맞닿는다.
+    #[test]
+    fn gaps_and_padding_are_configurable() {
+        let mk = || {
+            let g = |id: &str| {
+                ToolGroup::new(
+                    id,
+                    id,
+                    vec![
+                        ToolItem::new(format!("{id}.1"), ToolIcon::Glyph("a".into())),
+                        ToolItem::new(format!("{id}.2"), ToolIcon::Glyph("b".into())),
+                    ],
+                )
+            };
+            let mut d = ToolDock::new(vec![g("a"), g("b")]);
+            d.set_icon_size(20);
+            d
+        };
+        let mut inv = Invalidations::default();
+        let mut d = mk();
+        assert_eq!(d.gaps(), (GROUP_GAP, 0));
+        let h1 = d.preferred_height();
+        d.set_bounds(Rect::new(0, 0, 600, h1), &mut inv);
+        let bx_default = d.bar("b").unwrap().bounds().x;
+        let a_right = d.bar("a").unwrap().bounds().right();
+        assert_eq!(bx_default, a_right + GROUP_GAP + GRIP_W);
+        d.set_gaps(0, 6);
+        assert_eq!(
+            d.bar("b").unwrap().bounds().x,
+            a_right + GRIP_W,
+            "그룹 간격 0"
+        );
+        assert!(
+            d.take_actions().contains(&DockAction::Resized),
+            "행 간격 변화 = 높이 재계산 요청"
+        );
+        // 두 행으로: 권장 높이 = 2행 + 행 간격 · 둘째 행 y = 행 높이 + 간격.
+        d.apply_layout(&DockLayout::parse("a;b"));
+        assert_eq!(d.rows(), 2);
+        assert_eq!(d.preferred_height(), h1 * 2 + 6);
+        d.set_bounds(Rect::new(0, 0, 600, d.preferred_height()), &mut inv);
+        assert_eq!(d.bar("b").unwrap().bounds().y, h1 + 6);
+        // 항목 간격 0 + 칸 여백 0 = 아이콘이 맞닿는다(폭이 줄어든다).
+        let w_before = d.bar("a").unwrap().bounds().w;
+        d.set_padding(0, 2);
+        d.set_item_gap(0);
+        d.set_bounds(Rect::new(0, 0, 600, d.preferred_height()), &mut inv);
+        let a = d.bar("a").unwrap();
+        assert!(a.bounds().w <= w_before);
+        let (r1, r2) = (a.item_rect("a.1").unwrap(), a.item_rect("a.2").unwrap());
+        assert_eq!(r1.right(), r2.x, "아이콘 칸 사이 틈 0");
+        // 체크 전달.
+        assert!(d.set_item_checked("b.1", true, &mut inv));
+        assert!(!d.set_item_checked("b.1", true, &mut inv));
     }
 
     #[test]

@@ -255,6 +255,8 @@ pub struct Toolbar {
     /// 슬롯 안쪽 여백 · 바 위아래 여백(논리 px · 기본 4/4 · 결과 도구줄처럼 낮은 바는 2/1 · nexa-sql 09-16 Golden 22px).
     slot_pad: i32,
     bar_pad: i32,
+    /// 항목 사이 간격(논리 px · 기본 4 · 117차 `set_item_gap`).
+    item_gap: i32,
 }
 
 impl Toolbar {
@@ -274,10 +276,16 @@ impl Toolbar {
             tip_above: false,
             slot_pad: SLOT_PAD,
             bar_pad: BAR_PAD,
+            item_gap: 4,
         }
     }
 
     /// 여백 지정(슬롯 안쪽 · 바 위아래 · 논리 px) — 권장 높이 = 아이콘 + (slot + bar) × 2.
+    /// 항목 사이 간격(논리 px · 음수는 0 · 기본 4) — 0이면 아이콘 칸이 맞닿는다(117차 · nexa-dir3 "아이콘 사이 간격을 설정으로").
+    pub fn set_item_gap(&mut self, gap: i32) {
+        self.item_gap = gap.max(0);
+    }
+
     pub fn set_padding(&mut self, slot_pad: i32, bar_pad: i32) {
         self.slot_pad = slot_pad.max(0);
         self.bar_pad = bar_pad.max(0);
@@ -371,11 +379,11 @@ impl Toolbar {
         }
     }
 
-    /// 항목 앞 간격 — 상태 표시는 0(밀착), 나머지는 4.
+    /// 항목 앞 간격 — 상태 표시는 0(밀착), 나머지는 `item_gap`(기본 4).
     fn gap_before(&self, i: usize) -> i32 {
         match &self.items[i].icon {
             ToolIcon::StatusMask { .. } => 0,
-            _ => self.s(4),
+            _ => self.s(self.item_gap),
         }
     }
 
