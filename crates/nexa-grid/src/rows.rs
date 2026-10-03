@@ -315,6 +315,8 @@ pub struct VirtualRows<S> {
     mode: ViewMode,
     /// 폰트 장식(X-12): (폴더 이름 굵게, 헤더 굵게, 헤더 이탤릭).
     font_decor: (bool, bool, bool),
+    /// 정렬 표시를 헤더 칸 **오른쪽 끝**에(130차 · [`Self::set_sort_mark_trailing`]) — 기본 꺼짐(▲ 이름 ①).
+    sort_mark_trailing: bool,
     /// 오버레이 스크롤바(09-04 X-47) — **축별 독립**(사용자 확정: 세로 스크롤 = 세로만,
     /// 가로 스크롤 = 가로만, 가로 표시 중 세로 스크롤 = 둘 다): `[세로, 가로]` 썸 알파
     /// (0=숨김)·유지 틱 잔량, 호버 축, 드래그.
@@ -382,11 +384,36 @@ impl<S: RowSource> VirtualRows<S> {
             focused: true,
             mode: ViewMode::default(),
             font_decor: (false, false, false),
+            sort_mark_trailing: false,
             bar_alpha: [0, 0],
             bar_hold: [0, 0],
             bar_hover: None,
             bar_drag: None,
         }
+    }
+
+    /// 정렬 표시 자리(130차 · nexa-dir3 사용자 10-03 "정렬 인디케이터는 가장 우측 · 다중 정렬 순번은 인디케이터 우측" —
+    /// nexa-sql 결과 그리드 모양): 켜면 제목은 왼쪽 그대로 · ▲/▼는 칸 오른쪽 끝 · **다중 정렬일 때만** 그 오른쪽에 순번 숫자
+    /// (`이름 ▲2`). 끄면(기본) 종전 `▲ 이름 ①`. 클릭 규칙(단순 클릭 = 단일 3상태 · Shift = 추가/방향/제거)은 같다.
+    pub fn set_sort_mark_trailing(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.sort_mark_trailing != on {
+            self.sort_mark_trailing = on;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 헤더 칸 오른쪽 끝에 그릴 정렬 표시(끝 정렬 모양일 때만): `▲` · 다중 정렬이면 `▲2`(1부터). 정렬되지 않은 열 = `None`.
+    #[must_use]
+    pub fn sort_mark(&self, key: u32) -> Option<String> {
+        if !self.sort_mark_trailing {
+            return None;
+        }
+        let order = self.sort.iter().position(|(k, _)| *k == key)?;
+        let mut s = String::from(if self.sort[order].1 { "▼" } else { "▲" });
+        if self.sort.len() > 1 {
+            s.push_str(&(order + 1).to_string());
+        }
+        Some(s)
     }
 
     /// 폰트 장식 설정(X-12) — 폴더 이름 굵게 / 헤더 굵게·이탤릭.
@@ -1570,8 +1597,12 @@ impl<S: RowSource> VirtualRows<S> {
             return Vec::new();
         };
         let mut out = Vec::new();
-        // 헤더 라벨(정렬 화살표·순번 포함)
-        out.push((self.header_label(c), self.pad_x * 2));
+        // 헤더 라벨(정렬 화살표·순번 포함 — 끝 정렬 모양이면 표시 + 사이 여백만큼 더).
+        let label = match self.sort_mark(c.key) {
+            Some(mark) => format!("{} {mark}", self.header_label(c)),
+            None => self.header_label(c),
+        };
+        out.push((label, self.pad_x * 2));
         let first = self.scroll_row;
         let count = self
             .visible_rows()
@@ -1613,6 +1644,9 @@ impl<S: RowSource> VirtualRows<S> {
     /// 순번은 **정렬 시작부터 상시 표시**(사용자 확정 07-18 — 단일 정렬 = ①,
     /// Ctrl/Shift로 추가한 컬럼 = ② 순차).
     fn header_label(&self, col: &Column) -> String {
+        if self.sort_mark_trailing {
+            return col.title.clone(); // 정렬 표시는 칸 오른쪽 끝에 따로 그린다([`Self::sort_mark`])
+        }
         let mut s = String::new();
         if let Some(desc) = self.dir_of(col.key) {
             s.push_str(if desc { "▼ " } else { "▲ " });
@@ -2364,14 +2398,31 @@ impl<S: RowSource> VirtualRows<S> {
                     continue;
                 }
                 let cell = Rect::new(cx, hy, col.width, self.row_h);
+                // 끝 정렬 정렬 표시(130차): 칸 오른쪽 끝에 강조색으로 · 제목은 그 왼쪽까지만(겹치지 않게 클립).
+                let mark = self.sort_mark(col.key);
+                let mark_w = mark
+                    .as_deref()
+                    .map_or(0, |m| (ctx.text_width(m) + self.pad_x).min(cell.w));
+                let title_cell = Rect::new(cell.x, cell.y, cell.w - mark_w, cell.h);
                 ctx.text_opaque(
                     cell.x + self.pad_x,
                     hty,
-                    cell,
+                    title_cell,
                     &self.header_label(col),
                     theme.text,
                     crate::theme::header_bg(theme),
                 );
+                if let Some(m) = mark.as_deref() {
+                    let mc = Rect::new(title_cell.right(), cell.y, mark_w, cell.h);
+                    ctx.text_opaque(
+                        mc.x,
+                        hty,
+                        mc,
+                        m,
+                        theme.accent,
+                        crate::theme::header_bg(theme),
+                    );
+                }
                 // 컬럼 경계선(헤더 안, 오른쪽 1px)
                 let sep_x = cell.right() - 1;
                 if sep_x >= b.x && sep_x < b.right() {
@@ -3013,6 +3064,42 @@ mod tests {
         assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");
         assert_eq!(v.header_label(&v.columns()[1]), "▲ 크기 ②");
         assert_eq!(v.header_label(&v.columns()[2]), "수정한 날짜");
+    }
+
+    /// 끝 정렬 정렬 표시(130차): 제목만 왼쪽 · ▲/▼는 오른쪽 끝 · 다중 정렬일 때만 순번 · Shift 순환(오름 → 내림 → 없음).
+    #[test]
+    fn trailing_sort_mark_and_shift_cycle() {
+        let (mut v, mut inv) = list_with_cols(10, 220);
+        let k: Vec<u32> = v.columns().iter().map(|c| c.key).collect();
+        assert_eq!(v.sort_mark(k[0]), None, "기본 = 종전 모양");
+        v.set_sort_mark_trailing(true, &mut inv);
+        click(&mut v, &mut inv, 50, 5, false); // 이름 ▲
+        assert_eq!(v.header_label(&v.columns()[0]), "이름");
+        assert_eq!(
+            v.sort_mark(k[0]).as_deref(),
+            Some("▲"),
+            "단일 정렬 = 순번 없음"
+        );
+        click(&mut v, &mut inv, 250, 5, true); // Shift+크기 → 다중
+        assert_eq!(v.sort_mark(k[0]).as_deref(), Some("▲1"));
+        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▲2"));
+        assert_eq!(v.sort_mark(k[2]), None);
+        click(&mut v, &mut inv, 250, 5, true); // Shift 다시 = 내림
+        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▼2"));
+        click(&mut v, &mut inv, 250, 5, true); // Shift 또 = 없음
+        assert_eq!(v.sort_mark(k[1]), None);
+        assert_eq!(
+            v.sort_mark(k[0]).as_deref(),
+            Some("▲"),
+            "하나 남으면 순번 없음"
+        );
+        // 그리기: 표시는 칸 오른쪽 끝(제목과 따로) · 자동 맞춤 글에는 표시가 들어간다.
+        click(&mut v, &mut inv, 250, 5, true);
+        let mut rec = nexa_ctl::RecordCtx::with_surface(600, 300);
+        v.paint(&mut rec, &Theme::dark());
+        assert!(rec.drew_text("이름") && rec.drew_text("▲1") && rec.drew_text("▲2"));
+        assert!(!rec.drew_text("▲ 이름 ①"));
+        assert_eq!(v.autofit_texts(0)[0].0, "이름 ▲1");
     }
 
     // ── 리사이즈 드래그 ──
