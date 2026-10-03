@@ -2,6 +2,9 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (125차 · linux · nexa-dir3 Linux 실기)** — nexa-gfx `Font::set_fallback_em_match`(기본 꺼짐) · `fallback_size_with` · `collection_face_index` · nexa-font `find_collection_face` · 시험 +2 — journal 10-03 §22.
+- **2026-10-03 (124차 · linux · nexa-dir3 Linux 실기)** — nexa-fs `icontheme`(freedesktop 아이콘 테마 · PNG · `icon_file` · `theme_name` · Linux 밖 = None) · 시험 +5 — journal 10-03 §21.
+- **2026-10-03 (123차 · linux · nexa-dir3 Linux 실기)** — nexa-grid `set_marker_vector`(기본 꺼짐) · `marker_chevron_points`(칸 16 = 4×8/8×4) · 시험 +1 — journal 10-03 §20.
 - **2026-10-03 (122차 · win · nexa-dir3 Linux 실기)** — nexa-explorer `split_path` Unix 경로 = `/`로만 나누고 절대 경로 조립 · `path_separator` · paint 구분자 · 시험 +1 `split_unix_paths_keep_leading_slash` — journal 10-03 §19.
 - **2026-10-03 (121차 · win · nexa-dir3 GAP-008)** — nexa-fs `set_link_overlay`/`link_overlay_enabled`(전역 · 기본 꺼짐) · 켜면 Windows `icon_for_path`에 `SHGFI_LINKOVERLAY` — journal 10-03 §18.
 - **2026-10-03 (120차 · win · nexa-dir3 메뉴 캡처)** — nexa-ctl `ContextMenu::size_px`에 `scrollable()`이면 세로 스크롤 표시 자리 `s(6)` 포함(paint와 일치 · 가짜 가로 스크롤 막대 제거) · 시험 +1 `vertical_scroll_mark_is_part_of_the_width` — journal 10-03 §17.

@@ -2,6 +2,9 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-03 (125차 · linux · nexa-dir3 Linux 실기)** — 폴백 글꼴 em 맞춤(`set_fallback_em_match` · 기본 꺼짐) · TTC 안 얼굴 찾기(추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
+- **2026-10-03 (124차 · linux · nexa-dir3 Linux 실기)** — nexa-fs `icontheme` freedesktop 아이콘 테마 조회(새 모듈 · 추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
+- **2026-10-03 (123차 · linux · nexa-dir3 Linux 실기)** — nexa-grid 선 쉐브론 스위치(`set_marker_vector` · 기본 꺼짐 · 추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (122차 · win · nexa-dir3 Linux 실기)** — PathBar Unix 경로 세그먼트(앞 `/` 보존 · 구분자 `/` · 수정/동작 변경 Unix 한정 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (121차 · win · nexa-dir3 GAP-008)** — nexa-fs 링크 화살표 오버레이 스위치(`set_link_overlay` · 기본 꺼짐 · 추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (120차 · win · nexa-dir3 메뉴 캡처)** — ContextMenu 폭에 세로 스크롤 표시 자리 포함(스크롤 메뉴 6 px 넓어짐 · 가짜 가로 막대 제거 · 수정/동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
