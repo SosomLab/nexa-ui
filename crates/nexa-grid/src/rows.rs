@@ -139,6 +139,13 @@ pub trait RowSource {
         let _ = (index, key);
         String::new()
     }
+    /// 그 외 컬럼의 **셀 아이콘** `(키, 힌트)`(132차 · nexa-dir3 "상태" 열) — `Some`이면 글 대신 아이콘을 칸 가운데에 그린다
+    /// (호스트 리졸버 [`crate::draw::set_icon_resolver`]가 키로 이미지를 준다 · 못 주면 [`RowSource::cell`] 글로 폴백).
+    /// 기본 = 없음(글만).
+    fn cell_icon(&self, index: usize, key: u32) -> Option<(String, String)> {
+        let _ = (index, key);
+        None
+    }
     /// 행 활성화(펼침 마커 클릭) — 목록 구조가 바뀌었으면 `true`(위젯이 전체 무효화).
     fn toggle(&mut self, index: usize) -> bool {
         let _ = index;
@@ -2354,6 +2361,16 @@ impl<S: RowSource> VirtualRows<S> {
                         }
                         let icon = self.src.icon(row);
                         self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), cell, bg, fg);
+                    } else if let Some((key, hint)) = self.src.cell_icon(row, col.key) {
+                        // 아이콘 셀(132차): 배경 → 칸 가운데에 들여쓰기 폭 크기 아이콘 · 리졸버가 못 주면 글로.
+                        ctx.text_opaque(cell.x, ty, cell, "", fg, bg);
+                        let isz = self.indent_w.min(cell.w).min(cell.h);
+                        let ix = cell.x + (cell.w - isz) / 2;
+                        let iy = cell.y + (cell.h - isz) / 2;
+                        if !ctx.draw_icon(ix, iy, isz, &key, &hint) {
+                            let text = self.src.cell(row, col.key);
+                            ctx.text_opaque(cell.x + self.pad_x, ty, cell, &text, fg, bg);
+                        }
                     } else {
                         let text = self.src.cell(row, col.key);
                         let tx = match col.align {
