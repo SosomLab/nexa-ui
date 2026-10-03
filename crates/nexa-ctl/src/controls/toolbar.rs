@@ -251,6 +251,10 @@ pub struct SoftStates {
     pub radius: i32,
     /// 켜진 칸의 아이콘을 강조색으로 칠할지(false = 본문색 그대로 — 강조색 채움 위에서 더 또렷하다 · dir2 규약).
     pub on_icon_accent: bool,
+    /// 켜짐 채움/테두리 색(134차 — `None` = 테마 강조색 · 종전). 스위치와 통일하려면 [`SWITCH_ON`](super::SWITCH_ON)을 준다.
+    pub on_color: Option<Color>,
+    /// 켜진 칸의 아이콘 색(`None` = `on_icon_accent` 규칙 그대로). 진한 채움 위에서는 흰색을 준다.
+    pub on_icon: Option<Color>,
 }
 
 impl Default for SoftStates {
@@ -264,6 +268,8 @@ impl Default for SoftStates {
             step: 0.20,
             radius: 4,
             on_icon_accent: false,
+            on_color: None,
+            on_icon: None,
         }
     }
 }
@@ -800,7 +806,7 @@ impl Toolbar {
             let pad = self.s(self.slot_pad);
             // 부드러운 상태 표시(118차 `set_soft_states`) — 칸 안쪽 1px 들여 둥근 알약으로. 그린 뒤에는 아래의 종전 표시(38 % 채움 ·
             // hover 색 전환)를 건너뛰도록 깃발을 내린다. 켜짐 = 아이콘도 강조색(`soft_on`).
-            let mut soft_on = false;
+            let mut soft_on: Option<Color> = None;
             let (is_hover, is_pressed, checked) = match self.soft.filter(|_| it.enabled) {
                 Some(st) => {
                     let inset = self.s(1);
@@ -819,11 +825,16 @@ impl Toolbar {
                         0.0
                     };
                     if it.checked {
-                        soft_on = st.on_icon_accent;
+                        soft_on = st.on_icon.or(st.on_icon_accent.then_some(theme.accent));
+                        let on = st.on_color.unwrap_or(theme.accent);
                         let fill = (st.on_fill + st.step * step).min(1.0);
                         let line = (st.on_line + st.step * 2.0 * step).min(1.0);
-                        ctx.fill_round_rect_alpha(pill, r, theme.accent, fill);
-                        ctx.stroke_round_rect_alpha(pill, r, theme.accent, 1.0, line);
+                        ctx.fill_round_rect_alpha(pill, r, on, fill);
+                        ctx.stroke_round_rect_alpha(pill, r, on, 1.0, line);
+                        // 이미 꽉 찬 채움(스위치식 진한 켜짐)은 더 진해질 수 없다 → hover/눌림은 흰 막을 얹어 밝힌다.
+                        if st.on_fill >= 1.0 && step > 0.0 {
+                            ctx.fill_round_rect_alpha(pill, r, Color(0x00FF_FFFF), 0.14 * step);
+                        }
                     } else if step > 0.0 {
                         ctx.fill_round_rect_alpha(pill, r, theme.text, st.hover_fill * step);
                     }
@@ -889,7 +900,9 @@ impl Toolbar {
                     // ★ 글자 항목(`label`)은 hover에도 색조 그대로(nexa-sql 09-28 "마우스 오버시 푸른색으로 바꿀 필요 없음").
                     let color = if !it.enabled {
                         theme.text_dim
-                    } else if soft_on || ((is_hover || is_pressed) && !it.label) {
+                    } else if let Some(c) = soft_on {
+                        c
+                    } else if (is_hover || is_pressed) && !it.label {
                         theme.accent
                     } else {
                         match it.tone {
@@ -939,7 +952,9 @@ impl Toolbar {
                     // SVG 유래 = 테마 기준색 · hover/pressed = 선색 변경(accent) · 비활성 = 흐림.
                     let color = if !it.enabled {
                         theme.text_dim
-                    } else if soft_on || is_hover || is_pressed {
+                    } else if let Some(c) = soft_on {
+                        c
+                    } else if is_hover || is_pressed {
                         theme.accent
                     } else {
                         match it.tone {
@@ -1008,6 +1023,31 @@ mod tests {
 
     /// 4×4 더미 마스크.
     const MASK4: &[u8] = &[255; 16];
+
+    /// 켜짐 색 지정(134차 · 스위치와 통일): `on_color`를 주면 켜진 칸을 그 색으로 채우고(강조색 아님) · 기본(`None`)은 종전 강조색.
+    #[test]
+    fn soft_states_on_color_overrides_accent() {
+        use crate::controls::RecordCtx;
+        let (mut t, mut inv) = bar();
+        t.set_item_checked("refresh", true, &mut inv);
+        let count = |t: &Toolbar, c: Color| {
+            let mut rec = RecordCtx::with_surface(300, 60);
+            t.paint(&mut rec, &Theme::dark());
+            rec.round_rects.iter().filter(|(_, _, k)| *k == c).count()
+        };
+        let green = crate::controls::SWITCH_ON;
+        t.set_soft_states(Some(SoftStates::default()));
+        assert!(count(&t, Theme::dark().accent) >= 1 && count(&t, green) == 0);
+        t.set_soft_states(Some(SoftStates {
+            on_fill: 1.0,
+            on_line: 0.0,
+            on_color: Some(green),
+            on_icon: Some(Color(0x00FF_FFFF)),
+            ..SoftStates::default()
+        }));
+        assert!(count(&t, green) >= 1, "켜진 칸 = 지정 색");
+        assert_eq!(count(&t, Theme::dark().accent), 0, "강조색 채움 없음");
+    }
 
     /// ★ 토글 켜짐(dir2 GUI-074 · nexa-dir3 103차): `set_item_checked`가 바뀔 때만 true + 무효화 · 켜진 항목은 강조색 블렌드 배경(둥근 사각형)이
     /// 그려지고 꺼진 항목은 안 그려진다 · `checked_ids`.

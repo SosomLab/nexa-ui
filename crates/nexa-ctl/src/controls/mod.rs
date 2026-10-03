@@ -65,6 +65,8 @@ pub use scroll::{fast_scroll, set_fast_scroll, FastScroll, ScrollAccel, ScrollBa
 pub use splitter::{SplitAxis, SplitBand, SplitEvent, Splitter};
 pub use statusbar::{StatusBar, StatusSeg};
 pub use switch::Switch;
+/// 스위치 켜짐 색(초록) — 다른 컨트롤의 "켜짐"을 스위치와 같은 색으로 맞출 때(134차 · 툴바 토글).
+pub const SWITCH_ON: crate::theme::Color = switch::ON_GREEN;
 pub use tabbar::{ScrollButtons, TabAction, TabBadge, TabBar};
 pub use toast::{bar_remaining, life_alpha, ToastKind, Toasts};
 pub mod pairs;
