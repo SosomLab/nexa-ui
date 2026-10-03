@@ -121,6 +121,9 @@ pub struct ToolItem {
     /// ★ **토글 켜짐**(dir2 GUI-074 · nexa-dir3 103차 10-03): 슬롯 배경을 강조색 38 % 블렌드로 채운다(아이콘 색은 그대로 —
     /// "파랑 필 + 흰 선" 시안은 dir2에서 원복된 이력). 라디오식 묶음(보기 모드 3)은 호스트가 id마다 `set_item_checked`로 하나만 켠다.
     pub checked: bool,
+    /// **토글 항목인가**(136차 · nexa-dir3): 켜고 끄는 버튼(또는 택일 묶음) — [`SoftStates::hover_fill_toggle_only`]일 때
+    /// hover 배경은 이 항목에만 칠한다(누르면 끝나는 동작 버튼은 아이콘 색만 바뀐다).
+    pub toggle: bool,
 }
 
 impl ToolItem {
@@ -141,7 +144,15 @@ impl ToolItem {
             label: false,
             label_w: std::cell::Cell::new(0),
             checked: false,
+            toggle: false,
         }
+    }
+
+    /// 토글 항목으로 표시(체이닝 · [`ToolItem::toggle`]).
+    #[must_use]
+    pub fn toggle(mut self, on: bool) -> Self {
+        self.toggle = on;
+        self
     }
 
     /// 시작부터 켜짐(체이닝) — 호스트가 [`Toolbar::set_item_checked`]로 바꾼다.
@@ -255,6 +266,10 @@ pub struct SoftStates {
     pub on_color: Option<Color>,
     /// 켜진 칸의 아이콘 색(`None` = `on_icon_accent` 규칙 그대로). 진한 채움 위에서는 흰색을 준다.
     pub on_icon: Option<Color>,
+    /// hover/눌림 때 아이콘을 강조색으로(136차 — nexa-sql 툴바와 같은 "선색 변경" · 눌림 = 1px 내림). 기본 false = 종전(아이콘 그대로).
+    pub hover_icon_accent: bool,
+    /// hover 채움을 **토글 항목**([`ToolItem::toggle`])에만 칠한다(136차). 기본 false = 종전(모든 칸).
+    pub hover_fill_toggle_only: bool,
     /// 켜짐 **테두리** 색만 따로(135차 — `None` = 채움 색과 같다). 배경은 강조색 옅은 채움 그대로 두고 선만 초록으로 할 때.
     pub on_line_color: Option<Color>,
 }
@@ -272,6 +287,8 @@ impl Default for SoftStates {
             on_icon_accent: false,
             on_color: None,
             on_icon: None,
+            hover_icon_accent: false,
+            hover_fill_toggle_only: false,
             on_line_color: None,
         }
     }
@@ -306,6 +323,8 @@ pub struct Toolbar {
     side: i32,
     /// 부드러운 상태 표시(118차 `set_soft_states`) — 켜짐/hover/눌림을 옅은 채움 + 얇은 테두리 + 아이콘 색으로.
     soft: Option<SoftStates>,
+    /// 아이콘 그림 배율(136차 `set_icon_scale` · 0.5~1.0 · 기본 1.0) — 칸 크기는 그대로 두고 그림만 가운데로 줄인다.
+    icon_scale: f32,
 }
 
 impl Toolbar {
@@ -330,6 +349,7 @@ impl Toolbar {
             hover_bg: false,
             side: 6,
             soft: None,
+            icon_scale: 1.0,
         }
     }
 
@@ -373,6 +393,19 @@ impl Toolbar {
     /// 툴팁 위치 — `true` = 슬롯 위쪽(기본 아래).
     pub fn set_tooltip_above(&mut self, on: bool) {
         self.tip_above = on;
+    }
+
+    /// 아이콘 그림 배율(0.5~1.0) — **칸(버튼) 크기는 그대로** 두고 그림만 가운데로 줄인다(136차 · nexa-dir3 "이미지만 90 %").
+    /// 호스트는 마스크를 [`Toolbar::icon_draw_px`] 크기로 만들면 확대·축소 없이 또렷하다.
+    pub fn set_icon_scale(&mut self, scale: f32) {
+        self.icon_scale = scale.clamp(0.5, 1.0);
+    }
+
+    /// 칸 안 아이콘 자리(물리 px 한 변)가 `area`일 때 실제로 그리는 그림 한 변(순수 · 양쪽 같은 여백이 되게 짝수 차이).
+    #[must_use]
+    pub fn icon_draw_px(area: i32, scale: f32) -> i32 {
+        let inset = ((area as f32) * (1.0 - scale.clamp(0.5, 1.0)) / 2.0).round() as i32;
+        (area - inset * 2).max(1)
     }
 
     /// 아이콘 크기(논리 px) 지정 — 설정 `ui.toolbar_size` 즉시 적용.
@@ -844,10 +877,14 @@ impl Toolbar {
                         if st.on_fill >= 1.0 && step > 0.0 {
                             ctx.fill_round_rect_alpha(pill, r, Color(0x00FF_FFFF), 0.14 * step);
                         }
-                    } else if step > 0.0 {
+                    } else if step > 0.0 && (!st.hover_fill_toggle_only || it.toggle) {
                         ctx.fill_round_rect_alpha(pill, r, theme.text, st.hover_fill * step);
                     }
-                    (false, false, false)
+                    if st.hover_icon_accent {
+                        (is_hover, is_pressed, false)
+                    } else {
+                        (false, false, false)
+                    }
                 }
                 None => (is_hover, is_pressed, it.checked),
             };
@@ -975,7 +1012,19 @@ impl Toolbar {
                         }
                     };
                     let img = self.tinted(i, *w, *h, alpha, color);
-                    let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
+                    // 그림 배율(136차): 칸은 그대로 · 그림 자리만 가운데로 줄인다.
+                    let side = Self::icon_draw_px(icon_area.w.min(icon_area.h), self.icon_scale);
+                    let area = if self.icon_scale < 1.0 {
+                        Rect::new(
+                            icon_area.x + (icon_area.w - side) / 2,
+                            icon_area.y + (icon_area.h - side) / 2,
+                            side,
+                            side,
+                        )
+                    } else {
+                        icon_area
+                    };
+                    let fit = image_fit_contain(area, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, &img, slot);
                     if !it.enabled {
                         ctx.fill_rect_alpha(fit, theme.chrome_bg, 0.45);
@@ -1032,6 +1081,63 @@ mod tests {
 
     /// 4×4 더미 마스크.
     const MASK4: &[u8] = &[255; 16];
+
+    /// 136차: 그림 배율(칸 크기 불변 · 그림만 가운데로) · hover = 아이콘 강조색 · hover 배경은 토글 항목에만.
+    #[test]
+    fn icon_scale_and_hover_accent_toggle_fill() {
+        use crate::controls::RecordCtx;
+        assert_eq!(Toolbar::icon_draw_px(20, 0.9), 18);
+        assert_eq!(Toolbar::icon_draw_px(20, 1.0), 20);
+        assert_eq!(Toolbar::icon_draw_px(24, 0.9), 22);
+        assert_eq!(Toolbar::icon_draw_px(16, 0.9), 14);
+        let mask = || ToolIcon::Mask {
+            w: 18,
+            h: 18,
+            alpha: &[255u8; 18 * 18],
+        };
+        let mut t = Toolbar::new(vec![
+            ToolItem::new("act", mask()),
+            ToolItem::new("tog", mask()).toggle(true),
+        ]);
+        t.set_icon_size(20);
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 200, 30), &mut inv);
+        let slot = t.item_rect("act").unwrap();
+        t.set_icon_scale(0.9);
+        assert_eq!(t.item_rect("act").unwrap(), slot, "칸 크기는 그대로");
+        let mut rec = RecordCtx::with_surface(200, 30);
+        t.paint(&mut rec, &Theme::dark());
+        assert!(
+            rec.images.iter().all(|r| r.w == 18 && r.h == 18),
+            "{:?}",
+            rec.images
+        );
+        // hover: 동작 버튼 = 배경 없음 · 토글 = 옅은 배경.
+        t.set_soft_states(Some(SoftStates {
+            hover_icon_accent: true,
+            hover_fill_toggle_only: true,
+            ..SoftStates::default()
+        }));
+        let fills = |t: &mut Toolbar, id: &str| {
+            let r = t.item_rect(id).unwrap();
+            let mut inv = Invalidations::default();
+            t.on_event(
+                &InputEvent::MouseMove {
+                    x: r.x + 3,
+                    y: r.y + 3,
+                },
+                &mut inv,
+            );
+            let mut rec = RecordCtx::with_surface(200, 30);
+            t.paint(&mut rec, &Theme::dark());
+            rec.round_rects
+                .iter()
+                .filter(|(_, _, c)| *c == Theme::dark().text)
+                .count()
+        };
+        assert_eq!(fills(&mut t, "act"), 0, "동작 버튼 hover = 배경 없음");
+        assert_eq!(fills(&mut t, "tog"), 1, "토글 hover = 옅은 배경");
+    }
 
     /// 켜짐 색 지정(134차 · 스위치와 통일): `on_color`를 주면 켜진 칸을 그 색으로 채우고(강조색 아님) · 기본(`None`)은 종전 강조색.
     #[test]

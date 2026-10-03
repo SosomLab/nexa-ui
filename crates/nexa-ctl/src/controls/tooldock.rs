@@ -298,6 +298,13 @@ impl ToolDock {
         changed
     }
 
+    /// 아이콘 그림 배율 — 모든 그룹에([`Toolbar::set_icon_scale`] · 136차).
+    pub fn set_icon_scale(&mut self, scale: f32) {
+        for b in &mut self.bars {
+            b.set_icon_scale(scale);
+        }
+    }
+
     /// 아이콘 크기(논리 px) — 모든 그룹에.
     pub fn set_icon_size(&mut self, px: i32) {
         self.icon_px = px;
