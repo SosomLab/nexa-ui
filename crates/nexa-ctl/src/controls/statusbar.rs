@@ -273,7 +273,7 @@ impl Widget for StatusBar {
             ctx.text_width(&self.left) + 2 * pad
         };
         let mut left_x = b.x + pad;
-        let mut left_clip = clip;
+        let left_clip;
         if self.leading {
             let mut x = b.x;
             for (i, w) in widths.iter().enumerate() {
