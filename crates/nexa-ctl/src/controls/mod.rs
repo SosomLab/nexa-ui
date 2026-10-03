@@ -667,10 +667,16 @@ pub fn draw_check_mark(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
 
 /// 아래 셰브론(∨) — 드롭다운/트리 접힘 표식. 좌우로 조금 짧은 형태(사용자 확정 · w/5).
 pub fn draw_chevron_down(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
+    draw_chevron_down_scaled(ctx, area, color, 1.0);
+}
+
+/// [`draw_chevron_down`] + 화면 배율 — 작은 칸(툴바 ▾ 8px)은 모양이 **하한**(반폭 2 · 굵기 1.5)으로 정해지는데, 하한이 물리 px이면
+/// 2배 화면에서 배율만큼 커지지 않아 납작하고 가늘게 보인다(맥 Retina `ˇ` 꼴 · nexa-sql 10-04). 하한을 논리 px로 보고 배율을 곱한다.
+pub fn draw_chevron_down_scaled(ctx: &mut dyn DrawCtx, area: Rect, color: Color, scale: f32) {
     let cx = area.x + area.w / 2;
     let cy = area.y + area.h / 2;
-    let half = (area.w / 5).max(2);
-    let w = (area.w as f32 / 10.0).max(1.5);
+    let half = (area.w / 5).max((2.0 * scale).round() as i32);
+    let w = (area.w as f32 / 10.0).max(1.5 * scale);
     ctx.polyline(
         &[
             (cx - half, cy - half / 2),

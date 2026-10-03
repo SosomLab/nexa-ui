@@ -937,7 +937,7 @@ impl Toolbar {
                     a,
                     a,
                 );
-                super::draw_chevron_down(ctx, area, c);
+                super::draw_chevron_down_scaled(ctx, area, c, self.base.scale);
             }
             match &it.icon {
                 ToolIcon::Glyph(g) => {

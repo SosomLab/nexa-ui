@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 138 · (미커밋 · 10-04) | nexa-ctl | `draw_chevron_down_scaled(ctx, area, color, scale)` 추가 — 하한(반폭 2 · 굵기 1.5)에 배율을 곱한다 · 기존 `draw_chevron_down` = scale 1.0 위임(콤보 · posdrop 불변) · `Toolbar`의 ▾가 `self.base.scale`로 호출 → 맥 Retina에서 납작·가늘던(`ˇ` 꼴) 툴바 ▾가 Windows 모양으로 · 1배 화면은 종전과 같음 · nexa-ctl 시험 405 | **수정(동작 변경 · 배율 > 1에서 툴바 ▾ 모양)** | **영향 있음**(툴바 ▾ = 사용자 요청 대상) · 시험 744 ✓ · clippy ✓ · fmt ✓(10-04 맥 · 협업 세션) · 실기 = 사용자 확인 중(Debug PID 84019) | 툴바 ▾(드롭다운 칸이 있으면) 배율 > 1에서 모양 바뀜 · **미검증** | nexa-sql 맥 Retina: 툴바 드롭다운 ▾가 굵고 펼친 V자인지 · 1배 화면은 전과 같은지 · 후보 = `posdrop.rs:233`(같은 8 px 칸 · 미수정) |
 | 137 · 47cdb77 | nexa-ctl | `StatusPart { text, color, hints }` · `StatusSeg::with_parts` · `StatusSeg.parts` — 조각 폭 = max(글, 견본) · 견본 조각 오른쪽 정렬 · 시험 +1 | 추가(구조체 필드 · 조각 없으면 종전) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 C/M/D/N · ↑ 빨강 ↓ 파랑 · 기본 너비 확보 — dir3 게이트(10-04 §11) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 136 · 9625a1a | nexa-ctl | `Toolbar/ToolDock::set_icon_scale` · `Toolbar::icon_draw_px` · `SoftStates.hover_icon_accent` · `hover_fill_toggle_only` · `ToolItem.toggle`(+ `.toggle(bool)`) · 시험 +1 | 추가(구조체 필드 · 기본 불변) | 영향 없음(미사용) · `cargo check` 통과(10-04 · 시험 미실행) · SoftStates/ToolItem을 리터럴로 만들게 되면 `..Default::default()` | 툴바 그림 90 % · hover 아이콘 강조색 · 토글만 회색 배경 — dir3 게이트(10-04 §8) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 135 · a729fc6 | nexa-ctl | Toolbar `SoftStates.on_line_color`(Option · None = 채움 색과 같음 = 종전) | 추가(구조체 필드 추가 · 기본 불변) | 영향 없음(SoftStates 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 툴바 토글 켜짐 = 강조색 옅은 채움 + 초록 테두리/아이콘 선 — dir3 게이트(10-04 §5) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
@@ -41,6 +42,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-04 | nexa-sql(맥 · 협업 세션) | 138 | `cargo test --workspace`(nexa-sql 744 · nexa-ui 571) · clippy `-D warnings` · fmt · Debug/Release 빌드 | 통과 · 화면 = 사용자 확인 중 |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 137 | `cargo check`(47cdb77) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 136 | `cargo check`(9625a1a) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 135 | `cargo check`(a729fc6) | 통과 · 시험은 미실행(SoftStates 미사용) |

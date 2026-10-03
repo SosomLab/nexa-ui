@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| work/2026-10-04-chevron-scale | 2026-10-04 | 2026-10-04 → main(삭제) | 1 | 138차: `draw_chevron_down_scaled`(▾ 하한 × 배율 · 툴바가 사용 · 맥 Retina 납작한 ▾ · 1배 불변 · 후보 posdrop) — nexa-sql 111 |
 | fix/speed-hud-dpi-scale | 2026-10-02 | 2026-10-02 → main(삭제) | 1 | 102차: `SpeedHud` 크기 = 배율 비례(물리 px 높이 → 논리 px 증분 = 배율로 나눔 · 2배율 글꼴 50 % → 75 %) · 시험 `speed_hud_size_scales_with_dpi` — nexa-sql 109차 mac |
 | feat/select-all-keep-click-guard | 2026-09-30 | 2026-09-30 → main(삭제) | 1 | 100차: `TextBox::set_select_all_keep_view` · `Button`/`Toolbar` 빠른 두 번 누름 차단(`set_default_click_guard_ms` · `set_rapid`) — nexa-sql 108차 |
 | feat/ctxmenu-select | 2026-09-29 | 2026-09-29 → main(삭제) | 1 | 97차: `ContextMenu::select(i)` = 프로그램 선택(hover · 보이게 스크롤 · 활성만) — nexa-sql 완성 팝업 건너편 컬럼(09-29) |
