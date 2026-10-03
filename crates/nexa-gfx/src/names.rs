@@ -93,3 +93,27 @@ pub(crate) fn family_names(data: &[u8], index: u32) -> Vec<String> {
     }
     out
 }
+
+/// 글꼴 파일 안의 face 수(컬렉션 `ttcf` = 그 수 · 단일 글꼴 = 1).
+fn face_count(data: &[u8]) -> u32 {
+    if data.get(0..4) == Some(b"ttcf".as_slice()) {
+        u32be(data, 8).unwrap_or(0)
+    } else {
+        1
+    }
+}
+
+/// 컬렉션(TTC) 안에서 **패밀리 이름이 `family`인 face의 인덱스**(125차 · 대소문자 무시 · 없으면 `None`). 한 파일에 여러 패밀리가
+/// 든 글꼴(`NotoSansCJK-Regular.ttc` = Noto Sans CJK KR/JP/… + Noto Sans Mono CJK KR/…)에서 원하는 얼굴을 고를 때 쓴다.
+#[must_use]
+pub fn collection_face_index(data: &[u8], family: &str) -> Option<u32> {
+    let want = family.trim();
+    if want.is_empty() {
+        return None;
+    }
+    (0..face_count(data).min(256)).find(|&i| {
+        family_names(data, i)
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(want))
+    })
+}

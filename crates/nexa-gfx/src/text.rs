@@ -289,6 +289,8 @@ pub struct Font {
     gdi_adv: Arc<Mutex<GdiAdvCache>>,
     /// (face, size 비트) → GDI face(패밀리, em px) 또는 없음.
     gdi_ok: Arc<Mutex<GdiFaceCache>>,
+    /// 폴백 face를 주 글꼴과 **같은 em 크기**로 그릴까([`Font::set_fallback_em_match`] · 기본 꺼짐 = 같은 전체 높이).
+    em_match: bool,
 }
 
 impl Clone for Font {
@@ -301,6 +303,7 @@ impl Clone for Font {
             families: Arc::clone(&self.families),
             gdi_adv: Arc::clone(&self.gdi_adv),
             gdi_ok: Arc::clone(&self.gdi_ok),
+            em_match: self.em_match,
         }
     }
 }
@@ -347,6 +350,7 @@ impl Font {
                 families: Arc::new(Mutex::new(vec![None])),
                 gdi_adv: Arc::new(Mutex::new(HashMap::new())),
                 gdi_ok: Arc::new(Mutex::new(HashMap::new())),
+                em_match: false,
             })
             .map_err(|_| FontError)
     }
@@ -365,6 +369,44 @@ impl Font {
         }
         self.clear_glyph_cache();
         Ok(())
+    }
+
+    /// 폴백 face의 크기 기준(125차 · nexa-dir3 Linux 실기 10-03 "터미널 한글이 작고 벌어진다"). 기본(꺼짐) = 종전: 모든 face를
+    /// **같은 전체 높이**(어센트−디센트)로 그린다 — 높이/em 비가 큰 글꼴(한글·CJK ≈ 1.45)은 주 글꼴(고정폭 ≈ 1.2)보다 글자가
+    /// 작아진다. 켜면 폴백 face를 주 글꼴과 **같은 em**으로 그린다(터미널·텍스트 엔진의 관례 — 전각 글자가 정확히 두 칸을 채운다).
+    /// 기준선·줄 높이는 그대로 주 글꼴이 정한다(OS 래스터라이저 경로에도 같은 크기를 넘긴다).
+    pub fn set_fallback_em_match(&mut self, on: bool) {
+        if self.em_match != on {
+            self.em_match = on;
+            if let Ok(mut c) = self.hint_size.lock() {
+                c.clear();
+            }
+            self.clear_glyph_cache();
+        }
+    }
+
+    /// 지금 폴백 face를 같은 em으로 그리는가.
+    #[must_use]
+    pub fn fallback_em_match(&self) -> bool {
+        self.em_match
+    }
+
+    /// face `face_i`를 그릴 크기(px): 주 글꼴이거나 em 맞춤이 꺼져 있으면 `size` 그대로 · 켜져 있으면
+    /// `size × (그 face의 높이/em) ÷ (주 글꼴의 높이/em)`.
+    fn face_size(&self, face_i: usize, size: f32) -> f32 {
+        if !self.em_match || face_i == 0 {
+            return size;
+        }
+        let ratio = |f: &FontRef<'static>| {
+            f.units_per_em()
+                .filter(|u| *u > 0.0)
+                .map(|u| f.height_unscaled() / u)
+                .filter(|r| *r > 0.0)
+        };
+        match (ratio(&self.faces[0]), ratio(&self.faces[face_i])) {
+            (Some(main), Some(this)) => fallback_size_with(size, main, this),
+            _ => size,
+        }
     }
 
     /// face `i`의 패밀리 이름(OS 래스터라이저가 같은 글꼴을 열 수 있게 · `set_text_gdi`). 범위 밖이면 무시.
@@ -408,6 +450,8 @@ impl Font {
         let face = &self.faces[face_i];
         let upm = face.units_per_em()?;
         let h = face.height_unscaled();
+        // 폴백 em 맞춤(125차)이 켜져 있으면 이 face의 크기는 주 글꼴과 같은 em이 되는 값.
+        let size = self.face_size(face_i, size);
         let em = if h > 0.0 { size * upm / h } else { size };
         let em_px = em.round().max(1.0) as i32;
         #[cfg(windows)]
@@ -470,7 +514,8 @@ impl Font {
             let _ = (names, bold);
         }
         let face = &self.faces[face_i];
-        face.as_scaled(size).h_advance(face.glyph_id(ch))
+        face.as_scaled(self.face_size(face_i, size))
+            .h_advance(face.glyph_id(ch))
     }
 
     /// 글자가 있는 첫 보 — 없으면 주 폰트(.notdef 표시가 정직하다).
@@ -626,10 +671,11 @@ impl Font {
             return Some(bm);
         }
         // 힌트: x-높이가 정수 px가 되는 크기로 래스터(자간·전진 폭은 원래 크기 그대로 — 배치 불변).
+        let fsize = self.face_size(face_i, size);
         let rsize = if hint {
-            self.hint_size_for(face_i, size)
+            self.hint_size_for(face_i, fsize)
         } else {
-            size
+            fsize
         };
         let scaled = face.as_scaled(rsize);
         let glyph =
@@ -989,6 +1035,17 @@ impl Font {
     }
 }
 
+/// 폴백 face 크기의 순수 계산(시험용): 주 글꼴 크기 `size`(전체 높이 px)와 같은 em이 되는 폴백 크기 —
+/// `size ÷ 주 글꼴(높이/em) × 폴백(높이/em)`.
+#[must_use]
+pub fn fallback_size_with(size: f32, main_ratio: f32, face_ratio: f32) -> f32 {
+    if main_ratio > 0.0 && face_ratio > 0.0 {
+        size * face_ratio / main_ratio
+    } else {
+        size
+    }
+}
+
 /// `em_to_px`의 순수 계산(시험용): `em × 높이/upm` · 높이 0 = 그대로.
 #[must_use]
 pub fn em_to_px_with(em: f32, height_unscaled: f32, upm: f32) -> f32 {
@@ -1004,6 +1061,18 @@ mod hint_tests {
     use super::*;
 
     /// em → px: 맑은 고딕(upm 2048 · 높이 2732) 12 em = 16 px · 메트릭 없음 = 그대로.
+    /// 폴백 em 맞춤: 주 글꼴 1.2 · 한글 1.448 → 같은 em이 되도록 1.207배 · 비가 같으면 그대로 · 0 = 그대로.
+    #[test]
+    fn fallback_size_matches_main_em() {
+        let s = fallback_size_with(17.6, 1.2, 1.448);
+        assert!((s - 21.237).abs() < 0.01, "{s}");
+        // 그 크기에서 폴백의 em = 주 글꼴의 em(17.6 / 1.2 = 14.67).
+        assert!((s / 1.448 - 17.6 / 1.2).abs() < 0.001);
+        assert_eq!(fallback_size_with(16.0, 1.3, 1.3), 16.0);
+        assert_eq!(fallback_size_with(16.0, 0.0, 1.3), 16.0);
+        assert_eq!(fallback_size_with(16.0, 1.3, 0.0), 16.0);
+    }
+
     #[test]
     fn em_to_px_ratio() {
         assert!((em_to_px_with(12.0, 2732.0, 2048.0) - 16.007_8).abs() < 0.01);

@@ -16,5 +16,6 @@ pub mod surface;
 pub mod svg;
 pub mod text;
 
+pub use names::collection_face_index;
 pub use surface::{Color, IconImage, Surface};
 pub use text::{Font, FontError, TextStyle};

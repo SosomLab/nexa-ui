@@ -341,6 +341,15 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
     map_font(path).map(|bytes| (bytes, 0))
 }
 
+/// 컬렉션 파일(TTC) 안의 얼굴 찾기(125차): `file_family`(파일명 어간 접두 · [`find_font_by_family`] 규칙)로 파일을 찾고 그 안에서
+/// 패밀리 이름이 `face_family`인 얼굴의 인덱스를 고른다. 파일명과 패밀리 이름이 다른 얼굴용 —
+/// 예: `("Noto Sans CJK", "Noto Sans Mono CJK KR")` = `NotoSansCJK-Regular.ttc` 안의 고정폭 한글 얼굴.
+#[must_use]
+pub fn find_collection_face(file_family: &str, face_family: &str) -> Option<(&'static [u8], u32)> {
+    let (data, _) = find_font_by_family(file_family)?;
+    nexa_gfx::collection_face_index(data, face_family).map(|i| (data, i))
+}
+
 /// 패밀리 이름 뒤에 남은 파일명 꼬리의 순위(작을수록 좋음): 0 = 없음(정확히 그 이름) · 1 = `regular` · 2 = 굵기·기울임 표시가
 /// 없는 꼬리(버전 표기 등) · 3 = 굵기·기울임 얼굴(Bold · Italic · Light …).
 fn family_rank(rest: &str) -> u32 {
@@ -591,6 +600,18 @@ mod tests {
     fn normalization() {
         assert_eq!(norm("D2 Coding"), "d2coding");
         assert_eq!(norm("Liberation-Mono"), "liberationmono");
+    }
+
+    /// 컬렉션 얼굴 찾기: 없는 파일/없는 얼굴 = None · 설치돼 있으면 고정폭 한글 얼굴은 일반 얼굴과 다른 인덱스.
+    #[test]
+    fn collection_face_lookup() {
+        assert!(find_collection_face("이런폰트는없다12345", "x").is_none());
+        if let Some((data, i)) = find_collection_face("Noto Sans CJK", "Noto Sans Mono CJK KR") {
+            assert!(find_collection_face("Noto Sans CJK", "이런얼굴은없다").is_none());
+            let plain = nexa_gfx::collection_face_index(data, "Noto Sans CJK KR");
+            assert!(plain.is_some() && plain != Some(i), "{plain:?} vs {i}");
+            assert!(nexa_gfx::Font::from_static(data, i).is_ok());
+        }
     }
 
     #[test]
