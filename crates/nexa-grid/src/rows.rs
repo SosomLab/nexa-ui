@@ -315,6 +315,8 @@ pub struct VirtualRows<S> {
     mode: ViewMode,
     /// 폰트 장식(X-12): (폴더 이름 굵게, 헤더 굵게, 헤더 이탤릭).
     font_decor: (bool, bool, bool),
+    /// 컬럼을 끄는 동안 놓일 자리 표식(131차 · [`Self::set_col_drag_marker`]) — 기본 꺼짐(고스트만).
+    col_drag_marker: bool,
     /// 정렬 표시를 헤더 칸 **오른쪽 끝**에(130차 · [`Self::set_sort_mark_trailing`]) — 기본 꺼짐(▲ 이름 ①).
     sort_mark_trailing: bool,
     /// 오버레이 스크롤바(09-04 X-47) — **축별 독립**(사용자 확정: 세로 스크롤 = 세로만,
@@ -384,12 +386,40 @@ impl<S: RowSource> VirtualRows<S> {
             focused: true,
             mode: ViewMode::default(),
             font_decor: (false, false, false),
+            col_drag_marker: false,
             sort_mark_trailing: false,
             bar_alpha: [0, 0],
             bar_hold: [0, 0],
             bar_hover: None,
             bar_drag: None,
         }
+    }
+
+    /// 컬럼 드래그 표식(131차 · nexa-dir3 사용자 10-03 "컬럼 이동 시 탭 이동처럼 옮겨갈 위치에 표식"): 켜면 끄는 동안
+    /// 컬럼이 **놓일 자리**(라이브 미리 보기 위치의 열 전체 — 머리 + 본문)를 강조색으로 옅게 덮고 좌우에 1 px 강조선을
+    /// 긋는다(탭 바의 드래그 표식과 같은 모양). 끄면(기본) 종전처럼 고스트 머리만.
+    pub fn set_col_drag_marker(&mut self, on: bool) {
+        self.col_drag_marker = on;
+    }
+
+    /// 지금 컬럼을 끌고 있는가(임계를 넘은 드래그) — 호스트의 Esc 취소 판정용.
+    #[must_use]
+    pub fn col_dragging(&self) -> bool {
+        self.col_drag.as_ref().is_some_and(|d| d.active)
+    }
+
+    /// 끄는 컬럼이 지금 놓여 있는 자리(표식 rect · 머리 + 본문 · 표식이 꺼져 있거나 끄는 중이 아니면 `None`).
+    #[must_use]
+    pub fn col_drag_slot(&self) -> Option<Rect> {
+        let d = self
+            .col_drag
+            .as_ref()
+            .filter(|d| d.active && self.col_drag_marker)?;
+        let col = self.columns.get(d.col)?;
+        let b = self.bounds;
+        let x0 = self.col_x(d.col).max(b.x);
+        let x1 = (self.col_x(d.col) + col.width).min(b.right());
+        (x1 > x0).then(|| Rect::new(x0, b.y, x1 - x0, b.h))
     }
 
     /// 정렬 표시 자리(130차 · nexa-dir3 사용자 10-03 "정렬 인디케이터는 가장 우측 · 다중 정렬 순번은 인디케이터 우측" —
@@ -2437,6 +2467,12 @@ impl<S: RowSource> VirtualRows<S> {
                     crate::theme::header_bg(theme),
                 );
             }
+            // 놓일 자리 표식(131차 · 켜져 있을 때): 그 열 전체에 강조색 옅게 + 좌우 1 px 강조선 — 고스트보다 먼저(아래) 그린다.
+            if let Some(slot) = self.col_drag_slot() {
+                ctx.fill_round_rect_alpha(slot, 0, theme.accent, 31);
+                ctx.fill_rect(Rect::new(slot.x, slot.y, 1, slot.h), theme.accent);
+                ctx.fill_rect(Rect::new(slot.right() - 1, slot.y, 1, slot.h), theme.accent);
+            }
             // 드래그 고스트 헤더(07-19 사용자): 커서 x 추종·세로 = 헤더 행
             // 고정 — 헤더 셀 모양(배경+테두리+라벨) 복제. 본체는 이미
             // 미리보기 위치에 렌더된다.
@@ -3064,6 +3100,76 @@ mod tests {
         assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");
         assert_eq!(v.header_label(&v.columns()[1]), "▲ 크기 ②");
         assert_eq!(v.header_label(&v.columns()[2]), "수정한 날짜");
+    }
+
+    /// 컬럼 드래그(131차): 임계를 넘으면 라이브로 순서가 바뀌고 · 표식 = 그 열이 놓인 자리(머리 + 본문) · 놓으면
+    /// take_col_reordered · Esc(cancel_col_drag) = 원래 순서 · 표식은 기본 꺼짐.
+    #[test]
+    fn col_drag_marker_follows_live_slot_and_cancel_restores() {
+        let (mut v, mut inv) = list_with_cols(10, 220);
+        let keys =
+            |v: &VirtualRows<Rows>| -> Vec<u32> { v.columns().iter().map(|c| c.key).collect() };
+        let orig = keys(&v);
+        let w: Vec<i32> = v.columns().iter().map(|c| c.width).collect();
+        let down = |v: &mut VirtualRows<Rows>, inv: &mut Invalidations, x: i32| {
+            v.on_event(
+                &InputEvent::MouseDown {
+                    x,
+                    y: 5,
+                    shift: false,
+                    primary: false,
+                },
+                inv,
+            );
+        };
+        // 첫 열 머리 가운데를 잡아 둘째 열 너머로.
+        down(&mut v, &mut inv, w[0] / 2);
+        assert!(!v.col_dragging(), "누르기만 = 후보");
+        v.on_event(
+            &InputEvent::MouseMove {
+                x: w[0] + w[1] + 10,
+                y: 5,
+            },
+            &mut inv,
+        );
+        assert!(v.col_dragging());
+        assert_eq!(v.col_drag_slot(), None, "표식 기본 꺼짐");
+        v.set_col_drag_marker(true);
+        let slot = v.col_drag_slot().expect("slot");
+        let now = keys(&v);
+        assert_ne!(now, orig, "라이브 미리 보기로 순서가 바뀐다");
+        let at = now.iter().position(|k| *k == orig[0]).unwrap();
+        assert_eq!((slot.x, slot.w), (v.col_x(at), v.columns()[at].width));
+        assert_eq!(
+            (slot.y, slot.h),
+            (v.bounds().y, v.bounds().h),
+            "머리 + 본문"
+        );
+        let mut rec = nexa_ctl::RecordCtx::with_surface(800, 300);
+        v.paint(&mut rec, &Theme::dark());
+        assert!(rec.round_rects.iter().any(|r| r.0 == slot), "표식 채움");
+        // Esc = 원래 순서 · 통지 없음.
+        assert!(v.cancel_col_drag(&mut inv));
+        assert_eq!(keys(&v), orig);
+        assert!(!v.col_dragging() && !v.take_col_reordered());
+        // 다시 끌어 놓으면 통지.
+        down(&mut v, &mut inv, w[0] / 2);
+        v.on_event(
+            &InputEvent::MouseMove {
+                x: w[0] + w[1] + 10,
+                y: 5,
+            },
+            &mut inv,
+        );
+        v.on_event(
+            &InputEvent::MouseUp {
+                x: w[0] + w[1] + 10,
+                y: 5,
+            },
+            &mut inv,
+        );
+        assert!(v.take_col_reordered() && !v.col_dragging());
+        assert_ne!(keys(&v), orig);
     }
 
     /// 끝 정렬 정렬 표시(130차): 제목만 왼쪽 · ▲/▼는 오른쪽 끝 · 다중 정렬일 때만 순번 · Shift 순환(오름 → 내림 → 없음).
