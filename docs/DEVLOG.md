@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (126차 · linux · nexa-dir3 T-115)** — nexa-ctl `SplitBand` · `Splitter::set_band/band/hover_progress/is_animating/pointer_gone`(기본 불변) · 시험 +1 — journal 10-03 §23.
 - **2026-10-03 (125차 · linux · nexa-dir3 Linux 실기)** — nexa-gfx `Font::set_fallback_em_match`(기본 꺼짐) · `fallback_size_with` · `collection_face_index` · nexa-font `find_collection_face` · 시험 +2 — journal 10-03 §22.
 - **2026-10-03 (124차 · linux · nexa-dir3 Linux 실기)** — nexa-fs `icontheme`(freedesktop 아이콘 테마 · PNG · `icon_file` · `theme_name` · Linux 밖 = None) · 시험 +5 — journal 10-03 §21.
 - **2026-10-03 (123차 · linux · nexa-dir3 Linux 실기)** — nexa-grid `set_marker_vector`(기본 꺼짐) · `marker_chevron_points`(칸 16 = 4×8/8×4) · 시험 +1 — journal 10-03 §20.

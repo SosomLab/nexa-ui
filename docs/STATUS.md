@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-03 (126차 · linux · nexa-dir3 T-115)** — Splitter 띠 모양 · 서서히 진해지는 hover · `is_animating` · `pointer_gone`(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (125차 · linux · nexa-dir3 Linux 실기)** — 폴백 글꼴 em 맞춤(`set_fallback_em_match` · 기본 꺼짐) · TTC 안 얼굴 찾기(추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (124차 · linux · nexa-dir3 Linux 실기)** — nexa-fs `icontheme` freedesktop 아이콘 테마 조회(새 모듈 · 추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (123차 · linux · nexa-dir3 Linux 실기)** — nexa-grid 선 쉐브론 스위치(`set_marker_vector` · 기본 꺼짐 · 추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
