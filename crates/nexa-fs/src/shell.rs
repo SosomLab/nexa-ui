@@ -30,6 +30,20 @@ pub fn os_icons_enabled() -> bool {
     OS_ICONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// 경로 아이콘에 **링크 화살표 오버레이**를 얹을지(기본 꺼짐 = 종전과 같음 · nexa-dir3 GAP-008 — 탐색기처럼 `.lnk` · 심볼릭 링크 ·
+/// 정션에 화살표). Windows `SHGFI_LINKOVERLAY` — 셸이 링크라고 판단한 항목에만 얹는다(일반 파일·폴더는 그대로). 다른 OS는 영향 없음.
+/// 아이콘 캐시([`IconService`])는 결과를 보관하므로 **첫 조회 전에**(앱 시작 때) 정한다.
+static LINK_OVERLAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_link_overlay(on: bool) {
+    LINK_OVERLAY.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn link_overlay_enabled() -> bool {
+    LINK_OVERLAY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 확장자(점 없음 · 소문자) 또는 폴더의 **종류별** 아이콘(디스크 접근 없음).
 #[must_use]
 pub fn icon_for_kind(ext: &str, is_dir: bool, large: bool) -> Option<RgbaIcon> {
@@ -448,6 +462,7 @@ mod imp {
     const SHGFI_TYPENAME: u32 = 0x400;
     const SHGFI_SMALLICON: u32 = 0x1;
     const SHGFI_USEFILEATTRIBUTES: u32 = 0x10;
+    const SHGFI_LINKOVERLAY: u32 = 0x8000;
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
     const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
 
@@ -704,7 +719,13 @@ mod imp {
     }
 
     pub(super) fn icon_for_path(path: &Path, large: bool) -> Option<RgbaIcon> {
-        let flags = SHGFI_ICON | if large { 0 } else { SHGFI_SMALLICON };
+        let flags = SHGFI_ICON
+            | if large { 0 } else { SHGFI_SMALLICON }
+            | if super::link_overlay_enabled() {
+                SHGFI_LINKOVERLAY
+            } else {
+                0
+            };
         let w = wide(path.as_os_str());
         query(&w, 0, flags).and_then(take_icon)
     }

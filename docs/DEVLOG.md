@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (121차 · win · nexa-dir3 GAP-008)** — nexa-fs `set_link_overlay`/`link_overlay_enabled`(전역 · 기본 꺼짐) · 켜면 Windows `icon_for_path`에 `SHGFI_LINKOVERLAY` — journal 10-03 §18.
 - **2026-10-03 (120차 · win · nexa-dir3 메뉴 캡처)** — nexa-ctl `ContextMenu::size_px`에 `scrollable()`이면 세로 스크롤 표시 자리 `s(6)` 포함(paint와 일치 · 가짜 가로 스크롤 막대 제거) · 시험 +1 `vertical_scroll_mark_is_part_of_the_width` — journal 10-03 §17.
 - **2026-10-03 (119차 · win · nexa-dir3 캡처 판정)** — nexa-font `find_font_by_family` + `family_rank`(정확 < regular < 표시 없음 < 굵기/기울임 · 짧은 꼬리 · ⚠ 동작 변경) · nexa-ctl `DrawCtx::select_font_sized_styled` · `SoftStates.on_icon_accent` + 기본 농도 26/12/20 % · `Toolbar::set_side_margin` · 시험 +1 — journal 10-03 §16.
 - **2026-10-03 (118차 · win · nexa-dir3 네비/툴바 디자인)** — nexa-gfx `Font::ink_v` · nexa-ctl `DrawCtx::glyph_center_y`(RasterCtx = 잉크 정중앙) · `Toolbar::set_icon_glyphs(delta)`/`set_hover_background`/`set_soft_states(SoftStates)` · `ToolDock::set_soft_states` · nexa-grid `set_glyph_delta` + 잉크 가운데 · 전부 옵션(기본 불변) · nexa-sql cargo check 확인 — journal 10-03 §15.
