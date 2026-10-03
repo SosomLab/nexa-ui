@@ -70,6 +70,7 @@ pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};
 pub mod merge3;
+pub mod order;
 pub use merge3::{line_edits, merge3, Merge3};
 pub use theme::{
     color_contrast, color_from_hex, color_to_hex, contrast_order, is_warm, Color, FontPrefs,
