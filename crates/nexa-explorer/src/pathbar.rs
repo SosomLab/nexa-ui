@@ -38,6 +38,12 @@ pub fn path_separator(path: &str) -> &'static str {
 pub fn split_path(path: &str) -> Vec<Segment> {
     let mut out = Vec::new();
     if path.starts_with('/') {
+        // 루트 `/`가 첫 세그먼트(Windows의 `C:`에 해당 — 128차 · nexa-dir3 사용자 10-03 "/ 위치에서 Breadcrumb에 아무것도 없음 ·
+        // / 폴더가 끝 폴더이자 시작 폴더로 보여야"). 루트 뒤에는 구분자를 그리지 않는다(루트 글자가 곧 구분자).
+        out.push(Segment {
+            label: "/".to_string(),
+            full: "/".to_string(),
+        });
         let mut acc = String::new();
         for part in path.split('/').filter(|p| !p.is_empty()) {
             acc.push('/');
@@ -540,13 +546,26 @@ impl PathBar {
             .collect();
         let avail = b.w - SEG_PAD * 2;
         let mut start = 0usize;
-        let total: i32 = widths.iter().sum::<i32>() + sep_w * last as i32;
+        // 세그먼트 뒤 구분자 폭(마지막 · Unix 루트 `/` 뒤 = 0 — `/ home`이지 `/ / home`이 아니다).
+        let seps: Vec<i32> = self
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                if i == last || s.label == "/" {
+                    0
+                } else {
+                    sep_w
+                }
+            })
+            .collect();
+        let total: i32 = widths.iter().sum::<i32>() + seps.iter().sum::<i32>();
         if total > avail {
             let ell_w = ctx.text_width("…");
             let mut acc = ell_w + sep_w;
             start = self.segments.len(); // 최소한 마지막 세그먼트는 그린다(아래 min)
             for i in (0..self.segments.len()).rev() {
-                acc += widths[i] + if i == last { 0 } else { sep_w };
+                acc += widths[i] + seps[i];
                 if acc > avail {
                     break;
                 }
@@ -594,7 +613,7 @@ impl PathBar {
             ctx.text_opaque(cell.x + SEG_PAD, ty, cell, &seg.label, fg, bg);
             ranges.push((cell.x, cell.x + w));
             x += w;
-            if i != last {
+            if seps[i] > 0 {
                 let sep_cell = Rect::new(x, b.y, sep_w.min((b.right() - x).max(0)), b.h);
                 if sep_cell.w > 0 {
                     ctx.text_opaque(
@@ -639,15 +658,20 @@ mod tests {
     #[test]
     fn split_unix_paths_keep_leading_slash() {
         let segs = split_path("/home/kiros33/Projects");
-        assert_eq!(segs.len(), 3);
+        assert_eq!(segs.len(), 4);
+        // 루트가 첫 세그먼트(128차) — 클릭 = `/`로.
+        assert_eq!((segs[0].label.as_str(), segs[0].full.as_str()), ("/", "/"));
         assert_eq!(
-            (segs[0].label.as_str(), segs[0].full.as_str()),
+            (segs[1].label.as_str(), segs[1].full.as_str()),
             ("home", "/home")
         );
-        assert_eq!(segs[2].full, "/home/kiros33/Projects");
-        assert_eq!(split_path("/a//b/")[1].full, "/a/b");
-        assert_eq!(split_path("/tmp/we\\ird")[1].label, "we\\ird");
-        assert!(split_path("/").is_empty());
+        assert_eq!(segs[3].full, "/home/kiros33/Projects");
+        assert_eq!(split_path("/a//b/")[2].full, "/a/b");
+        assert_eq!(split_path("/tmp/we\\ird")[2].label, "we\\ird");
+        // 루트 자신 = 세그먼트 하나(시작이자 끝).
+        let root = split_path("/");
+        assert_eq!(root.len(), 1);
+        assert_eq!((root[0].label.as_str(), root[0].full.as_str()), ("/", "/"));
         assert_eq!(path_separator("/home"), "/");
         assert_eq!(path_separator("C:\\Users"), "\\");
     }

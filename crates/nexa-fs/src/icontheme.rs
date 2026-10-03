@@ -338,6 +338,72 @@ pub fn folder_icon_names(
     v
 }
 
+/// `.desktop` 본문 → `(Exec의 실행 파일, Icon)`(순수 · `[Desktop Entry]` 절만 · 128차). Exec는 첫 낱말(따옴표 제거 ·
+/// `env VAR=…` 접두는 건너뜀) — 필드 코드(`%F` 등)와 인자는 버린다. 둘 중 하나라도 없으면 `None`.
+#[must_use]
+pub fn parse_desktop_entry(text: &str) -> Option<(String, String)> {
+    let (mut exec, mut icon) = (None, None);
+    let mut in_entry = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        if !in_entry {
+            continue;
+        }
+        if let Some(v) = line.strip_prefix("Exec=") {
+            let mut words = v.split_whitespace().peekable();
+            if words.peek().is_some_and(|w| w.trim_matches('"') == "env") {
+                words.next();
+                while words.peek().is_some_and(|w| w.contains('=')) {
+                    words.next();
+                }
+            }
+            exec = exec.or_else(|| {
+                words
+                    .next()
+                    .map(|w| w.trim_matches('"').to_string())
+                    .filter(|w| !w.is_empty())
+            });
+        } else if let Some(v) = line.strip_prefix("Icon=") {
+            icon = icon.or_else(|| Some(v.trim().to_string()).filter(|v| !v.is_empty()));
+        }
+    }
+    Some((exec?, icon?))
+}
+
+/// 실행 파일에 맞는 `.desktop`의 Icon 값(순수): `entries` = `(Exec 실행 파일, Icon)` 목록 · `candidates` = 실행 파일의 표기들
+/// (준 경로 · 링크를 푼 실제 경로). 전체 경로가 같은 항목이 먼저 · 다음은 파일 이름이 같은 항목.
+#[must_use]
+pub fn desktop_icon_for<'a>(
+    entries: &'a [(String, String)],
+    candidates: &[&Path],
+) -> Option<&'a str> {
+    let full = entries
+        .iter()
+        .find(|(e, _)| candidates.iter().any(|c| Path::new(e) == *c));
+    let by_name = || {
+        entries.iter().find(|(e, _)| {
+            let name = Path::new(e).file_name();
+            name.is_some() && candidates.iter().any(|c| c.file_name() == name)
+        })
+    };
+    full.or_else(by_name).map(|(_, i)| i.as_str())
+}
+
+/// 전역 조회 — 실행 파일(런처 버튼)의 **앱 아이콘 PNG 경로**(128차 · nexa-dir3 사용자 10-03 "빠른 실행에 아이콘이 없으면 기본
+/// 아이콘을 입혀서"): 설치된 `.desktop` 중 그 실행 파일의 것 → `Icon`(절대 경로 PNG · 테마 이름 · `pixmaps/<이름>.png`) →
+/// 실행 파일 이름과 같은 테마 아이콘 → 일반 실행 파일 아이콘(`application-x-executable`). Linux 밖 = `None`.
+#[must_use]
+pub fn app_icon_file(exe: &Path, px: u32) -> Option<PathBuf> {
+    if !crate::shell::os_icons_enabled() {
+        return None;
+    }
+    global::app_icon_file(exe, px)
+}
+
 /// 전역 조회 — 이 파일·폴더의 테마 아이콘 **PNG 경로**(`px` = 그릴 한 변 · 가장 가까운 크기를 고른다).
 ///
 /// Linux가 아니거나, OS 아이콘이 꺼져 있거나([`crate::shell::set_os_icons`]), 테마에 맞는 그림이 없으면 `None`(호출자 자체 그림).
@@ -365,11 +431,17 @@ mod global {
     pub(super) fn theme_name() -> Option<String> {
         None
     }
+    pub(super) fn app_icon_file(_exe: &Path, _px: u32) -> Option<PathBuf> {
+        None
+    }
 }
 
 #[cfg(target_os = "linux")]
 mod global {
-    use super::{folder_icon_names, parse_user_dirs, IconTheme, MimeDb};
+    use super::{
+        desktop_icon_for, folder_icon_names, parse_desktop_entry, parse_user_dirs, IconTheme,
+        MimeDb,
+    };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, OnceLock};
@@ -381,6 +453,12 @@ mod global {
         special: Vec<(PathBuf, &'static str)>,
         /// (소문자 파일 이름의 첫 점 뒤 전부 또는 이름 전체, px) → 결과(MIME로 정해지는 파일만).
         files: HashMap<(String, u32), Option<PathBuf>>,
+        /// 데이터 폴더들(`applications/` · `pixmaps/`의 부모) — 앱 아이콘 조회용.
+        data: Vec<PathBuf>,
+        /// 설치된 `.desktop`의 (Exec 실행 파일, Icon) — 처음 물을 때 한 번 읽는다.
+        desktop: Option<Vec<(String, String)>>,
+        /// (실행 파일, px) → 앱 아이콘 결과.
+        apps: HashMap<(PathBuf, u32), Option<PathBuf>>,
     }
 
     fn env_path(key: &str) -> Option<PathBuf> {
@@ -489,6 +567,9 @@ mod global {
                 home,
                 special,
                 files: HashMap::new(),
+                data,
+                desktop: None,
+                apps: HashMap::new(),
             })
         })
     }
@@ -498,6 +579,85 @@ mod global {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         (!g.theme.is_empty()).then(|| g.theme.name.clone())
+    }
+
+    fn read_desktop_entries(data: &[PathBuf]) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for d in data {
+            let Ok(rd) = std::fs::read_dir(d.join("applications")) else {
+                continue;
+            };
+            let mut files: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "desktop"))
+                .collect();
+            files.sort();
+            for f in files.into_iter().take(2000) {
+                if let Some(pair) = std::fs::read_to_string(&f)
+                    .ok()
+                    .and_then(|t| parse_desktop_entry(&t))
+                {
+                    out.push(pair);
+                }
+            }
+        }
+        out
+    }
+
+    pub(super) fn app_icon_file(exe: &Path, px: u32) -> Option<PathBuf> {
+        let mut g = state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let st = &mut *g;
+        if st.theme.is_empty() {
+            return None;
+        }
+        let key = (exe.to_path_buf(), px);
+        if let Some(hit) = st.apps.get(&key) {
+            return hit.clone();
+        }
+        let entries = st
+            .desktop
+            .get_or_insert_with(|| read_desktop_entries(&st.data));
+        // 링크를 푼 실제 경로도 본다(`x-terminal-emulator` → 실제 터미널 · `/usr/bin/code` → 앱 폴더 안 스크립트).
+        let real = std::fs::canonicalize(exe).ok();
+        let mut cands: Vec<&Path> = vec![exe];
+        if let Some(r) = real.as_deref() {
+            cands.push(r);
+        }
+        let icon = desktop_icon_for(entries, &cands).map(str::to_string);
+        let mut got = None;
+        if let Some(icon) = icon {
+            let p = Path::new(&icon);
+            if p.is_absolute() {
+                got = (p.extension().is_some_and(|e| e == "png") && p.is_file())
+                    .then(|| p.to_path_buf());
+            } else {
+                got = st.theme.find(&icon, px).or_else(|| {
+                    st.data
+                        .iter()
+                        .map(|d| d.join("pixmaps").join(format!("{icon}.png")))
+                        .find(|f| f.is_file())
+                });
+            }
+        }
+        if got.is_none() {
+            let names: Vec<String> = cands
+                .iter()
+                .filter_map(|c| c.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect();
+            got = st
+                .theme
+                .find_first(&names, px)
+                .or_else(|| st.theme.find("application-x-executable", px));
+        }
+        if st.apps.len() > 512 {
+            st.apps.clear();
+        }
+        st.apps.insert(key, got.clone());
+        got
     }
 
     pub(super) fn icon_file(path: &Path, is_dir: bool, px: u32) -> Option<PathBuf> {
@@ -725,6 +885,56 @@ Type=Fixed
         assert_eq!(names("/home/u/src"), ["folder", "inode-directory"]);
     }
 
+    /// `.desktop` 해석: Exec 첫 낱말(따옴표 · env 접두 · 인자 제거) · Icon · 다른 절은 무시 · 짝 고르기(전체 경로 → 이름).
+    #[test]
+    fn desktop_entries_map_executables_to_icons() {
+        let code = "[Desktop Entry]\nName=Code\nExec=/usr/share/code/code %F\nIcon=vscode\n\n\
+                    [Desktop Action new]\nExec=/usr/share/code/code --new-window %F\nIcon=other\n";
+        assert_eq!(
+            parse_desktop_entry(code),
+            Some(("/usr/share/code/code".into(), "vscode".into()))
+        );
+        assert_eq!(
+            parse_desktop_entry(
+                "[Desktop Entry]\nExec=env A=1 B=2 \"ptyxis\" --new\nIcon=org.gnome.Ptyxis\n"
+            ),
+            Some(("ptyxis".into(), "org.gnome.Ptyxis".into()))
+        );
+        assert_eq!(
+            parse_desktop_entry("[Desktop Entry]\nExec=foo\n"),
+            None,
+            "Icon 없음"
+        );
+        assert_eq!(parse_desktop_entry("[Other]\nExec=foo\nIcon=bar\n"), None);
+        let entries = vec![
+            ("ptyxis".to_string(), "org.gnome.Ptyxis".to_string()),
+            ("/usr/share/code/code".to_string(), "vscode".to_string()),
+            ("/opt/x/code".to_string(), "wrong".to_string()),
+        ];
+        let p = |s: &'static str| Path::new(s);
+        // 이름만 같은 경우: `/usr/bin/code`(스크립트)의 실제 경로 `/usr/share/code/bin/code` → 파일 이름 code.
+        assert_eq!(
+            desktop_icon_for(
+                &entries,
+                &[p("/usr/bin/code"), p("/usr/share/code/bin/code")]
+            ),
+            Some("vscode")
+        );
+        // 전체 경로가 같은 항목이 이름만 같은 항목보다 먼저.
+        assert_eq!(
+            desktop_icon_for(&entries, &[p("/opt/x/code")]),
+            Some("wrong")
+        );
+        assert_eq!(
+            desktop_icon_for(
+                &entries,
+                &[p("/usr/bin/x-terminal-emulator"), p("/usr/bin/ptyxis")]
+            ),
+            Some("org.gnome.Ptyxis")
+        );
+        assert_eq!(desktop_icon_for(&entries, &[p("/usr/bin/nope")]), None);
+    }
+
     /// Linux 전역 조회(이 PC의 테마 — 내용은 환경마다 다르다): 답이 있으면 실제 PNG 파일이어야 한다 · 같은 질문 = 같은 답.
     #[cfg(target_os = "linux")]
     #[test]
@@ -741,6 +951,21 @@ Type=Fixed
             ("/bin/sh", false),
         ];
         eprintln!("icon theme = {:?}", theme_name());
+        // 앱 아이콘: 답이 있으면 실제 PNG · 모르는 실행 파일도 일반 실행 아이콘으로 떨어진다(테마가 있으면).
+        for exe in [
+            "/usr/bin/code",
+            "/usr/bin/x-terminal-emulator",
+            "/bin/sh",
+            "/no/such/exe",
+        ] {
+            let got = app_icon_file(Path::new(exe), 16);
+            eprintln!("app {exe} -> {got:?}");
+            if let Some(f) = &got {
+                assert!(f.is_file(), "{f:?}");
+                assert_eq!(f.extension().and_then(|e| e.to_str()), Some("png"));
+            }
+            assert_eq!(app_icon_file(Path::new(exe), 16), got);
+        }
         for (p, is_dir) in probes {
             for px in [16, 32] {
                 let got = icon_file(Path::new(p), is_dir, px);
