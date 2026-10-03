@@ -62,7 +62,7 @@ pub use progress::{allocate_widths, SegItem, SegProgress, SegStatus, SEG_PALETTE
 pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::{fast_scroll, set_fast_scroll, FastScroll, ScrollAccel, ScrollBars, SpeedHud};
-pub use splitter::{SplitAxis, SplitEvent, Splitter};
+pub use splitter::{SplitAxis, SplitBand, SplitEvent, Splitter};
 pub use statusbar::StatusBar;
 pub use switch::Switch;
 pub use tabbar::{TabAction, TabBadge, TabBar};

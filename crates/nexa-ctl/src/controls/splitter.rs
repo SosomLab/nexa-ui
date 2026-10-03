@@ -35,6 +35,21 @@ pub enum SplitEvent {
     End,
 }
 
+/// 띠 모양(126차 · [`Splitter::set_band`]) — 틈 전체를 채우는 띠 + **서서히 진해지는** hover.
+///
+/// 기본 모양(가는 1 px 선 + 3 px 손잡이 · 알파 고정)은 hover 진행이 눈에 보이지 않는다. 띠 모양은 평상시 색으로 `thickness`
+/// 폭을 채우고, hover 진행(0→1)에 따라 accent를 `hover_alpha`까지 겹쳐 올리며, 드래그 중에는 accent 그대로다
+/// (nexa-dir2 규약: 평상시 색 ↔ 드래그 accent · 그 사이를 페이드로 잇는다).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitBand {
+    /// 띠 두께(물리 px · 잡히는 띠의 가운데에 놓인다).
+    pub thickness: i32,
+    /// 평상시 색을 `text_dim`으로(어두운 테마에서 `border`가 안 보이는 자리 — 도크 위 경계) · 아니면 `border`.
+    pub dim_rest: bool,
+    /// hover가 다 올라왔을 때 accent의 알파(0.0~1.0).
+    pub hover_alpha: f32,
+}
+
 /// 스플리터 컨트롤(경계선 하나).
 #[derive(Debug)]
 pub struct Splitter {
@@ -45,6 +60,8 @@ pub struct Splitter {
     drag: Option<(i32, i32)>,
     fade: IntentFade,
     hover: bool,
+    /// 띠 모양(없으면 기본 모양).
+    band: Option<SplitBand>,
 }
 
 impl Splitter {
@@ -56,6 +73,44 @@ impl Splitter {
             drag: None,
             fade: IntentFade::with_speed(FadeSpeed::Slow),
             hover: false,
+            band: None,
+        }
+    }
+
+    /// 띠 모양 지정(126차 · `None` = 기본 모양 · nexa-dir3 사용자 10-03 "스플리터 두께 · 서서히 밝아지는 기능").
+    pub fn set_band(&mut self, band: Option<SplitBand>) {
+        self.band = band;
+    }
+
+    /// 지금 띠 모양.
+    #[must_use]
+    pub fn band(&self) -> Option<SplitBand> {
+        self.band
+    }
+
+    /// 페이드가 진행 중인가(들어오는 중 · 나가는 중) — 호스트가 프레임 간격으로 깨울지 정한다(끝나면 재운다).
+    #[must_use]
+    pub fn is_animating(&self) -> bool {
+        self.fade.is_animating()
+    }
+
+    /// 포인터가 창을 떠났다 — hover를 푼다(드래그 중이면 그대로). 바뀌었으면 `true`.
+    pub fn pointer_gone(&mut self) -> bool {
+        if self.drag.is_some() || !self.hover {
+            return false;
+        }
+        self.hover = false;
+        self.fade.set(None);
+        true
+    }
+
+    /// 지금 hover 진행(0.0~1.0 · 드래그 중 = 1.0) — 띠 모양의 accent 알파 = 이 값 × `hover_alpha`.
+    #[must_use]
+    pub fn hover_progress(&self) -> f32 {
+        if self.drag.is_some() {
+            1.0
+        } else {
+            self.fade.value(0)
         }
     }
 
@@ -138,6 +193,30 @@ impl Splitter {
         if r.is_empty() {
             return;
         }
+        if let Some(b) = self.band {
+            let t = b.thickness.max(1);
+            let band = match self.axis {
+                SplitAxis::Vertical => Rect::new(r.x + (r.w - t) / 2, r.y, t, r.h),
+                SplitAxis::Horizontal => Rect::new(r.x, r.y + (r.h - t) / 2, r.w, t),
+            };
+            ctx.fill_rect(
+                band,
+                if b.dim_rest {
+                    theme.text_dim
+                } else {
+                    theme.border
+                },
+            );
+            if self.drag.is_some() {
+                ctx.fill_rect(band, theme.accent);
+            } else {
+                let a = self.fade.value(0) * b.hover_alpha.clamp(0.0, 1.0);
+                if a > 0.0 {
+                    ctx.fill_rect_alpha(band, theme.accent, a);
+                }
+            }
+            return;
+        }
         let line = match self.axis {
             SplitAxis::Vertical => Rect::new(r.x + r.w / 2, r.y, 1, r.h),
             SplitAxis::Horizontal => Rect::new(r.x, r.y + r.h / 2, r.w, 1),
@@ -189,6 +268,66 @@ mod tests {
             SplitEvent::End
         );
         assert!(!s.is_dragging());
+    }
+
+    /// 띠 모양: hover 진행이 시간에 따라 단조 증가 → 끝나면 애니메이션 멈춤 · 드래그 = 1.0 · 벗어나면 다시 0으로 ·
+    /// 기본(띠 없음)은 종전 그대로.
+    #[test]
+    fn band_fades_in_gradually_and_reports_animation() {
+        let mut s = Splitter::new(SplitAxis::Vertical);
+        assert_eq!(s.band(), None);
+        s.set_band(Some(SplitBand {
+            thickness: 3,
+            dim_rest: false,
+            hover_alpha: 0.6,
+        }));
+        s.set_rect(Rect::new(100, 0, 7, 300));
+        assert_eq!(s.hover_progress(), 0.0);
+        assert!(!s.is_animating());
+        s.on_event(&InputEvent::MouseMove { x: 103, y: 10 });
+        let mut last = 0.0;
+        let mut rose = 0;
+        for t in (0..=3000).step_by(50) {
+            s.tick(t);
+            let v = s.hover_progress();
+            assert!(v >= last, "{t}: {v} < {last}");
+            if v > last {
+                rose += 1;
+            }
+            last = v;
+        }
+        assert!((last - 1.0).abs() < 1e-3, "{last}");
+        assert!(rose >= 5, "서서히(여러 단계): {rose}");
+        assert!(!s.is_animating(), "다 올라오면 멈춘다");
+        // 벗어나면 내려간다(그동안 애니메이션 중) → 0.
+        assert!(s.pointer_gone());
+        assert!(!s.pointer_gone(), "이미 풀림");
+        s.tick(3050);
+        assert!(s.is_animating() || s.hover_progress() < 1.0);
+        for t in (3050..=6000).step_by(50) {
+            s.tick(t);
+        }
+        assert_eq!(s.hover_progress(), 0.0);
+        assert!(!s.is_animating());
+        // 드래그 = 즉시 최대 · 드래그 중에는 pointer_gone이 풀지 않는다.
+        s.on_event(&InputEvent::MouseDown {
+            x: 103,
+            y: 10,
+            shift: false,
+            primary: false,
+        });
+        assert_eq!(s.hover_progress(), 1.0);
+        assert!(!s.pointer_gone());
+        // 그리기: 띠(평상시 색) + 드래그 accent — 띠는 잡히는 띠 가운데 3 px.
+        let mut rec = crate::RecordCtx::with_surface(400, 300);
+        s.paint(&mut rec, &Theme::dark());
+        assert!(
+            rec.fills
+                .iter()
+                .any(|(r, _)| *r == Rect::new(102, 0, 3, 300)),
+            "{:?}",
+            rec.fills
+        );
     }
 
     #[test]
