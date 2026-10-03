@@ -1,7 +1,8 @@
 # STATUS — 지금 상태 한 장
 
-> 시간 역순. 상세는 [journal](journal/), 여기는 요약.
+> 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-03 (119차 · win · nexa-dir3 캡처 판정)** — ⚠ 글꼴 패밀리 매칭 순위 변경(Regular 우선 · 동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · `select_font_sized_styled` · Toolbar 부드러운 상태 기본 농도 · `set_side_margin`.
 - **2026-10-03 (118차 · win · nexa-dir3 네비/툴바 디자인)** — `Font::ink_v` · `DrawCtx::glyph_center_y`(잉크 가운데) · `Toolbar::set_icon_glyphs/set_hover_background/set_soft_states` · nexa-grid `set_glyph_delta`(전부 옵션 · nexa-sql 불변).
 - **2026-10-03 (117차 · win · nexa-dir3 툴바 그룹 도크)** — `Toolbar::set_item_gap` · `ToolDock::set_gaps/set_padding/set_item_checked/all_items`(기본값 = 종전 · nexa-sql 불변 · 시험 +1).
 - **2026-10-03 (116차 · win · nexa-dir3 GAP-003)** — nexa-grid 행 아이콘 리졸버(`IconResolver` · `set_icon_resolver` · `Adapt::draw_icon`이 실제로 그린다).

@@ -1,0 +1,27 @@
+# CONSUMER-CHANGES — 소비자(nexa-sql · nexa-dir3)가 알아야 할 변경과 검증 상태
+
+> **규칙**(사용자 2026-10-03 지시 "ui·license를 고치면 함께 쓰는 프로그램이 변경을 인식하고 검증할 수 있도록 기록을 남긴다"):
+> 1. nexa-ui를 고치는 **모든 커밋은 이 표에 한 줄을 더한다**(최신 위 · 차수 단위).
+> 2. **종류**를 정직하게 적는다 — `추가`(새 API · 기본 동작 불변) / **`동작 변경`**(기존 호출 결과가 달라짐) / `수정`(결함 고침 · 결과가 달라질 수 있음).
+> 3. `동작 변경`·`수정`은 **소비자 시험까지** 돌린다(`cargo test --workspace` · 별도 target-dir). 못 한 검증은 **`미검증`**으로 남긴다 — 빈칸 금지.
+> 4. 소비자 세션은 nexa-ui를 pull한 뒤 **이 파일의 `미검증`·`동작 변경` 행부터** 자기 쪽에서 확인하고, 확인 결과를 이 표의 상태 칸에 적는다(그 저장소의 커밋으로).
+> 검증 상태 어휘: `영향 없음(근거)` · `check` = `cargo check` 통과 · `시험` = 소비자 `cargo test --workspace` 통과 · `실기` = 화면에서 확인 · `미검증`.
+
+| 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 119 · 2ae4791 | nexa-font · nexa-ctl | `find_font_by_family` 패밀리 매칭 순위(정확 < `regular` < 표시 없음 < 굵기·기울임 · 같은 순위면 짧은 꼬리 — 종전 = 정렬상 첫 파일) · `DrawCtx::select_font_sized_styled` · Toolbar `SoftStates.on_icon_accent` + 부드러운 상태 기본 농도(26/12/20 %) · `Toolbar::set_side_margin` | **동작 변경**(글꼴 매칭) · 추가(나머지) | **영향 있음**: `nexa_font::ui_font`/`mono_font`(main.rs:1305·1308 · app/settings.rs:524·784)가 사용자 지정 패밀리와 **기본 후보 체인**(nexa-font lib.rs:372·399) 모두 이 함수를 거친다 → 같은 패밀리라도 다른 파일(보통 굵기 · 합자 없는 판)이 잡힐 수 있다. 상태 = **시험 729 통과**(10-03 · nexa-ui 119 작업본 기준 · 별도 target-dir) · **실기 미검증** | 터미널 WT 글꼴이 Regular로 · SGR 3 이탤릭 · 툴바 기본 농도 · 네비 폭 26 — 상태 = dir3 게이트(§80) · 실기 캡처 예정 | nexa-sql: 설정 ▸ 글꼴에 패밀리 이름(예 "D2Coding" · "JetBrainsMono Nerd Font")을 넣고 편집기/UI 글자가 **보통 굵기**로 나오는지 · 기본 설정에서 편집기 글꼴 모양이 전과 같은지(D2Coding 합자판 → 일반판) |
+| 118 · e41e481 | nexa-gfx · nexa-ctl · nexa-grid | `Font::ink_v` · `DrawCtx::glyph_center_y`(RasterCtx = 잉크 정중앙) · Toolbar `set_icon_glyphs`/`set_hover_background`/`set_soft_states` · `ToolDock::set_soft_states` · nexa-grid `set_glyph_delta` + 쉐브론 잉크 가운데 | 추가(옵션 · 기본 불변) · nexa-grid 그리기 = 동작 변경(nexa-grid 소비자만) | 영향 없음(옵션 미사용 · nexa-grid 미사용 — grep 0) · check · 시험(119 일괄 729) | 네비 MDL2 em 13 · 툴바 상태 표시 · 쉐브론 — dir3 게이트 · 실기 캡처(§79 판정) | nexa-sql: 툴바 모양이 전과 같은지(옵션 미사용이라 같아야 함) |
+| 117 · 4e834bf | nexa-ctl | `Toolbar::set_item_gap`(기본 4 = 종전) · `ToolDock::set_item_gap/set_gaps/gaps/set_padding/set_item_checked/item_checked/all_items` · `Toolbar` 구조체 필드 추가 | 추가(기본 = 종전) | 영향 없음(구조체 리터럴 미사용 · 옵션 미사용) · check · 시험(119 일괄) | 툴바 그룹 도크 · 크기/간격 설정 — dir3 게이트 · 실기 캡처(§74) | nexa-sql: 상단 툴바 간격이 전과 같은지 |
+| 116 · d9e70e1 | nexa-grid | `IconResolver` · `set_icon_resolver` · `Adapt::draw_icon`이 리졸버 이미지를 실제로 그림(종전 늘 false) | 동작 변경(nexa-grid 소비자만) | 영향 없음(nexa-sql은 nexa-grid 미사용 — Cargo.toml grep 0) | 패널 행 셸 아이콘 — dir3 게이트 · 실기 캡처(§73) | — |
+| 115 · 3a771cc(+91e0dff 기록) | nexa-font · nexa-grid | Windows 기호 폴백 후보에 `segmdl2.ttf`(Segoe MDL2 Assets) · `SegoeIcons.ttf`(Segoe Fluent Icons) 추가(Segoe UI Symbol 뒤 · Emoji 앞) · nexa-grid `set_marker_glyphs` · `Adapt::glyph_opaque` | **동작 변경**(폴백 체인) · 추가(nexa-grid) | **영향 있음**: PUA U+E700~ 글자가 두부 대신 MDL2/Fluent 아이콘으로 그려지고, 폴백 체인이 길어진다(메모리 매핑 2개 추가). 상태 = check · 시험(119 일괄 · nexa-ui `ui_and_mono_fonts_cover_all_ui_symbols` 포함) · **실기 미검증** | 네비/쉐브론 두부 해소 — 실기 캡처(§72) | nexa-sql: 화면의 기호(⚙ 등 PUA를 쓰는 곳)가 두부 없이 나오는지 · 기호 모양이 전과 크게 달라지지 않았는지 |
+| 114 · d61a820 | nexa-ctl | `controls::toast::{Toasts, ToastKind, life_alpha, bar_remaining}` 범용 승격(새 모듈) | 추가 | 영향 없음(nexa-sql은 자기 `toast.rs` 사용 — grep 0) · check | 앱 `toast.rs` 삭제 → nexa-ctl 사용 — dir3 게이트(§69) | — |
+| 113 · 0589fcc | nexa-ctl · nexa-grid | `DrawCtx::select_font_styled(slot, bold, italic)`(기본 = italic 무시) · `RecordCtx.fonts` 필드 추가 · nexa-grid `Adapt` italic 전달 | 추가 · 구조체 필드 추가 | 영향 없음(`RecordCtx` 미사용 — grep 0 · 리터럴 생성 없음) · check | 글꼴 장식 설정 · 터미널 굵게 — dir3 게이트(§68) | — |
+| 112 · 91214a5 | nexa-ctl · nexa-grid | `RasterCtx` 클립 스택 실제 구현(`push_clip`/`pop_clip` — 종전 no-op) · nexa-grid `paint_grid` 경계 클립 | **동작 변경** | 영향 없음(nexa-sql 코드에서 `push_clip` 호출 0 · 내부 사용처 = nexa-explorer 도크 · nexa-grid뿐이고 nexa-sql은 둘 다 미사용) · check | 셀이 패널 경계를 넘치던 결함 해소 — dir3 게이트(§67) | — |
+| 111 · 7b19bf1 | nexa-ctl | `SegProgress` 세그먼트 진행 바 · `Button::label` | 추가 | 영향 없음(미사용) · check | 전송 진행 창 — dir3 게이트 | — |
+
+## 검증 기록(소비자 세션이 덧붙임)
+
+| 날짜 | 소비자 | 차수 | 한 것 | 결과 |
+| --- | --- | --- | --- | --- |
+| 10-03 | nexa-sql(보조 세션 · 읽기 전용) | 111~119 | `cargo test --workspace --target-dir target/dir3check`(nexa-ui 119 작업본 · 실행 중 nexa-sql.exe 미접촉 · 끝난 뒤 target-dir 삭제) | 729 통과 · 실패 0 |
+| 10-03 | nexa-sql | 111~118 | 차수마다 `cargo check --workspace --all-targets`(별도 target-dir) | 통과 |
