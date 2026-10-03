@@ -20,6 +20,8 @@ pub mod fastscroll;
 pub mod rows;
 pub mod typeahead;
 
+pub use rows::{marker_glyphs, set_marker_glyphs};
+
 /// 기하 — nexa-ctl 재노출.
 pub mod geom {
     pub use nexa_ctl::geom::{Point, Rect};

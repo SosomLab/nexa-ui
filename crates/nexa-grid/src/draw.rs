@@ -102,6 +102,9 @@ pub trait DrawCtx {
 /// `draw_icon`은 false(아이콘은 G-2에서 `RowSource` 쪽 `IconImage`로).
 pub struct Adapt<'a>(pub &'a mut dyn nexa_ctl::DrawCtx);
 
+/// 글리프 크기 증분(논리 px) — 목록 글꼴 12 em(16 px) 대비 dir2 쉐브론 9 DIP(12 px).
+const GLYPH_DELTA_PX: f32 = -4.0;
+
 impl std::fmt::Debug for Adapt<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Adapt(nexa_ctl::DrawCtx)")
@@ -126,6 +129,22 @@ impl DrawCtx for Adapt<'_> {
     }
     fn text_height(&mut self) -> i32 {
         self.0.text_height()
+    }
+    /// 디스클로저/아이콘 글리프 — dir2 규약(MDL2 쉐브론 9 DIP · 본문 12 DIP보다 작게 · 셀 가운데). 그린 뒤 목록 글꼴로 복귀.
+    fn glyph_opaque(&mut self, clip: Rect, text: &str, fg: Color, bg: Color) {
+        self.0.fill_rect(clip, bg);
+        self.0
+            .select_font_sized(nexa_ctl::FontSlot::PeerList, false, GLYPH_DELTA_PX);
+        let w = self.0.text_width(text);
+        let h = self.0.text_height();
+        self.0.text(
+            clip.x + (clip.w - w).max(0) / 2,
+            clip.y + (clip.h - h) / 2,
+            clip,
+            text,
+            fg,
+        );
+        self.0.select_font(nexa_ctl::FontSlot::PeerList, false);
     }
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         self.0.fill_ellipse(rect, color);
@@ -189,8 +208,14 @@ mod tests {
         assert_eq!(FontSlot::List.to_ctl(), nexa_ctl::FontSlot::PeerList);
         assert_eq!(
             rec.fonts,
-            vec![(nexa_ctl::FontSlot::PeerList, true, true)],
-            "italic이 select_font_styled로 전달된다(113차)"
+            vec![
+                (nexa_ctl::FontSlot::PeerList, true, true), // italic이 select_font_styled로 전달(113차)
+                (nexa_ctl::FontSlot::PeerList, false, false), // 글리프 = 작은 크기(115차)
+                (nexa_ctl::FontSlot::PeerList, false, false), // … 뒤 목록 글꼴 복귀
+            ]
         );
+        // 글리프는 셀 가운데(가로) — RecordCtx 글자 폭 7.
+        let g = rec.texts.iter().find(|t| t.3 == "▶").expect("glyph text");
+        assert_eq!(g.0, (20 - 7) / 2);
     }
 }

@@ -114,6 +114,15 @@ const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
 #[cfg(target_os = "windows")]
 const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
     ("C:\\Windows\\Fonts\\seguisym.ttf", 0, "Segoe UI Symbol"),
+    // ★ 아이콘 글꼴(PUA U+E700~ · 115차 10-03 nexa-dir3): 네비 버튼(EA8A/E72B/E72A/E74A) · 트리 쉐브론(E76C/E70D)을 dir2와 같은
+    // 모양으로 — 체인에 없으면 두부(□). Windows 10 = MDL2 · Windows 11 = Fluent Icons(같은 코드포인트). Segoe UI Symbol의 PUA는
+    // E000~E2FF(옛 아이콘)라 겹치지 않는다.
+    ("C:\\Windows\\Fonts\\segmdl2.ttf", 0, "Segoe MDL2 Assets"),
+    (
+        "C:\\Windows\\Fonts\\SegoeIcons.ttf",
+        0,
+        "Segoe Fluent Icons",
+    ),
     ("C:\\Windows\\Fonts\\seguiemj.ttf", 0, "Segoe UI Emoji"),
     // Office 동봉(있으면) — 넓은 BMP 커버.
     ("C:\\Windows\\Fonts\\arialuni.ttf", 0, "Arial Unicode MS"),

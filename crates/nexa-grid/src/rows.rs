@@ -45,12 +45,31 @@ impl Marker {
     /// ChevronRight U+E76C[닫힘]/ChevronDown U+E70D[열림] — 백엔드
     /// glyph_opaque가 PUA 대역을 MDL2 폰트로 라우팅).
     fn glyph(self) -> &'static str {
+        let (collapsed, expanded) = MARKER_GLYPHS.with(std::cell::Cell::get);
         match self {
             Marker::None => "",
-            Marker::Collapsed => "\u{E76C}",
-            Marker::Expanded => "\u{E70D}",
+            Marker::Collapsed => collapsed,
+            Marker::Expanded => expanded,
         }
     }
+}
+
+thread_local! {
+    /// (닫힘, 열림) 디스클로저 글리프 — 기본 = Segoe MDL2 ChevronRight/ChevronDown.
+    static MARKER_GLYPHS: std::cell::Cell<(&'static str, &'static str)> =
+        const { std::cell::Cell::new(("\u{E76C}", "\u{E70D}")) };
+}
+
+/// 디스클로저 글리프 교체(115차 · nexa-dir3 10-03 "쉐브론이 두부로") — 아이콘 글꼴(MDL2/Fluent)이 없는 OS에서 호스트가
+/// 자기 글꼴이 가진 글리프(예 `›` `⌄`)로 바꾼다. UI 스레드 전용(thread_local).
+pub fn set_marker_glyphs(collapsed: &'static str, expanded: &'static str) {
+    MARKER_GLYPHS.with(|g| g.set((collapsed, expanded)));
+}
+
+/// 지금 디스클로저 글리프 (닫힘, 열림) — 호스트의 두부 점검용.
+#[must_use]
+pub fn marker_glyphs() -> (&'static str, &'static str) {
+    MARKER_GLYPHS.with(std::cell::Cell::get)
 }
 
 /// 트리 컬럼(key 0) 한 행의 표시 데이터.
