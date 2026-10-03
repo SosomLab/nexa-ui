@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (110차 · win · nexa-dir3 사용자 피드백)** — `nexa_gfx::Font::em_to_px`(em → ab_glyph 전체 높이 px · 맑은 고딕 12 em = 16 px) + `em_to_px_with` 순수 계산 · dir2/GDI 크기 숫자를 그대로 쓰는 앱이 같은 시각 크기로 그리게 → [journal §7](journal/2026-10-03.md)
 - **2026-10-03 (109차 · win · nexa-dir3 M3 T-30)** — `nexa_gfx::svg::render_mask`(알파 마스크 — 요소 색을 버리고 잉크 하나 · 툴바 `ToolIcon::Mask` 테마 틴트용 · dir2 `svg_to_hicon` 자리) · 시험 `render_mask_coverage` → [journal §6](journal/2026-10-03.md)
 - **2026-10-03 (108차 · win · nexa-dir3 M5 T-62 C-2/T-31)** — ★ **`nexa-gfx::svg`**(최소 SVG 서브셋 파서 + CPU 스캔라인 래스터: rect/circle/line/polyline/polygon/path(M·L·H·V·C·A·Z)/text · 채움/스트로크(라운드 캡·조인) · nonzero 커버리지 AA · `render`/`render_natural` · 시험 5) · ★ nexa-ctl `DrawCtx::draw_image_hint`(경로 → 디코드 **캐시** `raster::image_cache` · 비율 유지 가운데) + `push_clip`/`pop_clip`(기본 no-op 자리) · nexa-grid `Adapt`가 `draw_image`/클립을 전달(InfoDock 인라인 이미지·이미지 미리보기가 실제로 그려진다) · 시험 green · nexa-sql check ✓ → [journal §5](journal/2026-10-03.md)
 - **2026-10-03 (106차 · win · nexa-dir3 M2 T-26·27)** — ★ **`nexa-explorer` 크레이트**: dir2 `PathBar`·`InfoDock`·`OverlayBars` 그대로 이식(시험 25) · nexa-grid `draw::DrawCtx`에 `push_clip/pop_clip/draw_image/glyph_opaque_lg` · U-2 dock ✅ · F-3 PathBar 승격 ✅ → [journal §4](journal/2026-10-03.md)

@@ -781,6 +781,18 @@ impl Font {
         self.faces.iter().any(|f| f.glyph_id(ch).0 != 0)
     }
 
+    /// **em 크기 → 이 글꼴의 nexa-gfx 크기(px)**: nexa-gfx/ab_glyph의 `size`는 어센트−디센트 **전체 높이**이고 GDI `lfHeight`(음수)·CSS `font-size`는
+    /// **em**이다. 같은 숫자를 주면 nexa-gfx 쪽이 약 25 % 작게 보인다(맑은 고딕 높이/em ≈ 1.33 · nexa-dir3 사용자 10-03 "글이 작게 보임").
+    /// 설정값을 em(dir2 DIP)으로 받는 앱은 이 변환으로 그린다. 메트릭을 못 읽으면 그대로.
+    #[must_use]
+    pub fn em_to_px(&self, em: f32) -> f32 {
+        let face = &self.faces[0];
+        match face.units_per_em() {
+            Some(upm) => em_to_px_with(em, face.height_unscaled(), upm),
+            None => em,
+        }
+    }
+
     /// `size`(px)에서의 줄 높이.
     #[must_use]
     pub fn line_height(&self, size: f32) -> f32 {
@@ -963,9 +975,27 @@ impl Font {
     }
 }
 
+/// `em_to_px`의 순수 계산(시험용): `em × 높이/upm` · 높이 0 = 그대로.
+#[must_use]
+pub fn em_to_px_with(em: f32, height_unscaled: f32, upm: f32) -> f32 {
+    if height_unscaled > 0.0 && upm > 0.0 {
+        em * height_unscaled / upm
+    } else {
+        em
+    }
+}
+
 #[cfg(test)]
 mod hint_tests {
     use super::*;
+
+    /// em → px: 맑은 고딕(upm 2048 · 높이 2732) 12 em = 16 px · 메트릭 없음 = 그대로.
+    #[test]
+    fn em_to_px_ratio() {
+        assert!((em_to_px_with(12.0, 2732.0, 2048.0) - 16.007_8).abs() < 0.01);
+        assert_eq!(em_to_px_with(12.0, 0.0, 2048.0), 12.0);
+        assert_eq!(em_to_px_with(9.0, 1000.0, 1000.0), 9.0);
+    }
 
     /// T-90d(nexa-sql docs/39 §3-6): 글리프 캐시 상한 세터 — 기본 8192 · 0은 1로 · 삽입 경로가 `glyph_cache_max()`를 본다.
     #[test]
