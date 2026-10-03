@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-03 (122차 · win · nexa-dir3 Linux 실기)** — nexa-explorer `split_path` Unix 경로 = `/`로만 나누고 절대 경로 조립 · `path_separator` · paint 구분자 · 시험 +1 `split_unix_paths_keep_leading_slash` — journal 10-03 §19.
 - **2026-10-03 (121차 · win · nexa-dir3 GAP-008)** — nexa-fs `set_link_overlay`/`link_overlay_enabled`(전역 · 기본 꺼짐) · 켜면 Windows `icon_for_path`에 `SHGFI_LINKOVERLAY` — journal 10-03 §18.
 - **2026-10-03 (120차 · win · nexa-dir3 메뉴 캡처)** — nexa-ctl `ContextMenu::size_px`에 `scrollable()`이면 세로 스크롤 표시 자리 `s(6)` 포함(paint와 일치 · 가짜 가로 스크롤 막대 제거) · 시험 +1 `vertical_scroll_mark_is_part_of_the_width` — journal 10-03 §17.
 - **2026-10-03 (119차 · win · nexa-dir3 캡처 판정)** — nexa-font `find_font_by_family` + `family_rank`(정확 < regular < 표시 없음 < 굵기/기울임 · 짧은 꼬리 · ⚠ 동작 변경) · nexa-ctl `DrawCtx::select_font_sized_styled` · `SoftStates.on_icon_accent` + 기본 농도 26/12/20 % · `Toolbar::set_side_margin` · 시험 +1 — journal 10-03 §16.

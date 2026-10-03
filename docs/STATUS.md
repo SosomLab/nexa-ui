@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-03 (122차 · win · nexa-dir3 Linux 실기)** — PathBar Unix 경로 세그먼트(앞 `/` 보존 · 구분자 `/` · 수정/동작 변경 Unix 한정 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (121차 · win · nexa-dir3 GAP-008)** — nexa-fs 링크 화살표 오버레이 스위치(`set_link_overlay` · 기본 꺼짐 · 추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (120차 · win · nexa-dir3 메뉴 캡처)** — ContextMenu 폭에 세로 스크롤 표시 자리 포함(스크롤 메뉴 6 px 넓어짐 · 가짜 가로 막대 제거 · 수정/동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (119차 · win · nexa-dir3 캡처 판정)** — ⚠ 글꼴 패밀리 매칭 순위 변경(Regular 우선 · 동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · `select_font_sized_styled` · Toolbar 부드러운 상태 기본 농도 · `set_side_margin`.

@@ -21,10 +21,34 @@ pub struct Segment {
     pub full: String,
 }
 
+/// 이 경로의 구분자: `/`로 시작하면 Unix 경로(`/`) · 그 밖(드라이브 `C:\…` 등)은 `\`.
+#[must_use]
+pub fn path_separator(path: &str) -> &'static str {
+    if path.starts_with('/') {
+        "/"
+    } else {
+        "\\"
+    }
+}
+
 /// 로컬 FS 세그먼터(원본 IPathSegmenter 기본 구현): 드라이브 `C:` → `C:\`, 이후 폴더 누적.
-/// `\`·`/` 모두 허용, 조립은 `\`. UNC·VFS 스킴은 후속(§4).
+/// Windows 경로는 `\`·`/` 모두 허용, 조립은 `\`. **Unix 경로(`/`로 시작)는 `/`로만 나누고 `/home/user`처럼 절대 경로로 조립**한다
+/// (nexa-dir3 Linux 실기 10-03: 종전에는 `home\user`로 조립해 세그먼트 클릭이 없는 경로로 갔다 · 이름에 `\`가 든 파일도 보존).
+/// UNC·VFS 스킴은 후속(§4).
 pub fn split_path(path: &str) -> Vec<Segment> {
     let mut out = Vec::new();
+    if path.starts_with('/') {
+        let mut acc = String::new();
+        for part in path.split('/').filter(|p| !p.is_empty()) {
+            acc.push('/');
+            acc.push_str(part);
+            out.push(Segment {
+                label: part.to_string(),
+                full: acc.clone(),
+            });
+        }
+        return out;
+    }
     let mut acc = String::new();
     for part in path.split(['\\', '/']).filter(|p| !p.is_empty()) {
         if acc.is_empty() {
@@ -507,7 +531,8 @@ impl PathBar {
         ctx.fill_rect(b, theme.chrome_bg);
         // 오버플로 = 끝 정렬(사용자 지시 07-13): 뒤(최근 폴더)부터 역으로 채워 시작 인덱스 결정,
         // 잘린 앞부분은 "…" 표시(원본 breadcrumb 긴 경로 끝 정렬 계승)
-        let sep_w = ctx.text_width("\\");
+        let sep = path_separator(&self.path);
+        let sep_w = ctx.text_width(sep);
         let widths: Vec<i32> = self
             .segments
             .iter()
@@ -541,7 +566,7 @@ impl PathBar {
                     sep_cell.x,
                     ty,
                     sep_cell,
-                    "\\",
+                    sep,
                     theme.text_dim,
                     theme.chrome_bg,
                 );
@@ -576,7 +601,7 @@ impl PathBar {
                         sep_cell.x,
                         ty,
                         sep_cell,
-                        "\\",
+                        sep,
                         theme.text_dim,
                         theme.chrome_bg,
                     );
@@ -608,6 +633,23 @@ mod tests {
         // 슬래시·끝 구분자 허용
         assert_eq!(split_path("C:/a/b/")[2].full, "C:\\a\\b");
         assert!(split_path("").is_empty());
+    }
+
+    /// Unix 경로: `/`로만 나누고 절대 경로로 조립 · 구분자 글자 = `/` · 이름 안의 `\`는 그대로.
+    #[test]
+    fn split_unix_paths_keep_leading_slash() {
+        let segs = split_path("/home/kiros33/Projects");
+        assert_eq!(segs.len(), 3);
+        assert_eq!(
+            (segs[0].label.as_str(), segs[0].full.as_str()),
+            ("home", "/home")
+        );
+        assert_eq!(segs[2].full, "/home/kiros33/Projects");
+        assert_eq!(split_path("/a//b/")[1].full, "/a/b");
+        assert_eq!(split_path("/tmp/we\\ird")[1].label, "we\\ird");
+        assert!(split_path("/").is_empty());
+        assert_eq!(path_separator("/home"), "/");
+        assert_eq!(path_separator("C:\\Users"), "\\");
     }
 
     #[test]
