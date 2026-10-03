@@ -72,6 +72,40 @@ pub fn marker_glyphs() -> (&'static str, &'static str) {
     MARKER_GLYPHS.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    /// 디스클로저를 글리프 대신 **선으로** 그릴까 — 기본 꺼짐([`set_marker_vector`]).
+    static MARKER_VECTOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 디스클로저를 글꼴 글리프 대신 꺾은선 쉐브론으로 그린다(123차 · nexa-dir3 Linux 실기 10-03 "쉐브론이 윈도우와 다르게 작다").
+/// 아이콘 글꼴(Segoe MDL2)이 없는 OS에서 호스트가 켠다 — 글꼴과 무관하게 MDL2 쉐브론(em 9)과 같은 크기·모양이 된다.
+/// 기본 꺼짐(종전 = 글리프). UI 스레드 전용(thread_local).
+pub fn set_marker_vector(on: bool) {
+    MARKER_VECTOR.with(|v| v.set(on));
+}
+
+/// 지금 디스클로저를 선으로 그리는가.
+#[must_use]
+pub fn marker_vector() -> bool {
+    MARKER_VECTOR.with(std::cell::Cell::get)
+}
+
+/// 선 쉐브론의 꼭짓점 3개(순수): `cell` = 마커 칸(폭 = 들여쓰기 폭). 긴 변 = 칸 폭의 절반(16 → 8 · 짝수) · 짧은 변 = 그 절반
+/// (팔 45°) — Segoe MDL2 ChevronRight/ChevronDown을 em 9로 그린 잉크(약 4.5×8.5)에 맞춘 값. 칸 가운데.
+#[must_use]
+pub fn marker_chevron_points(cell: Rect, expanded: bool) -> [(i32, i32); 3] {
+    let long = ((cell.w / 2).max(4) / 2) * 2;
+    let short = long / 2;
+    let (cx, cy) = (cell.x + cell.w / 2, cell.y + cell.h / 2);
+    if expanded {
+        let (x0, y0) = (cx - long / 2, cy - short / 2);
+        [(x0, y0), (x0 + short, y0 + short), (x0 + long, y0)]
+    } else {
+        let (x0, y0) = (cx - short / 2, cy - long / 2);
+        [(x0, y0), (x0 + short, y0 + short), (x0, y0 + long)]
+    }
+}
+
 /// 트리 컬럼(key 0) 한 행의 표시 데이터.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RowItem {
@@ -1406,7 +1440,15 @@ impl<S: RowSource> VirtualRows<S> {
         ctx.text_opaque(indent, ty, cell, "", theme.text_dim, bg);
         if item.marker != Marker::None {
             let mrc = Rect::new(indent, cell.y, self.indent_w, cell.h);
-            ctx.glyph_opaque(mrc, item.marker.glyph(), theme.text_dim, bg);
+            if marker_vector() {
+                // 선 쉐브론(123차): 글꼴과 무관한 크기·모양 · 굵기 = 칸 폭 16당 1 px.
+                ctx.fill_rect(mrc, bg);
+                let pts = marker_chevron_points(mrc, item.marker == Marker::Expanded);
+                let width = (self.indent_w as f32 / 16.0).max(1.0);
+                ctx.polyline(&pts, theme.text_dim, width);
+            } else {
+                ctx.glyph_opaque(mrc, item.marker.glyph(), theme.text_dim, bg);
+            }
         }
         let mut name_x = indent + self.indent_w;
         if let Some((key, hint)) = icon {
@@ -2850,6 +2892,29 @@ mod tests {
         );
         v2.on_event(&key(Key::End), &mut inv2); // 스크롤이 필요한 키 이동 = 행 단위 스냅
         assert_eq!(v2.scroll_frac, 0);
+    }
+
+    /// 선 쉐브론 꼭짓점: 칸 16 = 닫힘 4×8 · 열림 8×4 · 칸 가운데 · 배율 2 = 두 배 · 좁은 칸도 최소 4.
+    #[test]
+    fn marker_chevron_points_match_mdl2_ink() {
+        let cell = Rect::new(10, 100, 16, 22);
+        assert_eq!(
+            marker_chevron_points(cell, false),
+            [(16, 107), (20, 111), (16, 115)]
+        );
+        assert_eq!(
+            marker_chevron_points(cell, true),
+            [(14, 109), (18, 113), (22, 109)]
+        );
+        let big = marker_chevron_points(Rect::new(0, 0, 32, 44), false);
+        assert_eq!((big[1].0 - big[0].0, big[2].1 - big[0].1), (8, 16));
+        let tiny = marker_chevron_points(Rect::new(0, 0, 5, 10), true);
+        assert_eq!((tiny[2].0 - tiny[0].0, tiny[1].1 - tiny[0].1), (4, 2));
+        // 스위치 기본 = 꺼짐(종전 글리프) · 켜고 끄기.
+        assert!(!marker_vector());
+        set_marker_vector(true);
+        assert!(marker_vector());
+        set_marker_vector(false);
     }
 
     #[test]
