@@ -46,6 +46,13 @@ pub trait DrawCtx {
         let _ = (slot, bold);
     }
 
+    /// 슬롯 + 굵게 + **기울임**(UIC-313 · dir2 `select_font(slot, bold, italic)` 합집합 · 10-03 nexa-dir3 T-31) —
+    /// 인자 italic은 슬롯 설정(`SlotFont.italic`) 위에 **강제**로 얹는다(헤더 이탤릭 같은 장식). 기본 = italic 무시.
+    fn select_font_styled(&mut self, slot: FontSlot, bold: bool, italic: bool) {
+        let _ = italic;
+        self.select_font(slot, bold);
+    }
+
     /// 슬롯 선택 + **크기 증분**(논리 px) — 제목처럼 "본문보다 조금 크게"를 표현할 때.
     /// 절대 크기를 박으면 사용자가 글꼴 크기를 바꿔도 제목만 그대로 남아 위계가 깨진다.
     /// 기본 = 증분 무시(단일 폰트 백엔드).

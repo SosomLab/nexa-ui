@@ -98,7 +98,7 @@ pub trait DrawCtx {
     }
 }
 
-/// nexa-ctl `DrawCtx` → 그리드 어휘 어댑터. italic은 버린다(nexa-ctl `select_font`에 없음 · U-5) · `alpha` u8 → f32 ·
+/// nexa-ctl `DrawCtx` → 그리드 어휘 어댑터. italic은 `select_font_styled`로 전달(113차 · UIC-313 — 종전 U-5 "버림" 해소) · `alpha` u8 → f32 ·
 /// `draw_icon`은 false(아이콘은 G-2에서 `RowSource` 쪽 `IconImage`로).
 pub struct Adapt<'a>(pub &'a mut dyn nexa_ctl::DrawCtx);
 
@@ -109,8 +109,8 @@ impl std::fmt::Debug for Adapt<'_> {
 }
 
 impl DrawCtx for Adapt<'_> {
-    fn select_font(&mut self, slot: FontSlot, bold: bool, _italic: bool) {
-        self.0.select_font(slot.to_ctl(), bold);
+    fn select_font(&mut self, slot: FontSlot, bold: bool, italic: bool) {
+        self.0.select_font_styled(slot.to_ctl(), bold, italic);
     }
     fn fill_rect(&mut self, rect: Rect, color: Color) {
         self.0.fill_rect(rect, color);
@@ -187,5 +187,10 @@ mod tests {
         assert!(rec.drew_text("ab") && rec.drew_text("▶"));
         assert_eq!(rec.round_rects.len(), 1);
         assert_eq!(FontSlot::List.to_ctl(), nexa_ctl::FontSlot::PeerList);
+        assert_eq!(
+            rec.fonts,
+            vec![(nexa_ctl::FontSlot::PeerList, true, true)],
+            "italic이 select_font_styled로 전달된다(113차)"
+        );
     }
 }

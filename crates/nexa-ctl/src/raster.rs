@@ -414,6 +414,12 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.cur.bold |= bold;
     }
 
+    fn select_font_styled(&mut self, slot: FontSlot, bold: bool, italic: bool) {
+        self.select_font(slot, bold);
+        // 인자 italic은 슬롯 설정 위 강제 기울임(faux — `TextStyle.italic`).
+        self.cur.italic |= italic;
+    }
+
     fn select_font_sized(&mut self, slot: FontSlot, bold: bool, delta_px: f32) {
         self.select_font(slot, bold);
         // 증분은 슬롯 크기 **위에** 얹는다 — 사용자가 글꼴 크기를 키우면 제목도 같이 큰다.
@@ -1059,6 +1065,24 @@ mod clip_tests {
                 *px = BG;
             }
         }
+    }
+
+    /// `select_font_styled`의 italic은 슬롯 설정 위 강제 · 다음 `select_font`가 슬롯 설정으로 되돌린다(시스템 글꼴 없으면 건너뜀).
+    #[test]
+    fn select_font_styled_forces_italic_until_next_select() {
+        let Some(loaded) = nexa_font::ui_font(None) else {
+            return;
+        };
+        let mut buf = vec![BG; 16];
+        let mut s = Surface::new(&mut buf, 4, 4);
+        let mut ctx = RasterCtx::new(&mut s, &loaded.font, 1.0);
+        assert!(!ctx.cur.italic && !ctx.cur.bold);
+        ctx.select_font_styled(FontSlot::Base, true, true);
+        assert!(ctx.cur.italic && ctx.cur.bold);
+        ctx.select_font(FontSlot::Base, false);
+        assert!(!ctx.cur.italic && !ctx.cur.bold, "슬롯 설정으로 복귀");
+        ctx.select_font_styled(FontSlot::Status, false, false);
+        assert!(!ctx.cur.italic);
     }
 
     /// 모든 그리기 어휘가 클립 스택 꼭대기를 지킨다 · 중첩은 교차 · pop은 복원(시스템 글꼴이 없으면 건너뜀).

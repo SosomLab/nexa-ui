@@ -5,7 +5,7 @@
 //!
 //! - 기하·이벤트·테마·위젯 계약은 nexa-ctl 것을 **재노출**(`geom`·`event`·`theme`·`widget` 모듈) — dir2 `InputEvent.ctrl`은 `primary`.
 //! - 그리기 어휘는 dir2 세대([`draw::DrawCtx`] — `select_font(slot, bold, italic)` · `fill_round_rect_alpha(u8)` · `glyph_opaque` ·
-//!   `draw_icon`)를 유지하고, [`draw::Adapt`]가 nexa-ctl `DrawCtx` 위에 얹는다(D-3 합집합 전까지 italic은 버린다 · U-5).
+//!   `draw_icon`)를 유지하고, [`draw::Adapt`]가 nexa-ctl `DrawCtx` 위에 얹는다(italic은 `select_font_styled`로 전달 · 113차).
 //! - dir2 `Theme.header_bg`는 nexa-ctl에 없다 → [`theme::header_bg`] = `chrome_bg`(dir2 L-09 "header_bg는 chrome_bg와 명도 차 없음").
 //! - 타입어헤드·고속 스크롤은 dir2 판을 **크레이트 안에** 두었다(nexa-ctl 판과의 통일은 G-2 — 동작 패리티 우선).
 //!

@@ -823,6 +823,8 @@ pub struct RecordCtx {
     pub surface: Option<(i32, i32)>,
     /// 글자 높이(기본 16).
     pub line_h: i32,
+    /// `select_font`/`select_font_styled`/`select_font_sized` 호출 — (슬롯, 굵게, 기울임) 순서대로(10-03 UIC-313 장식 시험).
+    pub fonts: Vec<(FontSlot, bool, bool)>,
 }
 
 impl RecordCtx {
@@ -845,6 +847,7 @@ impl RecordCtx {
         self.strokes.clear();
         self.polylines = 0;
         self.images.clear();
+        self.fonts.clear();
     }
 
     /// 그려진 문자열 전부(순서대로).
@@ -879,6 +882,15 @@ impl RecordCtx {
 impl DrawCtx for RecordCtx {
     fn surface_size(&self) -> Option<(i32, i32)> {
         self.surface
+    }
+    fn select_font(&mut self, slot: FontSlot, bold: bool) {
+        self.fonts.push((slot, bold, false));
+    }
+    fn select_font_styled(&mut self, slot: FontSlot, bold: bool, italic: bool) {
+        self.fonts.push((slot, bold, italic));
+    }
+    fn select_font_sized(&mut self, slot: FontSlot, bold: bool, _delta_px: f32) {
+        self.fonts.push((slot, bold, false));
     }
     fn fill_rect(&mut self, r: Rect, c: Color) {
         self.fills.push((r, c));
