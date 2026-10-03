@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 128 · ec990cc | nexa-fs · nexa-explorer | nexa-fs `icontheme::app_icon_file(exe, px)` · `parse_desktop_entry` · `desktop_icon_for`(추가) · PathBar `split_path` Unix 루트 `/` = 첫 세그먼트 · 루트 뒤 구분자 생략 · 시험 +1 · 122차 시험 기대값 갱신 | 추가(nexa-fs) · **수정(동작 변경 · Unix 경로 세그먼트 수 +1 · nexa-explorer)** | 영향 없음(nexa-explorer · icontheme 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | Linux 런처 바 앱 아이콘 · 경로 바 첫 칸 "/" · `/`의 탭 제목 — dir3 게이트(§110) · **Linux 화면 판정 대기** | dir3(Linux/macOS): 경로 바가 `/ home / user` 꼴로 시작하는지 · 첫 칸 "/" 클릭 = 루트 · Windows 경로 표시는 전과 같은지 |
 | 127 · 7e98768 | nexa-explorer | InfoDock 종류 스트립 hover — `strip_hover()` · 칸이 바뀔 때만 스트립 무효화 · 창 밖 = 해제 · 비활성 칸 hover 배경(탭 바와 같은 농도) · 시험 +1 | 추가(InfoDock 소비자 화면 변화 = hover 표시) | 영향 없음(InfoDock 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | 하단 도크 종류 칸 hover — dir3 게이트(§108) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 126 · 93d981a | nexa-ctl | `SplitBand { thickness, dim_rest, hover_alpha }` · `Splitter::set_band` · `band()` · `hover_progress()` · `is_animating()` · `pointer_gone()` — 띠 모양 · hover가 accent로 서서히 진해짐 · 시험 +1 | 추가(기본 불변 — `set_band` 안 하면 종전 그리기) | 영향 없음(새 API 미사용) · `cargo check` 통과(10-03 · 시험 미실행) · 참고: `split_d.tick` 호출 누락(nexa-sql main 쪽 · 이번 변경과 무관) | 스플리터 3종(띠 3 · 알파 0.7 · 페이드 중에만 깨움 · 창 밖 hover 해제) — dir3 게이트(§103) · Linux 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) · 원하면 `set_band`로 같은 모양을 쓸 수 있다 |
 | 125 · b6d2e84 | nexa-gfx · nexa-font | `Font::set_fallback_em_match(bool)` · `fallback_em_match()`(폴백 face를 주 글꼴과 같은 em으로 · 기준선/줄 높이 불변 · 기본 꺼짐) · 순수 `fallback_size_with` · `collection_face_index(data, family)` · nexa-font `find_collection_face(file_family, face_family)` · 시험 +2 | 추가(기본 불변) | 영향 없음(스위치·새 함수 미사용) · `cargo check` 통과(10-03 · 시험 미실행) | 터미널 고정폭 체인에서 Windows 밖일 때 켬 · TTC 안 "Noto Sans Mono CJK KR" — dir3 게이트(§98) · Linux 실기 사용자 "해결" | nexa-sql: 화면 변화 없음(확인 불필요) |
@@ -31,6 +32,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 128 | `cargo check`(ec990cc) | 통과 · 시험은 미실행(nexa-explorer · icontheme 미사용) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 127 | `cargo check`(7e98768) | 통과 · 시험은 미실행(InfoDock 미사용) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 126 | `cargo check`(93d981a) | 통과 · 시험은 미실행(기본 불변 · 새 API) |
 | 10-03 | nexa-sql(nexa-dir3 Linux 개발 세션) | 123~125 | `cargo check`(최종 트리 b6d2e84) | 통과 · 시험은 미실행(세 차수 모두 기본 꺼짐/새 함수) |

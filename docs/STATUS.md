@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-03 (128차 · linux · nexa-dir3 런처 · 경로 바)** — 앱 아이콘 조회(추가) · ⚠ PathBar Unix 루트 세그먼트(동작 변경 · Unix 한정 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (127차 · linux · nexa-dir3 도크 hover)** — InfoDock 종류 스트립 hover(추가 · InfoDock 소비자만 화면 변화 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (126차 · linux · nexa-dir3 T-115)** — Splitter 띠 모양 · 서서히 진해지는 hover · `is_animating` · `pointer_gone`(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-03 (125차 · linux · nexa-dir3 Linux 실기)** — 폴백 글꼴 em 맞춤(`set_fallback_em_match` · 기본 꺼짐) · TTC 안 얼굴 찾기(추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
