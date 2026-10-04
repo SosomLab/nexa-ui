@@ -322,7 +322,25 @@ pub struct ContextMenu {
     wheel_acc: std::cell::Cell<i32>,
     /// ★ 최소 행 수(완성 팝업 · 사용자 09-24 "항목이 1개여도 10칸 높이"): 항목이 적어도 이 높이를 유지한다(빈 자리는 바탕).
     min_rows: Option<usize>,
+    /// ★ 세로 스크롤 표시 = **오버레이 방식**([`Self::set_overlay_scrollbar`] · nexa-dir3 사용자 10-04 "동작할 때만 표시 · 움직이면 작게 ·
+    ///   마우스 올리면 크게"). 기본(false) = 종전의 늘 보이는 가는 트랙.
+    overlay_bar: bool,
+    /// 오버레이 막대가 지금 보이는가 · 커서가 막대 띠 위인가(굵게) · 끄는 중(잡은 자리 = 커서 − 썸 위).
+    bar_on: bool,
+    bar_hot: bool,
+    bar_drag: Option<i32>,
+    /// 이 시각이 지나면 막대를 감춘다([`Self::tick`] · 활동마다 뒤로 민다 · `None` = 감추지 않음).
+    bar_until: Option<std::time::Instant>,
 }
+
+/// 오버레이 스크롤 막대 — 가는 폭 · 굵은 폭(커서가 올라갔을 때) · 썸 최소 길이 · 농도([`super::scroll`]의 막대와 같은 값).
+const BAR_THIN: i32 = 6;
+const BAR_THICK: i32 = 11;
+const BAR_MIN_THUMB: i32 = 16;
+const BAR_ALPHA_IDLE: f32 = 0.35;
+const BAR_ALPHA_HOT: f32 = 0.6;
+/// "더 있음" 띠 높이(위/아래 끝 · ∧/∨).
+const MORE_H: i32 = 12;
 
 /// 하위 메뉴 유예(ms) — 자식이 화면 안에 맞추느라 부모 행과 세로가 어긋나면 대각선 이동 중 다른 부모 행을 지난다.
 /// 그 사이 자식이 닫히던 것(nexa-sql 사용자 09-16 "Copy SQL 메뉴 유실") → 자식 쪽으로 움직이는 동안은 유지.
@@ -415,36 +433,246 @@ impl ContextMenu {
         self.vis_count() < self.items.len()
     }
 
-    /// `i`가 보이게 `first`를 옮긴다.
+    /// 항목 하나의 높이(행 · 구분선).
+    fn item_h(&self, it: &CtxItem) -> i32 {
+        match it {
+            CtxItem::Item { .. } => self.row_h(),
+            CtxItem::Separator => self.s(SEP_H),
+        }
+    }
+
+    /// 내용 창 높이(위·아래 여백 제외) = 처음 [`Self::vis_count`]개 항목의 높이(최소 행 수 반영). 스크롤 위치와 무관하게 **고정**이다 —
+    /// 구분선은 행보다 낮아서, 보이는 항목 수로만 세면 스크롤한 자리에 따라 내용이 창보다 짧아져 아래가 비었다(nexa-dir3 10-04).
+    fn view_h(&self) -> i32 {
+        let h: i32 = self.items[..self.vis_count()]
+            .iter()
+            .map(|it| self.item_h(it))
+            .sum();
+        self.min_rows.map_or(h, |n| h.max(self.row_h() * n as i32))
+    }
+
+    /// 전체 항목 높이.
+    fn total_h(&self) -> i32 {
+        self.items.iter().map(|it| self.item_h(it)).sum()
+    }
+
+    /// `first`의 상한 = 그 항목부터 끝까지가 내용 창에 **전부** 들어가는 가장 앞 항목(행 높이가 같으면 `항목 수 − 보이는 수`).
+    fn max_first(&self) -> usize {
+        let vh = self.view_h();
+        let mut acc = 0;
+        let mut f = self.items.len();
+        while f > 0 {
+            let h = self.item_h(&self.items[f - 1]);
+            if acc + h > vh {
+                break;
+            }
+            acc += h;
+            f -= 1;
+        }
+        f
+    }
+
+    /// 보이는 항목 배치 — `(인덱스, 내용 창 위에서부터의 y, 높이)`. 평소에는 `first`를 창 **위**에 맞추고(아래 끝 항목이 잘릴 수
+    /// 있다), 끝까지 내렸으면(`first` = 상한) 마지막 항목을 창 **아래**에 맞춘다(위 끝 항목이 잘릴 수 있다 · y < 0) → 어느 쪽 끝에서도
+    /// 빈 자리가 남지 않는다.
+    fn layout(&self) -> Vec<(usize, i32, i32)> {
+        let vh = self.view_h();
+        let mf = self.max_first();
+        let first = self.first.min(mf);
+        let (start, mut y) = if mf > 0 && first >= mf {
+            let tail: i32 = self.items[mf..].iter().map(|it| self.item_h(it)).sum();
+            let gap = vh - tail;
+            if gap > 0 {
+                (mf - 1, gap - self.item_h(&self.items[mf - 1]))
+            } else {
+                (mf, 0)
+            }
+        } else {
+            (first, 0)
+        };
+        let mut out = Vec::new();
+        for (i, it) in self.items.iter().enumerate().skip(start) {
+            if y >= vh {
+                break;
+            }
+            let h = self.item_h(it);
+            out.push((i, y, h));
+            y += h;
+        }
+        out
+    }
+
+    /// 지금 스크롤 위치(px · 0 = 처음 · 최대 = 전체 − 내용 창).
+    fn scroll_off(&self) -> i32 {
+        let mf = self.max_first();
+        if mf > 0 && self.first >= mf {
+            (self.total_h() - self.view_h()).max(0)
+        } else {
+            self.items[..self.first.min(mf)]
+                .iter()
+                .map(|it| self.item_h(it))
+                .sum()
+        }
+    }
+
+    /// 가려진 항목이 있는가 — `(위쪽, 아래쪽)`.
+    fn more_hidden(&self) -> (bool, bool) {
+        let off = self.scroll_off();
+        (off > 0, off < self.total_h() - self.view_h())
+    }
+
+    /// `i`가 **온전히** 보이게 `first`를 옮긴다.
     fn ensure_visible(&mut self, i: usize) {
-        let n = self.vis_count().max(1);
+        let was = self.first;
+        let mf = self.max_first();
+        self.first = self.first.min(mf);
         if i < self.first {
             self.first = i;
-        } else if i >= self.first + n {
-            self.first = i + 1 - n;
+        } else {
+            let vh = self.view_h();
+            while self.first < mf {
+                let bottom: i32 = self.items[self.first..=i.min(self.items.len() - 1)]
+                    .iter()
+                    .map(|it| self.item_h(it))
+                    .sum();
+                if bottom <= vh {
+                    break;
+                }
+                self.first += 1;
+            }
         }
-        self.first = self.first.min(self.items.len().saturating_sub(n));
+        if self.first != was {
+            self.wake_bar();
+        }
         self.note_reach();
     }
 
     /// 휠/키로 `rows`행 스크롤(음수 = 위).
     fn scroll_rows(&mut self, rows: i32) {
-        let n = self.vis_count().max(1);
-        let max_first = self.items.len().saturating_sub(n) as i32;
+        let was = self.first;
+        let max_first = self.max_first() as i32;
         self.first = (self.first as i32 + rows).clamp(0, max_first) as usize;
+        if self.first != was {
+            self.wake_bar();
+        }
         self.note_reach();
     }
 
     /// 마지막 **활성** 항목이 보이면 끝 도달 표시(페이지 로딩 신호) — 맨 끝의 비활성 안내 줄("N개 더")은 End가 건너뛰므로 그 앞 항목 기준.
     fn note_reach(&mut self) {
-        let n = self.vis_count().max(1);
         let last_enabled = self
             .items
             .iter()
             .rposition(|it| matches!(it, CtxItem::Item { enabled: true, .. }));
-        if last_enabled.is_some_and(|li| self.first + n > li) {
+        let vh = self.view_h();
+        let seen = last_enabled.is_some_and(|li| {
+            self.layout()
+                .iter()
+                .any(|&(i, y, h)| i == li && y >= 0 && y + h <= vh)
+        });
+        if seen {
             self.reached_end = true;
         }
+    }
+
+    /// 세로 스크롤 표시를 **오버레이 방식**으로(기본 꺼짐 = 늘 보이는 가는 트랙): 스크롤할 때만 가는 막대가 나타났다가
+    /// [`super::scroll::hide_delay_ms`] 뒤 사라지고(호스트가 [`Self::tick`]을 불러야 한다 · 0 = 감추지 않음), 커서를 막대 위에 올리면
+    /// 굵어지며 끌 수 있다.
+    pub fn set_overlay_scrollbar(&mut self, on: bool) {
+        self.overlay_bar = on;
+    }
+
+    /// 오버레이 막대 표시 + 감춤 시각 연기(스크롤 · 막대 접근 · 끌기).
+    fn wake_bar(&mut self) {
+        if !self.overlay_bar {
+            return;
+        }
+        self.bar_on = true;
+        let delay = super::scroll::hide_delay_ms();
+        self.bar_until = (delay != 0)
+            .then(|| std::time::Instant::now() + std::time::Duration::from_millis(delay));
+    }
+
+    /// 시간 처리 — 오버레이 막대의 감춤 시각이 지났으면 감춘다(하위 메뉴 포함). 모습이 바뀌었으면 `true`(다시 그리기).
+    pub fn tick(&mut self, now: std::time::Instant) -> bool {
+        let mut changed = false;
+        if self.bar_on
+            && !self.bar_hot
+            && self.bar_drag.is_none()
+            && self.bar_until.is_some_and(|t| now >= t)
+        {
+            self.bar_on = false;
+            self.bar_until = None;
+            changed = true;
+        }
+        if let Some(c) = &mut self.child {
+            changed |= c.tick(now);
+        }
+        changed
+    }
+
+    /// 다음에 [`Self::tick`]이 필요한 시각(오버레이 막대가 사라질 때 · 없으면 `None`).
+    #[must_use]
+    pub fn next_wake(&self) -> Option<std::time::Instant> {
+        let own = (self.is_open() && self.bar_on && !self.bar_hot && self.bar_drag.is_none())
+            .then_some(self.bar_until)
+            .flatten();
+        let child = self.child.as_ref().and_then(|c| c.next_wake());
+        match (own, child) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// 내용 창(위·아래 여백 제외 · 닫혀 있으면 빈 rect).
+    fn view_rect(&self) -> Rect {
+        let r = self.rect.get();
+        Rect::new(r.x, r.y + self.s(PAD_V), r.w, self.view_h())
+    }
+
+    /// 오버레이 막대의 썸(두께 `w`) — 스크롤이 필요 없으면 `None`.
+    fn bar_thumb(&self, w: i32) -> Option<Rect> {
+        let v = self.view_rect();
+        let range = self.total_h() - v.h;
+        if range <= 0 || v.h <= 0 {
+            return None;
+        }
+        let th = (v.h * v.h / (range + v.h))
+            .max(self.s(BAR_MIN_THUMB))
+            .min(v.h);
+        let y = v.y + self.scroll_off().clamp(0, range) * (v.h - th).max(0) / range;
+        Some(Rect::new(v.right() - self.s(2) - w, y, w, th))
+    }
+
+    /// 커서가 닿으면 막대가 굵어지는 띠(오른쪽 끝).
+    fn bar_strip(&self) -> Rect {
+        let v = self.view_rect();
+        let w = self.s(BAR_THICK + 2);
+        Rect::new(v.right() - w, v.y, w, v.h)
+    }
+
+    /// 썸 위치(위 y)를 스크롤 위치로 — 가장 가까운 `first`.
+    fn drag_bar_to(&mut self, thumb_y: i32) {
+        let v = self.view_rect();
+        let range = self.total_h() - v.h;
+        let Some(t) = self.bar_thumb(self.s(BAR_THICK)) else {
+            return;
+        };
+        let travel = (v.h - t.h).max(1);
+        let off = ((thumb_y - v.y) * range / travel).clamp(0, range);
+        let mf = self.max_first();
+        let mut best = (i32::MAX, 0usize);
+        let mut start = 0;
+        for f in 0..=mf {
+            let at = if f == mf { range } else { start };
+            if (at - off).abs() < best.0 {
+                best = ((at - off).abs(), f);
+            }
+            start += self.item_h(&self.items[f.min(self.items.len() - 1)]);
+        }
+        self.first = best.1;
+        self.wake_bar();
+        self.note_reach();
     }
 
     /// 끝 도달 신호를 한 번 꺼낸다(스크롤·↓·PgDn·End로 마지막 항목이 보인 뒤 `true`).
@@ -459,8 +687,7 @@ impl ContextMenu {
         };
         self.items = items;
         self.fit_w.set(self.fit_w.get().max(text_w));
-        let n = self.vis_count().max(1);
-        self.first = self.first.min(self.items.len().saturating_sub(n));
+        self.first = self.first.min(self.max_first());
         self.hover = self.hover.filter(|h| *h < self.items.len());
         self.reached_end = false;
         let (w, h) = self.size_px();
@@ -520,6 +747,14 @@ impl ContextMenu {
         self.hover = None;
         self.child = None;
         self.child_of = None;
+        self.reset_bar();
+    }
+
+    fn reset_bar(&mut self) {
+        self.bar_on = false;
+        self.bar_hot = false;
+        self.bar_drag = None;
+        self.bar_until = None;
     }
 
     /// **`(x, y)`에 연다** — `host`는 팝업이 넘어가면 안 되는 영역(보통 창 전체).
@@ -549,6 +784,7 @@ impl ContextMenu {
         self.pressed = None;
         self.wheel_acc.set(0);
         self.reached_end = false;
+        self.reset_bar();
         let (w, h) = self.size_px();
         // 경계 접기 — 공용 배치 규칙([`crate::geom::place_popup`]: 정방향 → 반대쪽 → 밀어 넣기). 표면 크기를 이미 알면(앞선
         // paint) 그 안에서 · 모르면 첫 paint의 안전망이 맞춘다.
@@ -618,24 +854,18 @@ impl ContextMenu {
         }
     }
 
-    /// 보이는 항목 범위(`first..first+vis_count`).
+    /// 보이는 항목 범위(끝에서 일부만 보이는 항목 포함 · 행 높이가 같으면 `first..first+vis_count`).
+    #[cfg(test)]
     fn vis_range(&self) -> std::ops::Range<usize> {
-        let n = self.vis_count();
-        let first = self.first.min(self.items.len().saturating_sub(n));
-        first..first + n
+        let l = self.layout();
+        match (l.first(), l.last()) {
+            (Some(a), Some(b)) => a.0..b.0 + 1,
+            _ => 0..0,
+        }
     }
 
     fn size_px(&self) -> (i32, i32) {
-        let mut h = self.s(PAD_V) * 2;
-        for it in &self.items[self.vis_range()] {
-            h += match it {
-                CtxItem::Item { .. } => self.row_h(),
-                CtxItem::Separator => self.s(SEP_H),
-            };
-        }
-        if let Some(n) = self.min_rows {
-            h = h.max(self.s(PAD_V) * 2 + self.row_h() * n as i32);
-        }
+        let h = self.s(PAD_V) * 2 + self.view_h();
         let sc = self.sc_w.get();
         // 세로 스크롤 표시 자리(paint가 라벨 열에서 빼는 6) — 크기에 넣지 않으면 라벨이 그만큼 "넘친" 것으로 계산돼
         // 넘치지도 않은 메뉴 아래에 가로 스크롤 표시가 늘 그려졌다(nexa-dir3 10-03).
@@ -657,28 +887,12 @@ impl ContextMenu {
     /// 인덱스 → 그 행의 rect.
     fn row_rect(&self, idx: usize) -> Option<Rect> {
         let at = self.at.get()?;
-        let mut y = at.y + self.s(PAD_V);
-        let range = self.vis_range();
-        if !range.contains(&idx) {
-            return None; // 스크롤로 가려진 행
-        }
-        for (i, it) in self
-            .items
-            .iter()
-            .enumerate()
-            .take(range.end)
-            .skip(range.start)
-        {
-            let h = match it {
-                CtxItem::Item { .. } => self.row_h(),
-                CtxItem::Separator => self.s(SEP_H),
-            };
-            if i == idx {
-                return Some(Rect::new(at.x, y, self.rect.get().w, h));
-            }
-            y += h;
-        }
-        None
+        let top = at.y + self.s(PAD_V);
+        let vh = self.view_h();
+        // 스크롤로 가려진 행 = `None` · 끝에서 일부만 보이는 행 = 보이는 부분만.
+        let &(_, y, h) = self.layout().iter().find(|&&(i, _, _)| i == idx)?;
+        let (y0, y1) = (y.max(0), (y + h).min(vh));
+        (y1 > y0).then(|| Rect::new(at.x, top + y0, self.rect.get().w, y1 - y0))
     }
 
     /// 어느 행이든(비활성·구분선 포함) 커서 아래 행 — 하위 메뉴 닫기 판정용(nexa-sql 사용자 09-22 "비활성 항목에선 상세 메뉴가 안 닫힘").
@@ -822,6 +1036,47 @@ impl ContextMenu {
         } else {
             self.last_pos
         };
+        // ── 오버레이 스크롤 막대(오른쪽 띠): 커서가 닿으면 드러나 굵어지고 · 누르면 끈다(썸 밖 = 그 자리로) · 띠 위의 클릭은 항목을 고르지 않는다.
+        if self.overlay_bar && self.scrollable() {
+            match *ev {
+                InputEvent::MouseMove { x, y } => {
+                    if let Some(grab) = self.bar_drag {
+                        self.drag_bar_to(y - grab);
+                        return true;
+                    }
+                    let hot = self.bar_strip().contains(Point { x, y });
+                    if hot != self.bar_hot {
+                        self.bar_hot = hot;
+                        self.wake_bar(); // 올라옴 = 드러냄 · 벗어남 = 그때부터 다시 센다.
+                        if hot {
+                            self.hover = None;
+                        }
+                    }
+                    if hot {
+                        return true;
+                    }
+                }
+                InputEvent::MouseDown { x, y, .. } if self.bar_strip().contains(Point { x, y }) => {
+                    if let Some(t) = self.bar_thumb(self.s(BAR_THICK)) {
+                        let grab = if y >= t.y && y < t.y + t.h {
+                            y - t.y
+                        } else {
+                            t.h / 2
+                        };
+                        self.bar_drag = Some(grab);
+                        self.bar_hot = true;
+                        self.drag_bar_to(y - grab);
+                    }
+                    return true;
+                }
+                InputEvent::MouseUp { .. } if self.bar_drag.is_some() => {
+                    self.bar_drag = None;
+                    self.wake_bar();
+                    return true;
+                }
+                _ => {}
+            }
+        }
         // ── 하위 메뉴가 열려 있으면: 그 안의 사건은 자식이 · 부모 행 위 이동은 부모가(다른 항목 = 자식 교체).
         let child_open = self.child.as_ref().is_some_and(|c| c.is_open());
         if child_open {
@@ -1196,8 +1451,9 @@ impl ContextMenu {
         ctx.select_font(FontSlot::Base, false);
         let icon_col = self.icon_col();
         let arrows = self.has_arrows();
-        let mut y = at.y + self.s(PAD_V);
-        let range = self.vis_range();
+        let top = at.y + self.s(PAD_V);
+        let rows = self.layout();
+        let view = Rect::new(r.x, top, r.w, self.view_h());
         // ★ 라벨 열의 가용 폭과 넘침(폭 상한 때문에 실측보다 좁아진 만큼) — 가로 스크롤 범위.
         let label_x0 = r.x + self.s(PAD_H) + icon_col;
         let label_right = r.right()
@@ -1216,30 +1472,24 @@ impl ContextMenu {
             self.hscroll.set(over);
         }
         let hscroll = self.hscroll.get();
-        // 스크롤 표시(행 수 상한을 넘을 때) — 오른쪽 안쪽에 가는 트랙 + 썸(비율).
-        if self.scrollable() {
+        // 스크롤 표시(행 수 상한을 넘을 때 · 종전 방식) — 오른쪽 안쪽에 가는 트랙 + 썸(비율). 오버레이 방식은 항목 뒤에 그린다.
+        if self.scrollable() && !self.overlay_bar {
             let tw = self.s(3);
-            let track = Rect::new(
-                r.right() - self.s(3) - tw,
-                r.y + self.s(PAD_V),
-                tw,
-                r.h - self.s(PAD_V) * 2,
-            );
+            let track = Rect::new(r.right() - self.s(3) - tw, view.y, tw, view.h);
             ctx.fill_rect_alpha(track, theme.text_dim, 0.15);
-            let n = self.items.len().max(1) as f32;
-            let th_h = ((range.len() as f32 / n) * track.h as f32).max(self.s(8) as f32) as i32;
-            let off = ((range.start as f32 / n) * track.h as f32) as i32;
+            let total = self.total_h().max(1) as f32;
+            let th_h = ((view.h as f32 / total) * track.h as f32).max(self.s(8) as f32) as i32;
+            let off = ((self.scroll_off() as f32 / total) * track.h as f32) as i32;
             let th_y = track.y + off.min(track.h - th_h).max(0);
             ctx.fill_round_rect(Rect::new(track.x, th_y, tw, th_h), tw / 2, theme.text_dim);
         }
-        for (i, it) in self
-            .items
-            .iter()
-            .enumerate()
-            .take(range.end)
-            .skip(range.start)
-        {
-            match it {
+        // 끝에서 일부만 보이는 항목이 여백·테두리로 번지지 않게 내용 창으로 자른다(스크롤할 때만).
+        if self.scrollable() {
+            ctx.push_clip(view);
+        }
+        for &(i, rel_y, _) in &rows {
+            let y = top + rel_y;
+            match &self.items[i] {
                 CtxItem::Item {
                     label,
                     enabled,
@@ -1408,7 +1658,6 @@ impl ContextMenu {
                         );
                         super::draw_chevron_right(ctx, a, fg);
                     }
-                    y += h;
                 }
                 CtxItem::Separator => {
                     let h = self.s(SEP_H);
@@ -1416,7 +1665,43 @@ impl ContextMenu {
                         Rect::new(r.x + self.s(6), y + h / 2, r.w - self.s(12), 1),
                         theme.border,
                     );
-                    y += h;
+                }
+            }
+        }
+        if self.scrollable() {
+            ctx.pop_clip();
+            // ★ 더 있음 표시(오버레이 방식 · nexa-dir3 사용자 10-04 "아래에 메뉴가 더 있는지 판단이 안 된다"): 위/아래로 가려진 항목이
+            //   있으면 그쪽 끝에 바탕색 띠 + ∧/∨ — 막대가 숨어 있어도 스크롤할 수 있음을 알린다(끝에 닿으면 사라진다).
+            if self.overlay_bar {
+                let (above, below) = self.more_hidden();
+                let bh = self.s(MORE_H);
+                let half = self.s(4);
+                let cx = view.x + view.w / 2;
+                for (on, band_y, dir) in [(above, view.y, -1), (below, view.bottom() - bh, 1)] {
+                    if !on {
+                        continue;
+                    }
+                    let band = Rect::new(view.x + 1, band_y, view.w - 2, bh);
+                    ctx.fill_rect_alpha(band, theme.panel_bg, 0.9);
+                    let cy = band_y + bh / 2;
+                    ctx.polyline(
+                        &[
+                            (cx - half, cy - dir * half / 2),
+                            (cx, cy + dir * half / 2),
+                            (cx + half, cy - dir * half / 2),
+                        ],
+                        theme.text_dim,
+                        (1.5 * self.scale).max(1.5),
+                    );
+                }
+            }
+            // 오버레이 막대 — 보일 때만 · 커서가 올라갔거나 끄는 중이면 굵게.
+            if self.overlay_bar && self.bar_on {
+                let hot = self.bar_hot || self.bar_drag.is_some();
+                let w = self.s(if hot { BAR_THICK } else { BAR_THIN });
+                if let Some(t) = self.bar_thumb(w) {
+                    let a = if hot { BAR_ALPHA_HOT } else { BAR_ALPHA_IDLE };
+                    ctx.fill_round_rect_alpha(t, self.s(BAR_THIN) / 2, theme.text_dim, a);
                 }
             }
         }
@@ -2143,6 +2428,101 @@ mod tests {
         });
         assert!(m.on_event(&down(390, 290)));
         assert!(!m.is_open());
+    }
+
+    /// 구분선이 섞인 긴 메뉴(nexa-dir3 10-04): 구분선은 행보다 낮아 "보이는 항목 수"로만 세면 끝까지 내렸을 때 내용이 창보다 짧아
+    /// 아래가 비었다 → 처음에는 첫 항목이 창 위에, 끝에서는 마지막 항목이 창 아래에 딱 맞는다(높이는 스크롤과 무관하게 고정).
+    #[test]
+    fn mixed_height_menu_fits_both_ends_without_a_gap() {
+        let mut m = ContextMenu::new();
+        m.set_max_rows(Some(5));
+        // 앞쪽 = 행만 · 뒤쪽 = 구분선이 많다.
+        let mut items: Vec<CtxItem> = (0..6)
+            .map(|i| CtxItem::item(format!("a{i}"), format!("item {i}")))
+            .collect();
+        for i in 0..4 {
+            items.push(CtxItem::Separator);
+            items.push(CtxItem::item(format!("b{i}"), format!("tail {i}")));
+        }
+        let last = items.len() - 1;
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 80);
+        let r = m.rect.get();
+        let (top, bottom) = (r.y + m.s(PAD_V), r.bottom() - m.s(PAD_V));
+        assert_eq!(m.row_rect_of(0).unwrap().y, top, "처음 = 위에 맞춤");
+        m.on_event(&key(Key::End));
+        assert_eq!(m.rect.get(), r, "스크롤해도 팝업 크기는 그대로");
+        let l = m.row_rect_of(last).unwrap();
+        assert_eq!(l.bottom(), bottom, "끝 = 아래에 맞춤(빈 자리 없음)");
+        assert_eq!(l.h, m.row_h(), "마지막 항목은 온전히 보인다");
+        // 위쪽 끝 항목은 일부만 보여도 창 밖으로 나가지 않는다.
+        let first_vis = m.vis_range().start;
+        assert!(m.row_rect_of(first_vis).unwrap().y >= top);
+        // 휠로 끝까지 내려도 같다 · 다시 처음으로.
+        m.on_event(&key(Key::Home));
+        for _ in 0..40 {
+            m.on_event(&InputEvent::Wheel { delta: -120 });
+        }
+        assert_eq!(m.row_rect_of(last).unwrap().bottom(), bottom);
+        for _ in 0..40 {
+            m.on_event(&InputEvent::Wheel { delta: 120 });
+        }
+        assert_eq!(m.row_rect_of(0).unwrap().y, top);
+    }
+
+    /// 오버레이 스크롤 막대(nexa-dir3 10-04): 열렸을 때는 없다 · 스크롤하면 나타난다 · 감춤 시각이 지나면 `tick`이 감춘다 ·
+    /// 커서가 오른쪽 띠에 닿으면 굵어지고 그동안은 감추지 않는다 · 끌면 스크롤된다 · 띠 위의 클릭은 항목을 고르지 않는다.
+    #[test]
+    fn overlay_scrollbar_shows_on_scroll_hides_on_tick_and_drags() {
+        use std::time::{Duration, Instant};
+        let mut m = ContextMenu::new();
+        m.set_max_rows(Some(3));
+        m.set_overlay_scrollbar(true);
+        let items: Vec<CtxItem> = (0..12)
+            .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+            .collect();
+        m.open_at(10, 10, items, Rect::new(0, 0, 800, 600), 80);
+        assert!(
+            !m.bar_on && m.next_wake().is_none(),
+            "열린 직후 = 막대 없음"
+        );
+        // 더 있음 표시: 처음 = 아래만 · 끝 = 위만.
+        assert_eq!(m.more_hidden(), (false, true));
+        m.on_event(&key(Key::End));
+        assert_eq!(m.more_hidden(), (true, false));
+        m.on_event(&key(Key::Home));
+        assert!(m.tick(m.next_wake().unwrap() + Duration::from_millis(1)));
+        m.on_event(&InputEvent::Wheel { delta: -120 });
+        assert!(m.bar_on && !m.bar_hot, "스크롤 = 가는 막대");
+        let until = m.next_wake().expect("감출 시각");
+        assert!(!m.tick(Instant::now()), "아직 아님");
+        assert!(
+            m.tick(until + Duration::from_millis(1)),
+            "시각이 지나면 감춘다"
+        );
+        assert!(!m.bar_on && m.next_wake().is_none());
+        // 오른쪽 띠 접근 = 드러나고 굵게 · 머무는 동안은 감추지 않는다.
+        let strip = m.bar_strip();
+        let (sx, sy) = (strip.x + strip.w / 2, strip.y + 2);
+        assert!(m.on_event(&InputEvent::MouseMove { x: sx, y: sy }));
+        assert!(m.bar_on && m.bar_hot);
+        assert!(m.next_wake().is_none());
+        assert!(!m.tick(Instant::now() + Duration::from_secs(60)));
+        // 띠 아래쪽을 누르고 맨 아래로 끌면 끝까지 · 놓아도 항목은 고르지 않는다.
+        assert!(m.on_event(&down(sx, strip.bottom() - 2)));
+        m.on_event(&InputEvent::MouseMove {
+            x: sx,
+            y: strip.bottom() + 50,
+        });
+        assert_eq!(m.vis_range(), 9..12, "끝까지 끌림");
+        assert!(m.on_event(&up(sx, strip.bottom() + 50)));
+        assert!(m.is_open() && m.take_picked().is_none());
+        // 띠에서 벗어나면 가늘어지고 다시 센다.
+        let r0 = m.row_rect_of(9).unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: r0.x + 5,
+            y: r0.y + 2,
+        });
+        assert!(m.bar_on && !m.bar_hot && m.next_wake().is_some());
     }
 
     #[test]
