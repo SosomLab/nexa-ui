@@ -308,9 +308,157 @@ fn walk_font_dirs() -> Vec<PathBuf> {
 /// 폰트 폴더 재귀 깊이 상한(Fedora `google-noto/` 1단 · Debian `truetype/noto/` 2단 · 여유 1).
 const SCAN_DEPTH: u32 = 3;
 
-/// 패밀리 이름(파일명 어간 정규화 비교)으로 폰트 파일을 찾는다(하위 폴더 포함). 파일명 ≠ 패밀리명인 본은 못 찾는다(정직한 한계).
+/// 패밀리 이름으로 폰트 파일(과 컬렉션 안 얼굴 번호)을 찾는다(하위 폴더 포함): ① 파일명 어간 정규화 비교(빠름 · 종전) →
+/// ② 못 찾으면 **글꼴의 실제 이름**(`name` 테이블의 패밀리 이름 · 현지어 이름 포함 · 컬렉션 안 얼굴마다)으로(152차 —
+/// `gulim.ttc` 안의 "굴림체"/"GulimChe"처럼 파일명과 다른 이름 · 종전에는 못 찾았다).
 #[must_use]
 pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
+    find_by_file_name(family).or_else(|| find_by_face_name(family))
+}
+
+/// 글꼴의 실제 패밀리 이름으로 찾기 — 폰트 파일들의 `name` 테이블 색인(프로세스에서 한 번 · 파일명 탐색이 실패했을 때만 만든다 ·
+/// 파일마다 머리와 `name` 테이블만 읽는다).
+fn find_by_face_name(family: &str) -> Option<(&'static [u8], u32)> {
+    let want = norm(family);
+    if want.is_empty() {
+        return None;
+    }
+    let (path, index) = face_name_index().get(&want)?;
+    map_font(path).map(|bytes| (bytes, *index))
+}
+
+/// 정규화한 패밀리 이름 → (파일, 얼굴 번호). 같은 이름이 여러 파일에 있으면 먼저 나온 것(폴더 순서 · 파일명 순).
+fn face_name_index() -> &'static std::collections::HashMap<String, (PathBuf, u32)> {
+    static INDEX: std::sync::OnceLock<std::collections::HashMap<String, (PathBuf, u32)>> =
+        std::sync::OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut map = std::collections::HashMap::new();
+        for path in font_files() {
+            let ext_ok = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc"));
+            if !ext_ok {
+                continue;
+            }
+            let Ok(mut f) = std::fs::File::open(path) else {
+                continue;
+            };
+            for (i, names) in sfnt_names::face_family_names(&mut f)
+                .into_iter()
+                .enumerate()
+            {
+                for n in names {
+                    let key = norm(&n);
+                    if !key.is_empty() {
+                        map.entry(key).or_insert_with(|| (path.clone(), i as u32));
+                    }
+                }
+            }
+        }
+        map
+    })
+}
+
+/// sfnt(TTF · OTF · TTC) 파일에서 얼굴별 패밀리 이름만 읽는다 — 파일 전체를 메모리에 올리지 않는다(머리 + 표 목록 + `name` 테이블).
+mod sfnt_names {
+    use std::io::{Read, Seek, SeekFrom};
+
+    /// `name` 테이블 크기 상한(망가진 파일 방어).
+    const NAME_CAP: u32 = 1 << 20;
+    /// 컬렉션 안 얼굴 수 상한.
+    const FACE_CAP: u32 = 64;
+
+    fn read_at<R: Read + Seek>(r: &mut R, off: u64, len: usize) -> Option<Vec<u8>> {
+        r.seek(SeekFrom::Start(off)).ok()?;
+        let mut buf = vec![0u8; len];
+        r.read_exact(&mut buf).ok()?;
+        Some(buf)
+    }
+
+    fn be16(b: &[u8], at: usize) -> Option<u16> {
+        Some(u16::from_be_bytes(b.get(at..at + 2)?.try_into().ok()?))
+    }
+
+    fn be32(b: &[u8], at: usize) -> Option<u32> {
+        Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
+    }
+
+    /// 얼굴마다의 패밀리 이름들(nameID 1 = 패밀리 · 16 = 대표 패밀리 · 모든 언어) — 컬렉션이 아니면 얼굴 1개.
+    pub(super) fn face_family_names<R: Read + Seek>(r: &mut R) -> Vec<Vec<String>> {
+        let Some(head) = read_at(r, 0, 12) else {
+            return Vec::new();
+        };
+        let offsets: Vec<u32> = if &head[..4] == b"ttcf" {
+            let n = be32(&head, 8).unwrap_or(0).min(FACE_CAP);
+            let Some(tab) = read_at(r, 12, n as usize * 4) else {
+                return Vec::new();
+            };
+            (0..n as usize).filter_map(|i| be32(&tab, i * 4)).collect()
+        } else {
+            vec![0]
+        };
+        offsets
+            .into_iter()
+            .map(|off| names_of_face(r, u64::from(off)).unwrap_or_default())
+            .collect()
+    }
+
+    fn names_of_face<R: Read + Seek>(r: &mut R, face_off: u64) -> Option<Vec<String>> {
+        let dir = read_at(r, face_off, 12)?;
+        let tables = usize::from(be16(&dir, 4)?);
+        let recs = read_at(r, face_off + 12, tables * 16)?;
+        let rec = recs.chunks_exact(16).find(|c| &c[..4] == b"name")?;
+        let (off, len) = (be32(rec, 8)?, be32(rec, 12)?.min(NAME_CAP));
+        let name = read_at(r, u64::from(off), len as usize)?;
+        Some(parse_name_table(&name))
+    }
+
+    /// `name` 테이블 → 패밀리 이름들(중복 제거 · 나온 순서). 유니코드/Windows 플랫폼 = UTF-16BE · Mac 로만 = ASCII만.
+    pub(super) fn parse_name_table(name: &[u8]) -> Vec<String> {
+        let (Some(count), Some(strings)) = (be16(name, 2), be16(name, 4)) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = Vec::new();
+        for i in 0..usize::from(count) {
+            let at = 6 + i * 12;
+            let (Some(platform), Some(id), Some(len), Some(off)) = (
+                be16(name, at),
+                be16(name, at + 6),
+                be16(name, at + 8),
+                be16(name, at + 10),
+            ) else {
+                break;
+            };
+            if id != 1 && id != 16 {
+                continue;
+            }
+            let start = usize::from(strings) + usize::from(off);
+            let Some(raw) = name.get(start..start + usize::from(len)) else {
+                continue;
+            };
+            let text = match platform {
+                0 | 3 => {
+                    let units: Vec<u16> = raw
+                        .chunks_exact(2)
+                        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                        .collect();
+                    String::from_utf16_lossy(&units)
+                }
+                1 if raw.is_ascii() => String::from_utf8_lossy(raw).into_owned(),
+                _ => continue,
+            };
+            let text = text.trim().to_string();
+            if !text.is_empty() && !out.contains(&text) {
+                out.push(text);
+            }
+        }
+        out
+    }
+}
+
+/// 파일명 어간 정규화 비교로 찾기(종전 [`find_font_by_family`] 본체) — 파일명 ≠ 패밀리명인 본은 못 찾는다.
+fn find_by_file_name(family: &str) -> Option<(&'static [u8], u32)> {
     let want = norm(family);
     if want.is_empty() {
         return None;
@@ -639,6 +787,75 @@ mod tests {
             "고정폭 체인 {:?}에 없는 기호: [{miss_m}]",
             m.chain
         );
+    }
+
+    /// `name` 테이블 읽기(152차 · 순수): 패밀리(1) · 대표 패밀리(16)만 · Windows/유니코드 = UTF-16BE(한글 이름 포함) · 중복 제거 ·
+    /// 망가진 표 = 빈 목록.
+    #[test]
+    fn name_table_yields_family_names_in_every_language() {
+        fn table(recs: &[(u16, u16, &[u8])]) -> Vec<u8> {
+            let strings_at = 6 + recs.len() * 12;
+            let mut head = Vec::new();
+            head.extend_from_slice(&0u16.to_be_bytes());
+            head.extend_from_slice(&(recs.len() as u16).to_be_bytes());
+            head.extend_from_slice(&(strings_at as u16).to_be_bytes());
+            let mut data = Vec::new();
+            for (platform, id, raw) in recs {
+                head.extend_from_slice(&platform.to_be_bytes());
+                head.extend_from_slice(&1u16.to_be_bytes());
+                head.extend_from_slice(&0x412u16.to_be_bytes());
+                head.extend_from_slice(&id.to_be_bytes());
+                head.extend_from_slice(&(raw.len() as u16).to_be_bytes());
+                head.extend_from_slice(&(data.len() as u16).to_be_bytes());
+                data.extend_from_slice(raw);
+            }
+            head.extend_from_slice(&data);
+            head
+        }
+        let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_be_bytes).collect() };
+        let (en, ko, style) = (utf16("GulimChe"), utf16("굴림체"), utf16("Regular"));
+        let t = table(&[
+            (3, 1, &en),
+            (3, 2, &style),
+            (3, 1, &ko),
+            (1, 1, b"GulimChe"),
+            (3, 16, &ko),
+        ]);
+        assert_eq!(
+            sfnt_names::parse_name_table(&t),
+            vec!["GulimChe".to_string(), "굴림체".to_string()]
+        );
+        assert!(sfnt_names::parse_name_table(&t[..7]).is_empty(), "잘린 표");
+        assert!(sfnt_names::parse_name_table(&[]).is_empty());
+        assert_eq!(norm("굴림체"), norm(" 굴림체 "));
+    }
+
+    /// 실제 이름으로 찾기(Windows 실기 · 152차): 파일명(`gulim.ttc`)과 다른 한글 이름 · 컬렉션 안 얼굴을 찾는다 — 굴림체 = 얼굴 1이고
+    /// 굴림(얼굴 0)과 다르다. 그 글꼴이 없는 PC에서는 건너뛴다.
+    #[cfg(windows)]
+    #[test]
+    fn family_lookup_finds_collection_faces_by_real_names() {
+        let Some((gulim, gi)) = find_font_by_family("Gulim") else {
+            eprintln!("gulim.ttc 없음 — 건너뜀");
+            return;
+        };
+        let (che, ci) = find_font_by_family("굴림체").expect("한글 이름");
+        let (che2, ci2) = find_font_by_family("GulimChe").expect("영문 이름");
+        assert_eq!(ci, ci2, "한글 이름 · 영문 이름 = 같은 얼굴");
+        assert_eq!(
+            (che.len(), che2.len()),
+            (gulim.len(), gulim.len()),
+            "같은 파일(gulim.ttc)"
+        );
+        assert_ne!(ci, gi, "굴림체 ≠ 굴림(얼굴 번호가 다르다)");
+        // 찾은 얼굴을 실제로 올리면 그 이름을 가진 글꼴이다.
+        let font = Font::from_static(che, ci).expect("얼굴 로드");
+        let names = font.face_family_names(0);
+        assert!(
+            names.iter().any(|n| n == "GulimChe" || n == "굴림체"),
+            "{names:?}"
+        );
+        assert!(find_font_by_family("이런 글꼴은 없다 xyz").is_none());
     }
 
     /// 시스템 UI 본의 `name` 테이블 패밀리 이름이 읽힌다(OS 래스터라이저 이름 후보 · 영문 이름 포함).
