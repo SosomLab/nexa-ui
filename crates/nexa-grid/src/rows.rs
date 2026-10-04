@@ -1530,7 +1530,9 @@ impl<S: RowSource> VirtualRows<S> {
             if folder_bold {
                 ctx.select_font(crate::draw::FontSlot::List, true, false);
             }
-            ctx.text_opaque(name_x, ty, name_rc, &item.text, fg, bg);
+            // 칸보다 긴 이름 = 끝 말줄임(154차 · dir2 RENDER-010 — 종전 = 글자 중간에서 잘렸다). 굵은 글꼴을 고른 뒤에 잰다.
+            let shown = crate::draw::ellipsize_end(ctx, &item.text, name_rc.w);
+            ctx.text_opaque(name_x, ty, name_rc, &shown, fg, bg);
             if folder_bold {
                 ctx.select_font(crate::draw::FontSlot::List, false, false);
             }
@@ -2373,6 +2375,8 @@ impl<S: RowSource> VirtualRows<S> {
                         }
                     } else {
                         let text = self.src.cell(row, col.key);
+                        // 칸보다 긴 값 = 끝 말줄임(154차 · 왼쪽 안쪽 여백을 뺀 폭 기준 — 좌·우 정렬 공통).
+                        let text = crate::draw::ellipsize_end(ctx, &text, cell.w - self.pad_x);
                         let tx = match col.align {
                             Align::Left => cell.x + self.pad_x,
                             Align::Right => {

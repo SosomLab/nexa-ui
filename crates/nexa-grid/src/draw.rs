@@ -31,6 +31,44 @@ impl FontSlot {
 }
 
 /// 그리드가 쓰는 그리기 어휘(dir2 모델: 불투명 rect + 불투명 배경 텍스트 1회 호출). 기본 구현이 있는 메서드는 테스트 백엔드가 생략해도 된다.
+/// **끝 말줄임**(154차 · dir2 RENDER-010 `SetTrimming` 대응 · 이식 원장 N-02): `text`가 `max_w`(px)에 다 들어가면 그대로,
+/// 넘치면 들어가는 만큼의 앞 글자 + `…`. 글자(char) 단위로 자른다. `…`조차 못 넣는 폭이면 빈 글.
+/// 넘치지 않는 흔한 경우는 폭을 한 번만 재고 끝난다(넘칠 때만 이분 탐색 — 측정 O(log n)).
+pub fn ellipsize_end<'a>(
+    ctx: &mut dyn DrawCtx,
+    text: &'a str,
+    max_w: i32,
+) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
+    if text.is_empty() || ctx.text_width(text) <= max_w {
+        return Cow::Borrowed(text);
+    }
+    let budget = max_w - ctx.text_width("…");
+    if budget < 0 {
+        return Cow::Borrowed("");
+    }
+    // 글자 경계(바이트 자리) — `ends[k]` = 앞 k글자의 끝.
+    let ends: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    // 들어가는 가장 긴 접두사(글자 수)를 이분 탐색 — 폭은 글자 수에 대해 단조 증가로 본다.
+    let (mut lo, mut hi) = (0usize, ends.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if ctx.text_width(&text[..ends[mid]]) <= budget {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut out = String::with_capacity(ends[lo] + 3);
+    out.push_str(&text[..ends[lo]]);
+    out.push('…');
+    Cow::Owned(out)
+}
+
 pub trait DrawCtx {
     /// 폰트 슬롯/장식 선택 — 이후의 `text*`/`text_width`에 적용. 기본 = no-op.
     fn select_font(&mut self, slot: FontSlot, bold: bool, italic: bool) {
@@ -265,6 +303,27 @@ mod tests {
             );
         }
         assert_eq!(rec.images, vec![Rect::new(4, 4, 16, 16)]);
+        // 끝 말줄임(154차): 들어가면 그대로(빌림) · 넘치면 앞 글자 + … · …도 못 넣으면 빈 글 · 한글도 글자 단위.
+        {
+            let mut a = Adapt(&mut rec);
+            // RecordCtx 글자 폭 7 → "abcdefgh" = 56.
+            assert!(matches!(
+                ellipsize_end(&mut a, "abcdefgh", 56),
+                std::borrow::Cow::Borrowed("abcdefgh")
+            ));
+            let cut = ellipsize_end(&mut a, "abcdefgh", 55);
+            assert!(cut.ends_with('…') && cut.len() < "abcdefgh…".len(), "{cut}");
+            assert!(a.text_width(&cut) <= 55, "{cut}");
+            let longer = ellipsize_end(&mut a, "abcdefgh", 55).chars().count();
+            let shorter = ellipsize_end(&mut a, "abcdefgh", 30).chars().count();
+            assert!(shorter < longer);
+            let w1 = a.text_width("…");
+            assert_eq!(ellipsize_end(&mut a, "abcdefgh", w1), "…");
+            assert_eq!(ellipsize_end(&mut a, "abcdefgh", w1 - 1), "");
+            assert_eq!(ellipsize_end(&mut a, "", 0), "");
+            let ko = ellipsize_end(&mut a, "가나다라마바사", 30);
+            assert!(ko.ends_with('…') && a.text_width(&ko) <= 30, "{ko}");
+        }
         // 글리프는 셀 가운데(가로) — RecordCtx 글자 폭 7.
         let g = rec.texts.iter().find(|t| t.3 == "▶").expect("glyph text");
         assert_eq!(g.0, (20 - 7) / 2);
