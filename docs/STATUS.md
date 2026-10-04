@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-04 (142차 · linux · nexa-dir3 상태줄 두 줄)** — StatusBar 칸 안 세로 줄(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-04 (141차 · linux · nexa-dir3 상태줄 글꼴)** — StatusBar 칸 · 조각별 글꼴 크기(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-04 (140차 · mac)** — PosDrop ▾ 배율 하한(수정 · 동작 변경 = 배율 > 1 위치 드롭다운 ▾ — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-04 §22.
 - **2026-10-04 (139차 · mac)** — nexa-ctl `order`(순서/표시 모델 · 추가 · 기존 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-04 §13.

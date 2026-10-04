@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 142 · 128b958 | nexa-ctl | `StatusSeg.rows` + `.rows(...)` — 칸 안 세로 줄(위 → 아래 · 높이 균등 분할 · 줄마다 색/견본/글꼴 크기 · 오른쪽 정렬) | 추가(구조체 필드 · 비어 있으면 종전) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 D/N 칸 두 줄 ↑/↓ — dir3 게이트(10-04 §19 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 141 · 219c85c | nexa-ctl | `StatusSeg.font_delta_c` + `.font_delta(px)` · `StatusPart.font_delta_c` + `.font_delta(px)` — 칸/조각별 글꼴 크기 · 폭은 그 크기로 · 아래쪽 맞춤(× 0.75) | 추가(구조체 필드 · 기본 불변) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 C/M/D/N 값 −1 · 단위 −2 — dir3 게이트(10-04 §18 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 140 · 567838f | nexa-ctl | `PosDrop`(색·HUD 위치 드롭다운)의 ▾도 `draw_chevron_down_scaled(self.base.scale)` — 138차 툴바와 같은 2배 화면 납작 흠 · 시험 posdrop 3 | **수정(동작 변경 · 배율 > 1에서 위치 드롭다운 ▾ 모양)** | 영향 있음(설정 창 위치 드롭다운 ▾) · clippy ✓ · 실기 = 사용자 | PosDrop 쓰면 배율 > 1에서 ▾ 모양 바뀜 · 미검증 | nexa-sql 맥 Retina: 설정 창의 위치 드롭다운(HUD 위치 등) ▾가 굵은 V자인지 · 1배는 같음 |
 | 139 · 7942ee3 | nexa-ctl | 새 모듈 `order` — 순서/표시 모델(문법 `블록:vis[자식:vis,…]\|…` = nexa-dir3 `order.rs`와 같음) · `parse` · `serialize` · `normalize` · `default_order` · `visible_blocks`(기본 숨김 표 = 인자) · 순수 함수 · 시험 3 · `lib.rs` `pub mod order;` | 추가(새 모듈 · 기존 동작 불변) | **사용**(상태바 항목 순서·표시 `statusbar.layout` · nexa-sql `statusbar.rs`·`order_win.rs`) · 시험 748 ✓(nexa-ui 577 ✓) · clippy · fmt ✓ · 자체 시험(격리 홈 · 기동 명령) ✓ · 실기 = 사용자 | 영향 없음(dir3는 자기 `order.rs` 그대로 · 나중에 갈아탈 수 있음) · 미검증 | nexa-sql: 설정 ▸ Window ▸ 상태바 항목 [편집…] → 순서·체크 바꾸면 상태줄 즉시 반영 · 기동 명령 `order.open:statusbar.layout` · `order.dump:` |
@@ -45,6 +46,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 142 | `cargo check`(128b958) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 141 | `cargo check`(219c85c) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(맥 · 협업 세션) | 138 | `cargo test --workspace`(nexa-sql 744 · nexa-ui 571) · clippy `-D warnings` · fmt · Debug/Release 빌드 | 통과 · 화면 = 사용자 확인 중 |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 137 | `cargo check`(47cdb77) | 통과 · 시험은 미실행(미사용) |
