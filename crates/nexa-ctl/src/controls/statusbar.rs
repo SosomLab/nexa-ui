@@ -35,6 +35,8 @@ pub struct StatusPart {
     pub color: Option<Color>,
     /// 폭 견본들 — 조각 폭 = 글과 견본 중 **가장 넓은 것**(값이 바뀌어도 칸 폭이 흔들리지 않게 · 견본이 있으면 글은 오른쪽 정렬).
     pub hints: Vec<String>,
+    /// 이 조각만의 글꼴 크기 증분(논리 px × 100 · 141차 — `None` = 칸의 크기). 값보다 단위를 더 작게 그릴 때.
+    pub font_delta_c: Option<i32>,
 }
 
 impl StatusPart {
@@ -60,6 +62,13 @@ impl StatusPart {
         self.hints = hints;
         self
     }
+
+    /// 이 조각만 글꼴 크기를 바꾼다(체이닝 · 논리 px 증분).
+    #[must_use]
+    pub fn font_delta(mut self, px: f32) -> Self {
+        self.font_delta_c = Some((px * 100.0).round() as i32);
+        self
+    }
 }
 
 /// 상태 바의 칸 하나.
@@ -73,6 +82,8 @@ pub struct StatusSeg {
     pub clickable: bool,
     /// 조각(137차) — 비어 있으면 `text` 한 덩어리(종전).
     pub parts: Vec<StatusPart>,
+    /// 이 칸의 글꼴 크기 증분(논리 px × 100 · 141차 — 0 = 상태줄 글꼴 그대로). 칸 폭도 그 크기로 잰다.
+    pub font_delta_c: i32,
 }
 
 impl StatusSeg {
@@ -84,7 +95,15 @@ impl StatusSeg {
             text: text.into(),
             clickable: true,
             parts: Vec::new(),
+            font_delta_c: 0,
         }
+    }
+
+    /// 이 칸만 글꼴 크기를 바꾼다(체이닝 · 논리 px 증분 — 음수 = 작게).
+    #[must_use]
+    pub fn font_delta(mut self, px: f32) -> Self {
+        self.font_delta_c = (px * 100.0).round() as i32;
+        self
     }
 
     /// 조각으로 이루어진 클릭 가능한 칸(137차) — `text`는 조각 글을 빈칸으로 이은 것.
@@ -100,6 +119,7 @@ impl StatusSeg {
             text,
             clickable: true,
             parts,
+            font_delta_c: 0,
         }
     }
 
@@ -315,13 +335,24 @@ impl Widget for StatusBar {
         let sp = self.s(SEG_PAD);
         let gap = self.s(PART_GAP);
         // 조각 폭 = 글과 견본 중 가장 넓은 것(값이 바뀌어도 칸이 흔들리지 않는다).
+        // 칸마다 글꼴 크기가 다를 수 있다(141차) — 잴 때 · 그릴 때 그 칸의 크기로 고른다.
+        let pick_c = |ctx: &mut dyn DrawCtx, delta_c: i32| {
+            if delta_c == 0 {
+                ctx.select_font(FontSlot::Status, false);
+            } else {
+                ctx.select_font_sized(FontSlot::Status, false, delta_c as f32 / 100.0);
+            }
+        };
+        let pick = |ctx: &mut dyn DrawCtx, seg: &StatusSeg| pick_c(ctx, seg.font_delta_c);
         let part_ws: Vec<Vec<i32>> = self
             .segs
             .iter()
             .map(|s| {
+                pick(ctx, s);
                 s.parts
                     .iter()
                     .map(|p| {
+                        pick_c(ctx, p.font_delta_c.unwrap_or(s.font_delta_c));
                         let mut w = ctx.text_width(&p.text);
                         for h in &p.hints {
                             w = w.max(ctx.text_width(h));
@@ -341,10 +372,12 @@ impl Widget for StatusBar {
                 } else if s.text.is_empty() {
                     0
                 } else {
+                    pick(ctx, s);
                     ctx.text_width(&s.text) + 2 * sp
                 }
             })
             .collect();
+        ctx.select_font(FontSlot::Status, false);
         let mut rects = vec![Rect::new(0, 0, 0, 0); self.segs.len()];
         let left_w = if self.left.is_empty() {
             0
@@ -396,11 +429,27 @@ impl Widget for StatusBar {
             } else {
                 theme.text_dim
             };
+            // 크기가 다른 칸은 그 글꼴로 세로 가운데를 다시 잡는다.
+            pick(ctx, seg);
+            let ty = if seg.font_delta_c == 0 {
+                ty
+            } else {
+                ctx.text_center_y(b.y + 1, b.h - 1)
+            };
             if seg.parts.is_empty() {
                 ctx.text(r.x + sp, ty, *r, &seg.text, color);
             } else {
                 let mut x = r.x + sp;
+                // 조각마다 크기가 다르면 글 아래쪽(밑줄 근처)을 맞춘다 — 작은 단위가 값 옆에 내려앉게.
+                let seg_h = ctx.text_height();
                 for (p, w) in seg.parts.iter().zip(&part_ws[i]) {
+                    let dc = p.font_delta_c.unwrap_or(seg.font_delta_c);
+                    pick_c(ctx, dc);
+                    let ty = if dc == seg.font_delta_c {
+                        ty
+                    } else {
+                        ty + ((seg_h - ctx.text_height()) as f32 * 0.75).round() as i32
+                    };
                     // 견본이 있는 조각(숫자) = 오른쪽 정렬 · 없으면 왼쪽.
                     let tx = if p.hints.is_empty() {
                         x
@@ -412,6 +461,7 @@ impl Widget for StatusBar {
                 }
             }
         }
+        ctx.select_font(FontSlot::Status, false);
         *self.rects.borrow_mut() = rects;
         if !self.left.is_empty() {
             ctx.text(left_x, ty, left_clip, &self.left, theme.text);
@@ -584,6 +634,21 @@ mod tests {
             .unwrap();
         assert_eq!(vx, r.right() - 7 - 5 * 7, "견본 조각 = 오른쪽 정렬");
         assert_eq!(seg("x").text, "N x");
+        // 칸별 글꼴 크기(141차): 증분이 있는 칸은 크기 지정 글꼴을 고른다 · 기본 = 0.
+        assert_eq!(seg("x").font_delta_c, 0);
+        let small = seg("x").font_delta(-1.25);
+        assert_eq!(small.font_delta_c, -125);
+        let mut inv = Invalidations::default();
+        sb.set_segments(vec![small], &mut inv);
+        let mut rec = RecordCtx::with_surface(400, 60);
+        sb.paint(&mut rec, &Theme::dark());
+        assert!(rec.drew_text("N") && sb.seg_rect("net").is_some());
+        // 조각별 크기: 기본 = 칸의 크기 · 지정하면 그 조각만.
+        assert_eq!(StatusPart::new("MB/s").font_delta_c, None);
+        assert_eq!(
+            StatusPart::new("MB/s").font_delta(-2.5).font_delta_c,
+            Some(-250)
+        );
     }
 
     /// 왼쪽이 길면 오른쪽 글은 `x + pad`까지만 밀린다(겹침 허용 · dir2 규약).
