@@ -59,7 +59,7 @@ pub fn icon_for_path(path: &std::path::Path, large: bool) -> Option<RgbaIcon> {
     if !os_icons_enabled() {
         return None;
     }
-    imp::icon_for_path(path, large)
+    imp::icon_for_path(path, large, link_overlay_enabled())
 }
 
 /// OS가 붙이는 종류 이름(예: "파일 폴더" · "Microsoft Word 문서") — 확장자 기반 · 없으면 `None`.
@@ -93,6 +93,9 @@ pub enum IconKey {
     },
     /// 실제 경로(특수 폴더·드라이브 고유 아이콘 · 셸이 경로를 본다).
     Path(PathBuf),
+    /// 실제 경로 — **링크 화살표 없이**(151차 · [`set_link_overlay`]가 켜져 있어도). 앱 실행 별칭(WindowsApps의 `wt.exe` 등 =
+    /// 재분석 지점)처럼 셸이 링크로 보는 실행 파일의 아이콘을 런처 · 툴바에 그릴 때 — 화살표가 붙으면 아이콘이 지저분하다.
+    PathPlain(PathBuf),
 }
 
 /// 조회 결과 — 캐시에 있으면 즉시, 없으면 워커에 맡기고 `Pending`.
@@ -234,7 +237,10 @@ impl IconService {
                                     IconKey::Kind { ext, is_dir } => {
                                         imp::icon_for_kind(ext, *is_dir, large)
                                     }
-                                    IconKey::Path(p) => imp::icon_for_path(p, large),
+                                    IconKey::Path(p) => {
+                                        imp::icon_for_path(p, large, link_overlay_enabled())
+                                    }
+                                    IconKey::PathPlain(p) => imp::icon_for_path(p, large, false),
                                 };
                                 svc.store_icon(key, large, got.map(Arc::new));
                             }
@@ -718,14 +724,10 @@ mod imp {
         query(&w, attrs, flags).and_then(take_icon)
     }
 
-    pub(super) fn icon_for_path(path: &Path, large: bool) -> Option<RgbaIcon> {
+    pub(super) fn icon_for_path(path: &Path, large: bool, overlay: bool) -> Option<RgbaIcon> {
         let flags = SHGFI_ICON
             | if large { 0 } else { SHGFI_SMALLICON }
-            | if super::link_overlay_enabled() {
-                SHGFI_LINKOVERLAY
-            } else {
-                0
-            };
+            | if overlay { SHGFI_LINKOVERLAY } else { 0 };
         let w = wide(path.as_os_str());
         query(&w, 0, flags).and_then(take_icon)
     }
@@ -772,7 +774,7 @@ mod imp {
     pub(super) fn icon_for_kind(_ext: &str, _is_dir: bool, _large: bool) -> Option<RgbaIcon> {
         None
     }
-    pub(super) fn icon_for_path(_path: &Path, _large: bool) -> Option<RgbaIcon> {
+    pub(super) fn icon_for_path(_path: &Path, _large: bool, _overlay: bool) -> Option<RgbaIcon> {
         None
     }
     pub(super) fn kind_name(_ext: &str, _is_dir: bool) -> Option<String> {
