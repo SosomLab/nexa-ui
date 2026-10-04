@@ -84,6 +84,9 @@ pub struct StatusSeg {
     pub parts: Vec<StatusPart>,
     /// 이 칸의 글꼴 크기 증분(논리 px × 100 · 141차 — 0 = 상태줄 글꼴 그대로). 칸 폭도 그 크기로 잰다.
     pub font_delta_c: i32,
+    /// **세로로 쌓는 줄**(142차) — 조각들(`parts`) 오른쪽에 위에서 아래로 한 줄씩(예: `D` 옆에 ↑ 읽기 / ↓ 쓰기 두 줄).
+    /// 칸 높이를 줄 수로 고르게 나눈다 · 줄마다 색 · 폭 견본 · 글꼴 크기(작게 줘야 두 줄이 들어간다). 비어 있으면 종전.
+    pub rows: Vec<StatusPart>,
 }
 
 impl StatusSeg {
@@ -96,7 +99,21 @@ impl StatusSeg {
             clickable: true,
             parts: Vec::new(),
             font_delta_c: 0,
+            rows: Vec::new(),
         }
+    }
+
+    /// 세로로 쌓는 줄을 붙인다(체이닝 · 142차) — `text`에는 줄 글을 빈칸으로 이어 덧붙인다(덤프 · 비교용).
+    #[must_use]
+    pub fn rows(mut self, rows: Vec<StatusPart>) -> Self {
+        for r in &rows {
+            if !self.text.is_empty() {
+                self.text.push(' ');
+            }
+            self.text.push_str(&r.text);
+        }
+        self.rows = rows;
+        self
     }
 
     /// 이 칸만 글꼴 크기를 바꾼다(체이닝 · 논리 px 증분 — 음수 = 작게).
@@ -120,6 +137,7 @@ impl StatusSeg {
             clickable: true,
             parts,
             font_delta_c: 0,
+            rows: Vec::new(),
         }
     }
 
@@ -362,12 +380,32 @@ impl Widget for StatusBar {
                     .collect()
             })
             .collect();
+        // 쌓는 줄의 폭 = 가장 넓은 줄(견본 포함).
+        let rows_w: Vec<i32> = self
+            .segs
+            .iter()
+            .map(|s| {
+                let mut w = 0;
+                for r in &s.rows {
+                    pick_c(ctx, r.font_delta_c.unwrap_or(s.font_delta_c));
+                    w = w.max(ctx.text_width(&r.text));
+                    for h in &r.hints {
+                        w = w.max(ctx.text_width(h));
+                    }
+                }
+                w
+            })
+            .collect();
         let widths: Vec<i32> = self
             .segs
             .iter()
             .zip(&part_ws)
-            .map(|(s, pw)| {
-                if !pw.is_empty() {
+            .zip(&rows_w)
+            .map(|((s, pw), rw)| {
+                if *rw > 0 {
+                    let lead = pw.iter().sum::<i32>() + gap * pw.len() as i32;
+                    lead + rw + 2 * sp
+                } else if !pw.is_empty() {
                     pw.iter().sum::<i32>() + gap * (pw.len() as i32 - 1) + 2 * sp
                 } else if s.text.is_empty() {
                     0
@@ -436,7 +474,7 @@ impl Widget for StatusBar {
             } else {
                 ctx.text_center_y(b.y + 1, b.h - 1)
             };
-            if seg.parts.is_empty() {
+            if seg.parts.is_empty() && seg.rows.is_empty() {
                 ctx.text(r.x + sp, ty, *r, &seg.text, color);
             } else {
                 let mut x = r.x + sp;
@@ -458,6 +496,16 @@ impl Widget for StatusBar {
                     };
                     ctx.text(tx, ty, *r, &p.text, p.color.unwrap_or(color));
                     x += w + gap;
+                }
+                // 쌓는 줄: 칸 높이를 줄 수로 나눠 한 줄씩(오른쪽 정렬 — 숫자 자리가 위아래로 맞는다).
+                let n = seg.rows.len() as i32;
+                for (k, row) in seg.rows.iter().enumerate() {
+                    pick_c(ctx, row.font_delta_c.unwrap_or(seg.font_delta_c));
+                    let band_h = (b.h - 1) / n.max(1);
+                    let by = b.y + 1 + band_h * k as i32;
+                    let ry = ctx.text_center_y(by, band_h);
+                    let tx = x + rows_w[i] - ctx.text_width(&row.text);
+                    ctx.text(tx, ry, *r, &row.text, row.color.unwrap_or(color));
                 }
             }
         }
@@ -643,6 +691,29 @@ mod tests {
         let mut rec = RecordCtx::with_surface(400, 60);
         sb.paint(&mut rec, &Theme::dark());
         assert!(rec.drew_text("N") && sb.seg_rect("net").is_some());
+        // 쌓는 줄(142차): 줄이 위에서 아래로 · 폭 = 앞 조각 + 간격 + 가장 넓은 줄(견본) + 여백 · 오른쪽 정렬.
+        let stacked = StatusSeg::with_parts("disk", vec![StatusPart::new("D")]).rows(vec![
+            StatusPart::new("↑ 1 KB/s").hints(vec!["↑ 999.9 MB/s".into()]),
+            StatusPart::new("↓ 20 KB/s").color(red),
+        ]);
+        assert_eq!(stacked.text, "D ↑ 1 KB/s ↓ 20 KB/s");
+        let mut inv = Invalidations::default();
+        sb.set_segments(vec![stacked], &mut inv);
+        let mut rec = RecordCtx::with_surface(400, 60);
+        sb.paint(&mut rec, &Theme::dark());
+        let r = sb.seg_rect("disk").unwrap();
+        assert_eq!(r.w, 7 + 4 + 12 * 7 + 14);
+        let pos = |t: &str| {
+            rec.texts
+                .iter()
+                .find(|x| x.3 == t)
+                .map(|x| (x.0, x.1))
+                .unwrap()
+        };
+        let (up, down) = (pos("↑ 1 KB/s"), pos("↓ 20 KB/s"));
+        assert!(up.1 < down.1, "위 → 아래");
+        assert_eq!(up.0 + 8 * 7, down.0 + 9 * 7, "오른쪽 끝이 맞는다");
+        assert_eq!(down.0 + 9 * 7, r.right() - 7);
         // 조각별 크기: 기본 = 칸의 크기 · 지정하면 그 조각만.
         assert_eq!(StatusPart::new("MB/s").font_delta_c, None);
         assert_eq!(
