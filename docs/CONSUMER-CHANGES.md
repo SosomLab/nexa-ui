@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 143 · a8442b2 | nexa-ctl | StatusBar 세로 줄(`rows`) 띠 경계 = 누적 비율(종전 정수 나눗셈 → 홀수 높이에서 1 px 남음) | 수정(rows 사용 시 띠 위치 최대 1 px 변화) | 영향 없음(rows 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 두 줄 칸 여백 최소화 — dir3 게이트(10-04 §20 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 142 · 128b958 | nexa-ctl | `StatusSeg.rows` + `.rows(...)` — 칸 안 세로 줄(위 → 아래 · 높이 균등 분할 · 줄마다 색/견본/글꼴 크기 · 오른쪽 정렬) | 추가(구조체 필드 · 비어 있으면 종전) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 D/N 칸 두 줄 ↑/↓ — dir3 게이트(10-04 §19 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 141 · 219c85c | nexa-ctl | `StatusSeg.font_delta_c` + `.font_delta(px)` · `StatusPart.font_delta_c` + `.font_delta(px)` — 칸/조각별 글꼴 크기 · 폭은 그 크기로 · 아래쪽 맞춤(× 0.75) | 추가(구조체 필드 · 기본 불변) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 C/M/D/N 값 −1 · 단위 −2 — dir3 게이트(10-04 §18 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 140 · 567838f | nexa-ctl | `PosDrop`(색·HUD 위치 드롭다운)의 ▾도 `draw_chevron_down_scaled(self.base.scale)` — 138차 툴바와 같은 2배 화면 납작 흠 · 시험 posdrop 3 | **수정(동작 변경 · 배율 > 1에서 위치 드롭다운 ▾ 모양)** | 영향 있음(설정 창 위치 드롭다운 ▾) · clippy ✓ · 실기 = 사용자 | PosDrop 쓰면 배율 > 1에서 ▾ 모양 바뀜 · 미검증 | nexa-sql 맥 Retina: 설정 창의 위치 드롭다운(HUD 위치 등) ▾가 굵은 V자인지 · 1배는 같음 |
@@ -46,6 +47,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 143 | `cargo check`(a8442b2) | 통과 · 시험은 미실행(rows 미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 142 | `cargo check`(128b958) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 141 | `cargo check`(219c85c) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(맥 · 협업 세션) | 138 | `cargo test --workspace`(nexa-sql 744 · nexa-ui 571) · clippy `-D warnings` · fmt · Debug/Release 빌드 | 통과 · 화면 = 사용자 확인 중 |
