@@ -835,6 +835,31 @@ impl Font {
         Self::from_static(Box::leak(data.into_boxed_slice()), index)
     }
 
+    /// 글꼴 파일 원본 바이트 합(폴백 체인 전체 · 같은 버퍼를 나눠 쓰는 face는 한 번만) — 호스트의 메모리 계측용(nexa-dir3 10-04).
+    #[must_use]
+    pub fn data_bytes(&self) -> u64 {
+        let mut seen: Vec<*const u8> = Vec::new();
+        let mut sum = 0u64;
+        for (data, _) in &self.raw {
+            if !seen.contains(&data.as_ptr()) {
+                seen.push(data.as_ptr());
+                sum += data.len() as u64;
+            }
+        }
+        sum
+    }
+
+    /// 글리프 비트맵 캐시가 쥔 바이트(커버리지 버퍼 + 항목 머리 어림) — 호스트의 메모리 계측용. 복제본끼리 캐시를 공유하므로
+    /// 같은 글꼴의 복제본마다 더하면 중복된다.
+    #[must_use]
+    pub fn glyph_cache_bytes(&self) -> u64 {
+        self.cache.lock().map_or(0, |c| {
+            c.values()
+                .map(|g| g.cov.len() as u64 + std::mem::size_of::<GlyphBitmap>() as u64 + 32)
+                .sum()
+        })
+    }
+
     /// 이 폰트가 문자의 글리프를 갖고 있는가(폴백 체인 판단 근거).
     #[must_use]
     pub fn covers(&self, ch: char) -> bool {
