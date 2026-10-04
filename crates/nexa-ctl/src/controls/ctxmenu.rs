@@ -337,6 +337,8 @@ pub struct ContextMenu {
     more_press: Option<(bool, std::time::Instant)>,
     /// 키보드 ↑/↓의 **순환 이동(wrap-around)** 끔(150차 · 기본 false = 순환 — 끝에서 ↓ = 처음 · 처음에서 ↑ = 끝).
     no_wrap: bool,
+    /// **글자 키로 항목 고르기**(155차 · 네이티브 메뉴의 니모닉/첫 글자 이동 대응 · 기본 false = 종전대로 글자 키는 메뉴를 닫는다).
+    char_jump: bool,
 }
 
 /// 오버레이 스크롤 막대 — 가는 폭 · 굵은 폭(커서가 올라갔을 때) · 썸 최소 길이 · 농도([`super::scroll`]의 막대와 같은 값).
@@ -792,6 +794,78 @@ impl ContextMenu {
         !self.no_wrap
     }
 
+    /// **글자 키로 항목 고르기** 켬/끔(155차 · 기본 꺼짐 = 글자 키는 메뉴를 닫는다 — 종전 동작). 켜면 글자 키가
+    /// 그 글자의 항목으로 간다([`Self::char_jump_to`]): 맞는 항목이 하나면 바로 실행(하위 메뉴면 연다) · 여럿이면 다음 것으로
+    /// 이동(되풀이하면 순환) · 없으면 아무 일도 하지 않는다(열린 채). 하위 메뉴도 따른다.
+    pub fn set_char_jump(&mut self, on: bool) {
+        self.char_jump = on;
+    }
+
+    /// 글자 키로 항목 고르기가 켜져 있는가.
+    #[must_use]
+    pub fn char_jump(&self) -> bool {
+        self.char_jump
+    }
+
+    /// 글자 `c`에 맞는 활성 항목들(155차): 라벨에 `&x` 니모닉이 있는 항목이 하나라도 그 글자와 맞으면 그것들만,
+    /// 없으면 라벨의 **첫 글자/숫자**가 맞는 항목들(대소문자 무시).
+    fn char_matches(&self, c: char) -> Vec<usize> {
+        let want: Vec<char> = c.to_lowercase().collect();
+        let same = |x: char| x.to_lowercase().eq(want.iter().copied());
+        let enabled = |i: &usize| matches!(self.items[*i], CtxItem::Item { enabled: true, .. });
+        let label = |i: usize| match &self.items[i] {
+            CtxItem::Item { label, .. } => label.as_str(),
+            CtxItem::Separator => "",
+        };
+        let by_mnemonic: Vec<usize> = (0..self.items.len())
+            .filter(enabled)
+            .filter(|&i| mnemonic_of(label(i)).is_some_and(same))
+            .collect();
+        if !by_mnemonic.is_empty() {
+            return by_mnemonic;
+        }
+        (0..self.items.len())
+            .filter(enabled)
+            .filter(|&i| {
+                label(i)
+                    .chars()
+                    .find(|ch| ch.is_alphanumeric())
+                    .is_some_and(same)
+            })
+            .collect()
+    }
+
+    /// 글자 키 처리(155차) — 처리했으면(맞는 항목이 있으면) `true`.
+    fn char_jump_to(&mut self, c: char) -> bool {
+        let hits = self.char_matches(c);
+        match hits[..] {
+            [] => false,
+            [only] => {
+                self.hover = Some(only);
+                self.ensure_visible(only);
+                if self.items[only].has_children() {
+                    self.open_child(only, true);
+                } else {
+                    if let CtxItem::Item { id, .. } = &self.items[only] {
+                        self.picked = Some(id.clone());
+                    }
+                    self.close();
+                }
+                true
+            }
+            _ => {
+                // 여럿 = 지금 자리 다음 것으로(끝이면 처음으로).
+                let next = self
+                    .hover
+                    .and_then(|h| hits.iter().copied().find(|&i| i > h))
+                    .unwrap_or(hits[0]);
+                self.hover = Some(next);
+                self.ensure_visible(next);
+                true
+            }
+        }
+    }
+
     /// "더 있음" 띠의 자리(위 = `true`) — 오버레이 방식이고 그쪽에 가려진 항목이 있을 때만.
     fn more_band(&self, up: bool) -> Option<Rect> {
         if !self.overlay_bar || !self.scrollable() {
@@ -1052,6 +1126,7 @@ impl ContextMenu {
         let mut c = ContextMenu::new();
         c.set_scale(self.scale);
         c.no_wrap = self.no_wrap;
+        c.char_jump = self.char_jump;
         // 라벨 폭 근사(부모와 같은 근사 · paint가 실측으로 보정).
         let approx = children
             .iter()
@@ -1446,8 +1521,13 @@ impl ContextMenu {
                 }
                 true
             }
-            InputEvent::Char { .. } => {
-                self.close();
+            // 글자 키: 글자 고르기가 켜져 있으면 그 글자의 항목으로(155차) · 아니면(또는 글자/숫자가 아니면) 종전대로 닫는다.
+            InputEvent::Char { c, .. } => {
+                if self.char_jump && c.is_alphanumeric() {
+                    self.char_jump_to(c);
+                } else {
+                    self.close();
+                }
                 true
             }
             _ => false,
@@ -1829,6 +1909,20 @@ impl ContextMenu {
             c.paint(ctx, theme);
         }
     }
+}
+
+/// 라벨의 니모닉 글자(155차): `&x`의 `x`(`&&` = 글자 `&` 자체라 니모닉 아님). 없으면 `None`.
+fn mnemonic_of(label: &str) -> Option<char> {
+    let mut it = label.chars().peekable();
+    while let Some(ch) = it.next() {
+        if ch == '&' {
+            match it.next() {
+                Some('&') | None => {}
+                Some(x) => return Some(x),
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -2738,6 +2832,76 @@ mod tests {
         n.open_at(10, 10, nested(), host(), 100);
         n.open_child(1, true);
         assert!(!n.child_for_test().expect("child").wrap_around());
+    }
+
+    /// 글자 키로 항목 고르기(155차): 기본 = 글자 키가 메뉴를 닫는다(종전) · 켜면 하나뿐인 글자 = 바로 실행 · 여럿 = 순환 이동 ·
+    /// 없는 글자 = 그대로 · 비활성 항목은 건너뛴다 · `&x` 니모닉이 첫 글자보다 우선 · 하위 메뉴도 따른다.
+    #[test]
+    fn char_keys_jump_to_items_when_enabled() {
+        let ch = |c: char| InputEvent::Char { c, now_ms: 0 };
+        let list = || {
+            vec![
+                CtxItem::item("copy", "Copy"),
+                CtxItem::item("cut", "Cut"),
+                CtxItem::Separator,
+                CtxItem::item("paste", "Paste"),
+                CtxItem::maybe("print", "Print", false),
+                CtxItem::item("ren", "이름 바꾸기"),
+            ]
+        };
+        // 기본 = 닫힘.
+        let mut m = ContextMenu::new();
+        assert!(!m.char_jump());
+        m.open_at(10, 10, list(), host(), 100);
+        m.on_event(&ch('c'));
+        assert!(
+            !m.is_open() && m.take_picked().is_none(),
+            "기본 = 글자 키는 닫기"
+        );
+        // 켬: 'p' = Paste 하나뿐(Print는 비활성) → 바로 실행.
+        m.set_char_jump(true);
+        m.open_at(10, 10, list(), host(), 100);
+        m.on_event(&ch('P'));
+        assert_eq!(m.take_picked().as_deref(), Some("paste"));
+        assert!(!m.is_open());
+        // 'c' = Copy · Cut 둘 → 순환 이동(실행 안 함).
+        m.open_at(10, 10, list(), host(), 100);
+        m.on_event(&ch('c'));
+        assert_eq!(m.hovered(), Some(0));
+        m.on_event(&ch('c'));
+        assert_eq!(m.hovered(), Some(1));
+        m.on_event(&ch('c'));
+        assert_eq!(m.hovered(), Some(0), "끝이면 처음으로");
+        assert!(m.is_open() && m.take_picked().is_none());
+        // 없는 글자 = 그대로 열린 채 · 한글 첫 글자도 된다 · 글자가 아닌 키(공백)는 종전대로 닫는다.
+        m.on_event(&ch('z'));
+        assert!(m.is_open() && m.hovered() == Some(0));
+        m.on_event(&ch('이'));
+        assert_eq!(m.take_picked().as_deref(), Some("ren"));
+        m.open_at(10, 10, list(), host(), 100);
+        m.on_event(&ch(' '));
+        assert!(!m.is_open());
+        // 니모닉(&x)이 첫 글자보다 우선 · `&&`는 니모닉이 아니다.
+        assert_eq!(mnemonic_of("Save &As"), Some('A'));
+        assert_eq!(mnemonic_of("R&&D"), None);
+        assert_eq!(mnemonic_of("plain"), None);
+        let mut n = ContextMenu::new();
+        n.set_char_jump(true);
+        n.open_at(
+            10,
+            10,
+            vec![CtxItem::item("a", "Apple"), CtxItem::item("s", "Save &As")],
+            host(),
+            100,
+        );
+        n.on_event(&ch('a'));
+        assert_eq!(n.take_picked().as_deref(), Some("s"), "니모닉 우선");
+        // 하위 메뉴도 따른다.
+        let mut k = ContextMenu::new();
+        k.set_char_jump(true);
+        k.open_at(10, 10, nested(), host(), 100);
+        k.open_child(1, true);
+        assert!(k.child_for_test().expect("child").char_jump());
     }
 
     #[test]
