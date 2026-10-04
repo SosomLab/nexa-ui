@@ -858,6 +858,24 @@ mod tests {
         assert!(find_font_by_family("이런 글꼴은 없다 xyz").is_none());
     }
 
+    /// "Consolas"는 파일명이 `consola.ttf`라 파일명 접두로는 못 찾는다(152차 전 = 못 찾음 → 호출부가 한글 고정폭 D2Coding으로
+    /// 떨어져 **기본값 Consolas와 D2Coding이 같은 글꼴**로 보였다 · nexa-dir3 사용자 10-05). 실제 이름으로 찾으면 Consolas가 잡힌다.
+    #[cfg(windows)]
+    #[test]
+    fn consolas_resolves_to_consolas_not_a_fallback() {
+        assert!(
+            find_by_file_name("Consolas").is_none(),
+            "파일명(consola)으로는 안 잡힌다"
+        );
+        let Some((data, index)) = find_font_by_family("Consolas") else {
+            eprintln!("Consolas 없음 — 건너뜀");
+            return;
+        };
+        let font = Font::from_static(data, index).expect("로드");
+        let names = font.face_family_names(0);
+        assert!(names.iter().any(|n| n == "Consolas"), "{names:?}");
+    }
+
     /// 시스템 UI 본의 `name` 테이블 패밀리 이름이 읽힌다(OS 래스터라이저 이름 후보 · 영문 이름 포함).
     #[test]
     fn face_family_names_include_table_names() {
