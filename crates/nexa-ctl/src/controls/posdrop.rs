@@ -7,7 +7,7 @@
 //! 선택은 [`PositionDropdown::take_changed`] 1회성 보고 — 저장·적용은 호스트 몫.
 
 use super::posgrid::{paint_cell, PositionPicker, CODES};
-use super::{draw_chevron_down, Control, ControlBase};
+use super::{draw_chevron_down_scaled, Control, ControlBase};
 use crate::draw::DrawCtx;
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
@@ -230,7 +230,7 @@ impl Widget for PositionDropdown {
         let drop = self.s(DROP_W);
         let a = self.s(8);
         let area = Rect::new(b.right() - drop + (drop - a) / 2, b.y + (b.h - a) / 2, a, a);
-        draw_chevron_down(
+        draw_chevron_down_scaled(
             ctx,
             area,
             if self.base.enabled {
@@ -238,6 +238,7 @@ impl Widget for PositionDropdown {
             } else {
                 theme.text_dim
             },
+            self.base.scale,
         );
     }
 }

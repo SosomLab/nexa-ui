@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| work/2026-10-04-posdrop-chevron | 2026-10-04 | 2026-10-04 → main(삭제) | 1 | 140차: `PosDrop` ▾ `draw_chevron_down_scaled`(배율 하한 · 138차 후보 해소) — nexa-sql 10-04 후속 |
 | work/2026-10-04-order-model | 2026-10-04 | 2026-10-04 → main(삭제) | 1 | 139차: nexa-ctl `order`(순서/표시 모델 · nexa-dir3 문법 · 두 번째 사용처라 부품으로) — nexa-sql 상태바 항목 편집 |
 | work/2026-10-04-chevron-scale | 2026-10-04 | 2026-10-04 → main(삭제) | 1 | 138차: `draw_chevron_down_scaled`(▾ 하한 × 배율 · 툴바가 사용 · 맥 Retina 납작한 ▾ · 1배 불변 · 후보 posdrop) — nexa-sql 111 |
 | fix/speed-hud-dpi-scale | 2026-10-02 | 2026-10-02 → main(삭제) | 1 | 102차: `SpeedHud` 크기 = 배율 비례(물리 px 높이 → 논리 px 증분 = 배율로 나눔 · 2배율 글꼴 50 % → 75 %) · 시험 `speed_hud_size_scales_with_dpi` — nexa-sql 109차 mac |

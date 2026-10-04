@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-04 (140차 · mac · nexa-sql 후속)** — nexa-ctl `PosDrop` ▾도 `draw_chevron_down_scaled`(138차 툴바와 같은 2배 화면 납작 흠) — journal 10-04 §7.
 - **2026-10-04 (139차 · mac · nexa-sql 상태바 항목 편집)** — nexa-ctl `order` 모듈(순서/표시 모델 · dir3 문법 · parse/serialize/normalize/default_order/visible_blocks · 시험 3) — journal 10-04 §6.
 - **2026-10-04 (138차 · mac · nexa-sql 사용자 지적)** — nexa-ctl `draw_chevron_down_scaled`(▾ 하한 × 배율 · 툴바가 사용 · 맥 Retina 납작한 ▾ 수정 · 1배 불변) — journal 10-04 §5.
 - **2026-10-04 (137차 · linux · nexa-dir3 상태줄 약어/색)** — nexa-ctl `StatusPart` · `StatusSeg::with_parts`(조각별 색 · 견본 폭 · 기본 불변) · 시험 +1 — journal 10-04 §4.
