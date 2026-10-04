@@ -16,6 +16,8 @@ pub enum ImageKind {
     Gif,
     Bmp,
     Webp,
+    /// Windows 아이콘(.ico · .cur — 153차): 가장 큰 그림 한 장을 푼다(PNG 내장 · DIB 1/4/8/24/32 bpp + AND 마스크).
+    Ico,
     Unknown,
 }
 
@@ -27,6 +29,7 @@ impl ImageKind {
             ImageKind::Gif => "GIF",
             ImageKind::Bmp => "BMP",
             ImageKind::Webp => "WebP",
+            ImageKind::Ico => "ICO",
             ImageKind::Unknown => "",
         }
     }
@@ -35,7 +38,7 @@ impl ImageKind {
     pub fn decodable(self) -> bool {
         matches!(
             self,
-            ImageKind::Png | ImageKind::Gif | ImageKind::Bmp | ImageKind::Jpeg
+            ImageKind::Png | ImageKind::Gif | ImageKind::Bmp | ImageKind::Jpeg | ImageKind::Ico
         )
     }
 
@@ -47,6 +50,7 @@ impl ImageKind {
             ImageKind::Gif => "gif",
             ImageKind::Bmp => "bmp",
             ImageKind::Webp => "webp",
+            ImageKind::Ico => "ico",
             ImageKind::Unknown => "bin",
         }
     }
@@ -64,6 +68,8 @@ pub fn sniff(b: &[u8]) -> ImageKind {
         ImageKind::Bmp
     } else if b.len() >= 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" {
         ImageKind::Webp
+    } else if ico_entries(b).is_some() {
+        ImageKind::Ico
     } else {
         ImageKind::Unknown
     }
@@ -77,6 +83,7 @@ pub fn decode(b: &[u8], max_pixels: usize) -> Result<IconImage, String> {
         ImageKind::Gif => decode_gif(b, max_pixels),
         ImageKind::Jpeg => crate::jpeg::decode(b, &|w, h| check_size(w, h, max_pixels)),
         ImageKind::Webp => Err("WebP preview is not supported (save to file to view)".into()),
+        ImageKind::Ico => decode_ico(b, max_pixels),
         ImageKind::Unknown => Err("not an image".into()),
     }
 }
@@ -95,6 +102,9 @@ pub fn dimensions(b: &[u8]) -> Option<(u32, u32)> {
             Some((w.unsigned_abs(), h.unsigned_abs()))
         }
         ImageKind::Jpeg => crate::jpeg::dimensions(b),
+        ImageKind::Ico => ico_entries(b)
+            .and_then(|e| ico_best(&e))
+            .map(|e| (e.w, e.h)),
         _ => None,
     }
 }
@@ -389,6 +399,155 @@ fn decode_bmp(b: &[u8], max_pixels: usize) -> Result<IconImage, String> {
     Ok(IconImage { w: wu, h: hu, rgba })
 }
 
+// ───────────────────────────── ICO(가장 큰 그림 한 장)
+
+/// 아이콘 디렉터리 항목.
+#[derive(Clone, Copy)]
+struct IcoEntry {
+    w: u32,
+    h: u32,
+    bpp: u16,
+    off: usize,
+    len: usize,
+}
+
+/// ICONDIR 해석 — 아이콘(.ico = 종류 1) · 커서(.cur = 종류 2). **엄격히** 본다(임의의 이진 데이터를 아이콘으로 오판하지 않게 —
+/// 앞 4바이트가 `00 00 01 00`인 데이터는 흔하다): 항목 1~64개 · 예약 바이트 0 · 항목 데이터가 디렉터리 뒤 · 파일 안.
+fn ico_entries(b: &[u8]) -> Option<Vec<IcoEntry>> {
+    if b.len() < 6 + 16 || b[0] != 0 || b[1] != 0 || b[3] != 0 || !(b[2] == 1 || b[2] == 2) {
+        return None;
+    }
+    let n = usize::from(u16::from_le_bytes([b[4], b[5]]));
+    if !(1..=64).contains(&n) || b.len() < 6 + n * 16 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let e = &b[6 + i * 16..6 + (i + 1) * 16];
+        if e[3] != 0 {
+            return None;
+        }
+        let len = u32::from_le_bytes([e[8], e[9], e[10], e[11]]) as usize;
+        let off = u32::from_le_bytes([e[12], e[13], e[14], e[15]]) as usize;
+        if off < 6 + n * 16 || len < 16 || off.checked_add(len)? > b.len() {
+            return None;
+        }
+        out.push(IcoEntry {
+            w: if e[0] == 0 { 256 } else { u32::from(e[0]) },
+            h: if e[1] == 0 { 256 } else { u32::from(e[1]) },
+            // 커서는 이 자리가 핫스폿이라 깊이가 아니다 — 고를 때의 동점 처리에만 쓴다.
+            bpp: if b[2] == 1 {
+                u16::from_le_bytes([e[6], e[7]])
+            } else {
+                0
+            },
+            off,
+            len,
+        });
+    }
+    Some(out)
+}
+
+/// 가장 큰 그림(넓이 → 색 깊이 순).
+fn ico_best(entries: &[IcoEntry]) -> Option<IcoEntry> {
+    entries.iter().copied().max_by_key(|e| (e.w * e.h, e.bpp))
+}
+
+fn decode_ico(b: &[u8], max_pixels: usize) -> Result<IconImage, String> {
+    let e = ico_entries(b)
+        .and_then(|v| ico_best(&v))
+        .ok_or("ico: bad directory")?;
+    let data = &b[e.off..e.off + e.len];
+    if sniff(data) == ImageKind::Png {
+        return decode_png(data, max_pixels);
+    }
+    decode_ico_dib(data, max_pixels)
+}
+
+/// 아이콘 안의 DIB — 파일 머리 없는 BITMAPINFOHEADER + (팔레트) + 색 그림(XOR) + 1비트 투명 마스크(AND · 1 = 투명).
+/// 높이 칸은 두 그림을 합친 값(실제 높이 × 2) · 아래에서 위로 · 32 bpp는 알파가 하나라도 있으면 알파를 쓰고 없으면 마스크를 쓴다.
+fn decode_ico_dib(d: &[u8], max_pixels: usize) -> Result<IconImage, String> {
+    if d.len() < 40 {
+        return Err("ico: too short".into());
+    }
+    let le32 = |at: usize| u32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]]);
+    let hsize = le32(0) as usize;
+    let w = i32::from_le_bytes([d[4], d[5], d[6], d[7]]).unsigned_abs();
+    let h2 = i32::from_le_bytes([d[8], d[9], d[10], d[11]]).unsigned_abs();
+    let bpp = u16::from_le_bytes([d[14], d[15]]);
+    let comp = le32(16);
+    if hsize < 40 || comp != 0 {
+        return Err("ico: unsupported bitmap header".into());
+    }
+    let h = h2 / 2;
+    check_size(w, h, max_pixels)?;
+    let (wu, hu) = (w as usize, h as usize);
+    let pal_n = if bpp <= 8 {
+        match le32(32) as usize {
+            0 => 1usize << bpp,
+            n => n,
+        }
+    } else {
+        0
+    };
+    let pal = hsize;
+    let xor = pal + pal_n * 4;
+    let stride = (wu * usize::from(bpp)).div_ceil(32) * 4;
+    let mask = xor + stride * hu;
+    let mask_stride = wu.div_ceil(32) * 4;
+    if mask > d.len() {
+        return Err("ico: pixel data too short".into());
+    }
+    // 마스크가 잘려 있으면(일부 도구가 32 bpp에서 생략) 없는 것으로 본다.
+    let has_mask = mask + mask_stride * hu <= d.len();
+    let mut rgba = Vec::with_capacity(wu * hu * 4);
+    for row in 0..hu {
+        let src = hu - 1 - row;
+        let line = &d[xor + src * stride..xor + (src + 1) * stride];
+        for x in 0..wu {
+            let mut px = match bpp {
+                32 => [
+                    line[x * 4 + 2],
+                    line[x * 4 + 1],
+                    line[x * 4],
+                    line[x * 4 + 3],
+                ],
+                24 => [line[x * 3 + 2], line[x * 3 + 1], line[x * 3], 255],
+                8 | 4 | 1 => {
+                    let idx = usize::from(match bpp {
+                        8 => line[x],
+                        4 => (line[x / 2] >> (if x % 2 == 0 { 4 } else { 0 })) & 0x0f,
+                        _ => (line[x / 8] >> (7 - x % 8)) & 1,
+                    });
+                    if idx >= pal_n {
+                        return Err("ico: palette index".into());
+                    }
+                    let p = pal + idx * 4;
+                    [d[p + 2], d[p + 1], d[p], 255]
+                }
+                _ => return Err("ico: bit depth".into()),
+            };
+            if bpp != 32 && has_mask {
+                let m = d[mask + src * mask_stride + x / 8];
+                if (m >> (7 - x % 8)) & 1 == 1 {
+                    px[3] = 0;
+                }
+            }
+            rgba.extend_from_slice(&px);
+        }
+    }
+    // 32 bpp인데 알파가 전부 0 = 알파를 안 쓴 옛 아이콘 → 마스크(없으면 불투명)로.
+    if bpp == 32 && rgba.chunks_exact(4).all(|p| p[3] == 0) {
+        for (i, p) in rgba.chunks_exact_mut(4).enumerate() {
+            let (x, src) = (i % wu, hu - 1 - i / wu);
+            let transparent =
+                has_mask && (d[mask + src * mask_stride + x / 8] >> (7 - x % 8)) & 1 == 1;
+            p[3] = if transparent { 0 } else { 255 };
+        }
+    }
+    Ok(IconImage { w, h, rgba })
+}
+
 // ───────────────────────────── GIF(첫 프레임)
 
 fn decode_gif(b: &[u8], max_pixels: usize) -> Result<IconImage, String> {
@@ -608,6 +767,96 @@ fn lzw_decode(data: &[u8], min_code: u8, count: usize) -> Result<Vec<u8>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 시험용 아이콘 파일: 항목들 `(폭, 높이, 깊이, 데이터)`.
+    fn ico(entries: &[(u8, u8, u16, Vec<u8>)]) -> Vec<u8> {
+        let mut out = vec![0, 0, 1, 0];
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        let mut off = 6 + entries.len() * 16;
+        for (w, h, bpp, data) in entries {
+            out.extend_from_slice(&[*w, *h, 0, 0, 1, 0]);
+            out.extend_from_slice(&bpp.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(off as u32).to_le_bytes());
+            off += data.len();
+        }
+        for (_, _, _, data) in entries {
+            out.extend_from_slice(data);
+        }
+        out
+    }
+
+    /// 아이콘 안 DIB: 머리(높이 = 2배) + 팔레트 + 색 그림(아래 → 위) + 마스크.
+    fn dib(w: u32, h: u32, bpp: u16, pal: &[[u8; 4]], xor: &[u8], and: &[u8]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&40u32.to_le_bytes());
+        d.extend_from_slice(&(w as i32).to_le_bytes());
+        d.extend_from_slice(&((h * 2) as i32).to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&bpp.to_le_bytes());
+        d.extend_from_slice(&[0; 24]);
+        for c in pal {
+            d.extend_from_slice(c);
+        }
+        d.extend_from_slice(xor);
+        d.extend_from_slice(and);
+        d
+    }
+
+    /// ICO(153차): 가장 큰 항목을 고른다 · 32 bpp = 알파 그대로(BGRA → RGBA · 아래에서 위로) · 24 bpp = AND 마스크가 투명 ·
+    /// 1 bpp 팔레트 · PNG 내장 항목 · 크기만 빨리 · 임의의 `00 00 01 00` 데이터는 아이콘으로 보지 않는다.
+    #[test]
+    fn ico_picks_largest_and_decodes_dib_and_png_entries() {
+        // 2×2 32 bpp: 아래 줄 = 파랑(반투명) · 초록 / 위 줄 = 빨강 · 흰색.
+        let xor32 = [
+            255, 0, 0, 128, 0, 255, 0, 255, // 아래 줄(B G R A)
+            0, 0, 255, 255, 255, 255, 255, 255, // 위 줄
+        ];
+        let big = dib(2, 2, 32, &[], &xor32, &[0; 8]);
+        // 1×1 24 bpp(작은 항목 — 고르지 않는다).
+        let small = dib(1, 1, 24, &[], &[9, 9, 9, 0], &[0; 4]);
+        let file = ico(&[(1, 1, 24, small), (2, 2, 32, big)]);
+        assert_eq!(sniff(&file), ImageKind::Ico);
+        assert_eq!(dimensions(&file), Some((2, 2)));
+        let img = decode(&file, 1 << 20).expect("ico");
+        assert_eq!((img.w, img.h), (2, 2));
+        assert_eq!(
+            img.rgba,
+            [255, 0, 0, 255, 255, 255, 255, 255, 0, 0, 255, 128, 0, 255, 0, 255]
+        );
+        // 2×1 24 bpp + 마스크(왼쪽 픽셀 투명).
+        let d24 = dib(
+            2,
+            1,
+            24,
+            &[],
+            &[1, 2, 3, 4, 5, 6, 0, 0],
+            &[0b1000_0000, 0, 0, 0],
+        );
+        let img = decode(&ico(&[(2, 1, 24, d24)]), 1 << 20).expect("24 bpp");
+        assert_eq!(img.rgba, [3, 2, 1, 0, 6, 5, 4, 255]);
+        // 2×1 1 bpp 팔레트(0 = 검정 · 1 = 흰색).
+        let d1 = dib(
+            2,
+            1,
+            1,
+            &[[0, 0, 0, 0], [255, 255, 255, 0]],
+            &[0b0100_0000, 0, 0, 0],
+            &[0; 4],
+        );
+        let img = decode(&ico(&[(2, 1, 1, d1)]), 1 << 20).expect("1 bpp");
+        assert_eq!(img.rgba, [0, 0, 0, 255, 255, 255, 255, 255]);
+        // PNG 내장 항목(3×2).
+        let img = decode(&ico(&[(3, 2, 32, PNG_RGB.to_vec())]), 1 << 20).expect("png entry");
+        assert_eq!((img.w, img.h), (3, 2));
+        // 아이콘이 아닌 것: 머리만 같은 임의 데이터 · 항목이 파일 밖 · 빈 데이터.
+        assert_eq!(sniff(&[0, 0, 1, 0, 1, 0, 0, 0, 0, 0]), ImageKind::Unknown);
+        let mut broken = ico(&[(1, 1, 24, vec![0; 44])]);
+        broken.truncate(broken.len() - 10);
+        assert_eq!(sniff(&broken), ImageKind::Unknown);
+        assert_eq!(sniff(&[0, 0, 1, 0]), ImageKind::Unknown);
+        assert!(ImageKind::Ico.decodable() && ImageKind::Ico.ext() == "ico");
+    }
 
     const PNG_RGB: &[u8] = &[
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
