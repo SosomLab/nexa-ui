@@ -111,6 +111,8 @@ pub struct MenuBar {
     radios: HashSet<String>,
     /// 메뉴별 단축키 열 폭 실측 캐시(측정 전엔 추정치).
     measured_sc: RefCell<Vec<i32>>,
+    /// ↑/↓ 순환 이동 끔(156차 · 기본 false = 순환).
+    no_wrap: bool,
 }
 
 impl MenuBar {
@@ -134,7 +136,21 @@ impl MenuBar {
             checks: HashMap::new(),
             radios: HashSet::new(),
             measured_sc: RefCell::new(Vec::new()),
+            no_wrap: false,
         }
+    }
+
+    /// 드롭다운 · 하위 메뉴의 ↑/↓ **순환 이동(wrap-around)** 켬/끔(156차 · 기본 켜짐 = 종전: 끝에서 ↓ = 처음 · 처음에서 ↑ = 끝).
+    /// 끄면 양 끝에서 멈춘다([`crate::controls::ContextMenu::set_wrap_around`]와 같은 뜻 — 호스트가 한 설정으로 둘을 맞춘다).
+    /// ←/→ 의 메뉴 전환(파일 ↔ 편집 …)은 늘 순환한다.
+    pub fn set_wrap_around(&mut self, on: bool) {
+        self.no_wrap = !on;
+    }
+
+    /// 순환 이동이 켜져 있는가.
+    #[must_use]
+    pub fn wrap_around(&self) -> bool {
+        !self.no_wrap
     }
 
     /// 항목의 단축키 표기(`""` = 지움). 키맵 변경 때 호스트가 다시 부른다 — 메뉴를 다시 만들지 않는다.
@@ -449,8 +465,7 @@ impl MenuBar {
         Some(match (pos, down) {
             (None, true) => idxs[0],
             (None, false) => *idxs.last()?,
-            (Some(p), true) => idxs[(p + 1) % idxs.len()],
-            (Some(p), false) => idxs[(p + idxs.len() - 1) % idxs.len()],
+            (Some(p), down) => idxs[step_index(p, idxs.len(), down, !self.no_wrap)],
         })
     }
 
@@ -542,8 +557,7 @@ impl MenuBar {
         Some(match (pos, down) {
             (None, true) => idxs[0],
             (None, false) => *idxs.last()?,
-            (Some(p), true) => idxs[(p + 1) % idxs.len()],
-            (Some(p), false) => idxs[(p + idxs.len() - 1) % idxs.len()],
+            (Some(p), down) => idxs[step_index(p, idxs.len(), down, !self.no_wrap)],
         })
     }
 
@@ -559,6 +573,16 @@ impl MenuBar {
         } else {
             p
         }
+    }
+}
+
+/// 고를 수 있는 항목 `n`개 중 `p`번째에서 한 칸 이동한 자리(순수 · 156차): 순환이면 끝 ↔ 처음으로 넘고, 아니면 양 끝에서 멈춘다.
+fn step_index(p: usize, n: usize, down: bool, wrap: bool) -> usize {
+    match (down, wrap) {
+        (true, true) => (p + 1) % n,
+        (false, true) => (p + n - 1) % n,
+        (true, false) => (p + 1).min(n - 1),
+        (false, false) => p.saturating_sub(1),
     }
 }
 
@@ -974,6 +998,44 @@ mod tests {
         assert!(!m.is_open(), "선택 = 닫힘");
         assert_eq!(m.take_picked().as_deref(), Some("gallery"));
         assert!(m.take_picked().is_none(), "1회성");
+    }
+
+    /// 순환 이동 스위치(156차): 기본 = 끝에서 ↓ = 처음 · 끄면 양 끝에서 멈춘다.
+    #[test]
+    fn keyboard_wrap_around_can_be_switched_off() {
+        assert_eq!(step_index(2, 3, true, true), 0);
+        assert_eq!(step_index(0, 3, false, true), 2);
+        assert_eq!(step_index(2, 3, true, false), 2);
+        assert_eq!(step_index(0, 3, false, false), 0);
+        assert_eq!(step_index(1, 3, true, false), 2);
+        assert_eq!(step_index(1, 3, false, false), 0);
+        let (mut m, mut inv) = bar();
+        assert!(m.wrap_around(), "기본 = 순환");
+        let l0 = m.label_rect(0);
+        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        // 항목 3개(설정 · 갤러리 · About): ↓×4 = 한 바퀴 돌아 첫 항목.
+        for _ in 0..4 {
+            m.on_event(&key(Key::Down), &mut inv);
+        }
+        m.on_event(&key(Key::Enter), &mut inv);
+        let first = m.take_picked();
+        assert!(first.is_some());
+        // 끔: ↓를 많이 눌러도 마지막(About)에서 멈춘다 · ↑를 많이 눌러도 첫 항목에서 멈춘다.
+        m.set_wrap_around(false);
+        assert!(!m.wrap_around());
+        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        for _ in 0..9 {
+            m.on_event(&key(Key::Down), &mut inv);
+        }
+        m.on_event(&key(Key::Enter), &mut inv);
+        assert_eq!(m.take_picked().as_deref(), Some("about"), "끝에서 멈춤");
+        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        m.on_event(&key(Key::Down), &mut inv);
+        for _ in 0..9 {
+            m.on_event(&key(Key::Up), &mut inv);
+        }
+        m.on_event(&key(Key::Enter), &mut inv);
+        assert_eq!(m.take_picked(), first, "처음에서 멈춤");
     }
 
     #[test]
