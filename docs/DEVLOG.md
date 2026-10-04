@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-04 (144차 · linux · nexa-dir3 전송 닫기 버튼)** — nexa-ctl `Button::tone()` 조회(동작 변화 없음) — journal 10-04 §11.
 - **2026-10-04 (143차 · linux · nexa-dir3 두 줄 여백)** — nexa-ctl StatusBar 세로 줄 띠를 누적 비율로(홀수 높이 1 px 남김 해소) — journal 10-04 §10.
 - **2026-10-04 (142차 · linux · nexa-dir3 상태줄 두 줄)** — nexa-ctl `StatusSeg.rows`(칸 안 세로 줄 · 높이 균등 분할 · 비어 있으면 종전) — journal 10-04 §9.
 - **2026-10-04 (141차 · linux · nexa-dir3 상태줄 글꼴)** — nexa-ctl `StatusSeg.font_delta` · `StatusPart.font_delta`(칸 · 조각별 글꼴 크기 · 아래쪽 맞춤 · 기본 불변) — journal 10-04 §8.

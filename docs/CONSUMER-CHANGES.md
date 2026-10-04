@@ -9,6 +9,7 @@
 
 | 차수 · 커밋 | 크레이트 | 변경 요약 | 종류 | nexa-sql 영향 · 검증 상태 | nexa-dir3 영향 · 검증 상태 | 검증 방법(명령 · 화면에서 볼 곳) |
 | --- | --- | --- | --- | --- | --- | --- |
+| 144 · c393924 | nexa-ctl | `Button::tone()` — 지금 색조 조회 | 추가(조회 · 동작 불변) | 영향 없음 · `cargo check` 통과(10-04 · 시험 미실행) | 전송 완료 [닫기 (N)] 강조 버튼 시험 — dir3 게이트(10-04 §21 · full) | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 143 · a8442b2 | nexa-ctl | StatusBar 세로 줄(`rows`) 띠 경계 = 누적 비율(종전 정수 나눗셈 → 홀수 높이에서 1 px 남음) | 수정(rows 사용 시 띠 위치 최대 1 px 변화) | 영향 없음(rows 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 두 줄 칸 여백 최소화 — dir3 게이트(10-04 §20 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 142 · 128b958 | nexa-ctl | `StatusSeg.rows` + `.rows(...)` — 칸 안 세로 줄(위 → 아래 · 높이 균등 분할 · 줄마다 색/견본/글꼴 크기 · 오른쪽 정렬) | 추가(구조체 필드 · 비어 있으면 종전) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 D/N 칸 두 줄 ↑/↓ — dir3 게이트(10-04 §19 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
 | 141 · 219c85c | nexa-ctl | `StatusSeg.font_delta_c` + `.font_delta(px)` · `StatusPart.font_delta_c` + `.font_delta(px)` — 칸/조각별 글꼴 크기 · 폭은 그 크기로 · 아래쪽 맞춤(× 0.75) | 추가(구조체 필드 · 기본 불변) | 영향 없음(StatusBar 칸 미사용) · `cargo check` 통과(10-04 · 시험 미실행) | 상태줄 C/M/D/N 값 −1 · 단위 −2 — dir3 게이트(10-04 §18 · full) · 화면 판정 대기 | nexa-sql: 화면 변화 없음(확인 불필요) |
@@ -47,6 +48,7 @@
 
 | 날짜 | 소비자 | 차수 | 한 것 | 결과 |
 | --- | --- | --- | --- | --- |
+| 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 144 | `cargo check`(c393924) | 통과 · 시험은 미실행(조회 추가만) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 143 | `cargo check`(a8442b2) | 통과 · 시험은 미실행(rows 미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 142 | `cargo check`(128b958) | 통과 · 시험은 미실행(미사용) |
 | 10-04 | nexa-sql(nexa-dir3 Linux 개발 세션) | 141 | `cargo check`(219c85c) | 통과 · 시험은 미실행(미사용) |
