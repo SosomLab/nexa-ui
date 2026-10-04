@@ -227,6 +227,12 @@ impl Button {
         self
     }
 
+    /// 지금 색조(144차 — 호스트 시험 · 덤프용).
+    #[must_use]
+    pub fn tone(&self) -> ButtonTone {
+        self.tone
+    }
+
     /// ★ 톤 변경(09-04 — 2단계 확인 무장 표시처럼 상태에 따라 바뀌는 버튼).
     pub fn set_tone(&mut self, tone: ButtonTone) {
         self.tone = tone;
