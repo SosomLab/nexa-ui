@@ -125,6 +125,9 @@ pub struct StatusSeg {
     /// **세로로 쌓는 줄**(142차) — 조각들(`parts`) 오른쪽에 위에서 아래로 한 줄씩(예: `D` 옆에 ↑ 읽기 / ↓ 쓰기 두 줄).
     /// 칸 높이를 줄 수로 고르게 나눈다 · 줄마다 색 · 폭 견본 · 글꼴 크기(작게 줘야 두 줄이 들어간다). 비어 있으면 종전.
     pub rows: Vec<StatusPart>,
+    /// 칸 바탕에 옅게 얹는 색(149차 · 경고 · 위험 같은 **알림** — `None` = 없음)과 그 농도(%).
+    pub tint: Option<Color>,
+    pub tint_pct: u8,
 }
 
 impl StatusSeg {
@@ -138,6 +141,8 @@ impl StatusSeg {
             parts: Vec::new(),
             font_delta_c: 0,
             rows: Vec::new(),
+            tint: None,
+            tint_pct: 0,
         }
     }
 
@@ -157,6 +162,14 @@ impl StatusSeg {
             self.text.push_str(&r.text);
         }
         self.rows = rows;
+        self
+    }
+
+    /// 칸 바탕에 색을 옅게 얹는다(체이닝 · `pct` = 농도 0~100 · 0 = 없음) — 글 색만으로는 약한 알림(위험 수준)에.
+    #[must_use]
+    pub fn tint(mut self, color: Color, pct: u8) -> Self {
+        self.tint = (pct > 0).then_some(color);
+        self.tint_pct = pct.min(100);
         self
     }
 
@@ -182,6 +195,8 @@ impl StatusSeg {
             parts,
             font_delta_c: 0,
             rows: Vec::new(),
+            tint: None,
+            tint_pct: 0,
         }
     }
 
@@ -555,6 +570,9 @@ impl Widget for StatusBar {
             if hot {
                 ctx.fill_rect(*r, theme.sel_bg_inactive);
             }
+            if let Some(c) = seg.tint {
+                ctx.fill_rect_alpha(*r, c, f32::from(seg.tint_pct) / 100.0);
+            }
             // 칸 경계(오른쪽 정렬 = 칸 왼쪽 · 왼쪽 정렬 = 칸 오른쪽).
             let line_x = if self.leading { r.right() } else { r.x - 1 };
             ctx.fill_rect(
@@ -846,6 +864,27 @@ mod tests {
             StatusPart::new("MB/s").font_delta(-2.5).font_delta_c,
             Some(-250)
         );
+    }
+
+    /// 칸 바탕 색(149차): 농도 0 = 없음 · 주면 그 칸 자리에 반투명 채움 한 번 · 칸 폭은 그대로.
+    #[test]
+    fn tint_fills_the_segment_without_changing_its_width() {
+        let red = Color::from_rgb(200, 40, 40);
+        assert_eq!(StatusSeg::new("cpu", "C 95%").tint(red, 0).tint, None);
+        let plain = StatusSeg::new("cpu", "C 95%");
+        let tinted = StatusSeg::new("cpu", "C 95%").tint(red, 22);
+        assert_eq!((tinted.tint, tinted.tint_pct), (Some(red), 22));
+        let mut sb = StatusBar::new();
+        let mut inv = Invalidations::default();
+        sb.set_bounds(Rect::new(0, 0, 400, 22), &mut inv);
+        let mut width = |seg: StatusSeg| {
+            let mut inv = Invalidations::default();
+            sb.set_segments(vec![seg], &mut inv);
+            let mut rec = RecordCtx::with_surface(400, 60);
+            sb.paint(&mut rec, &Theme::dark());
+            sb.seg_rect("cpu").unwrap().w
+        };
+        assert_eq!(width(plain), width(tinted));
     }
 
     /// 줄 표식(147차): 삼각형 자리는 **고정 폭**(6 + 4)으로 줄 왼쪽에 잡히고 글은 그 오른쪽에서 오른쪽 정렬 → 글이 길어져도 칸 폭 ·
