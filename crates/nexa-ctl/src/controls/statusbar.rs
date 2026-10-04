@@ -501,8 +501,11 @@ impl Widget for StatusBar {
                 let n = seg.rows.len() as i32;
                 for (k, row) in seg.rows.iter().enumerate() {
                     pick_c(ctx, row.font_delta_c.unwrap_or(seg.font_delta_c));
-                    let band_h = (b.h - 1) / n.max(1);
-                    let by = b.y + 1 + band_h * k as i32;
+                    // 띠 = 칸 높이를 줄 수로 **남김없이** 나눈 것(143차) · 글은 숫자 높이 기준으로 띠 가운데에 —
+                    // 줄 글꼴을 띠에 꽉 차게 주면 위아래 · 줄 사이 여백이 최소가 된다(호스트가 크기를 정한다).
+                    let avail = b.h - 1;
+                    let by = b.y + 1 + avail * k as i32 / n.max(1);
+                    let band_h = b.y + 1 + avail * (k as i32 + 1) / n.max(1) - by;
                     let ry = ctx.text_center_y(by, band_h);
                     let tx = x + rows_w[i] - ctx.text_width(&row.text);
                     ctx.text(tx, ry, *r, &row.text, row.color.unwrap_or(color));
