@@ -333,6 +333,10 @@ pub struct ContextMenu {
     bar_until: Option<std::time::Instant>,
     /// 커서가 올라가 있는 "더 있음" 띠(`Some(true)` = 위 ∧ · `Some(false)` = 아래 ∨) — hover 강조 · 누르면 그쪽으로 스크롤(148차).
     more_hot: Option<bool>,
+    /// 누르고 있는 "더 있음" 띠(위 = `true`)와 다음 자동 반복 시각(150차) — 누르고 있는 동안 [`Self::tick`]이 계속 넘긴다.
+    more_press: Option<(bool, std::time::Instant)>,
+    /// 키보드 ↑/↓의 **순환 이동(wrap-around)** 끔(150차 · 기본 false = 순환 — 끝에서 ↓ = 처음 · 처음에서 ↑ = 끝).
+    no_wrap: bool,
 }
 
 /// 오버레이 스크롤 막대 — 가는 폭 · 굵은 폭(커서가 올라갔을 때) · 썸 최소 길이 · 농도([`super::scroll`]의 막대와 같은 값).
@@ -344,6 +348,9 @@ const BAR_ALPHA_HOT: f32 = 0.6;
 /// "더 있음" 띠 높이(위/아래 끝 · ∧/∨) · 한 번 누를 때 넘기는 행 수.
 const MORE_H: i32 = 14;
 const MORE_STEP: i32 = 3;
+/// 띠를 누르고 있을 때: 첫 반복까지의 지연 · 반복 간격(ms · 반복마다 한 행).
+const MORE_REPEAT_DELAY_MS: u64 = 350;
+const MORE_REPEAT_MS: u64 = 70;
 
 /// 하위 메뉴 유예(ms) — 자식이 화면 안에 맞추느라 부모 행과 세로가 어긋나면 대각선 이동 중 다른 부모 행을 지난다.
 /// 그 사이 자식이 닫히던 것(nexa-sql 사용자 09-16 "Copy SQL 메뉴 유실") → 자식 쪽으로 움직이는 동안은 유지.
@@ -608,6 +615,20 @@ impl ContextMenu {
             self.bar_until = None;
             changed = true;
         }
+        // "더 있음" 띠를 누르고 있으면 계속 넘긴다(끝에 닿아 띠가 사라지면 멈춘다).
+        if let Some((up, at)) = self.more_press {
+            if now >= at {
+                if self.more_band(up).is_some() {
+                    self.scroll_rows(if up { -1 } else { 1 });
+                    changed = true;
+                }
+                self.more_press = self
+                    .more_band(up)
+                    .is_some()
+                    .then(|| (up, now + std::time::Duration::from_millis(MORE_REPEAT_MS)));
+                self.more_hot = self.last_pos.and_then(|p| self.more_at(p));
+            }
+        }
         if let Some(c) = &mut self.child {
             changed |= c.tick(now);
         }
@@ -621,10 +642,8 @@ impl ContextMenu {
             .then_some(self.bar_until)
             .flatten();
         let child = self.child.as_ref().and_then(|c| c.next_wake());
-        match (own, child) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let press = self.more_press.filter(|_| self.is_open()).map(|p| p.1);
+        [own, child, press].into_iter().flatten().min()
     }
 
     /// 내용 창(위·아래 여백 제외 · 닫혀 있으면 빈 rect).
@@ -759,6 +778,18 @@ impl ContextMenu {
         self.bar_drag = None;
         self.bar_until = None;
         self.more_hot = None;
+        self.more_press = None;
+    }
+
+    /// 키보드 ↑/↓의 순환 이동(wrap-around) 켬/끔 — 기본 켜짐(끝에서 ↓ = 처음으로). 끄면 양 끝에서 멈춘다. 하위 메뉴도 따른다.
+    pub fn set_wrap_around(&mut self, on: bool) {
+        self.no_wrap = !on;
+    }
+
+    /// 순환 이동이 켜져 있는가.
+    #[must_use]
+    pub fn wrap_around(&self) -> bool {
+        !self.no_wrap
     }
 
     /// "더 있음" 띠의 자리(위 = `true`) — 오버레이 방식이고 그쪽에 가려진 항목이 있을 때만.
@@ -952,10 +983,21 @@ impl ContextMenu {
                 }
             }
             Some(p) => {
+                // 순환 이동(wrap-around): 끝에서 ↓ = 처음 · 처음에서 ↑ = 끝. 꺼져 있으면 양 끝에서 멈춘다.
                 if down {
-                    (p + 1) % sel.len()
+                    if p + 1 < sel.len() {
+                        p + 1
+                    } else if self.no_wrap {
+                        p
+                    } else {
+                        0
+                    }
+                } else if p > 0 {
+                    p - 1
+                } else if self.no_wrap {
+                    p
                 } else {
-                    (p + sel.len() - 1) % sel.len()
+                    sel.len() - 1
                 }
             }
         };
@@ -1009,6 +1051,7 @@ impl ContextMenu {
         let Some(row) = self.row_rect(i) else { return };
         let mut c = ContextMenu::new();
         c.set_scale(self.scale);
+        c.no_wrap = self.no_wrap;
         // 라벨 폭 근사(부모와 같은 근사 · paint가 실측으로 보정).
         let approx = children
             .iter()
@@ -1085,6 +1128,13 @@ impl ContextMenu {
                     // "더 있음" 띠 위 = 그 띠를 강조(어디를 누르게 되는지 보인다) · 아래 행의 hover는 지운다.
                     // 벗어나면 아래 일반 처리가 행 hover를 다시 잡는다.
                     self.more_hot = self.more_at(Point { x, y });
+                    // 누른 채 띠 밖으로 나가면 자동 반복을 멈춘다(다시 들어와도 다시 눌러야 한다).
+                    if self
+                        .more_press
+                        .is_some_and(|(up, _)| self.more_hot != Some(up))
+                    {
+                        self.more_press = None;
+                    }
                     if self.more_hot.is_some() {
                         self.hover = None;
                         return true;
@@ -1114,6 +1164,18 @@ impl ContextMenu {
                     self.scroll_rows(if up { -MORE_STEP } else { MORE_STEP });
                     self.more_hot = self.more_at(Point { x, y });
                     self.pressed = None;
+                    // 누르고 있으면 잠시 뒤부터 한 행씩 계속 넘긴다(호스트의 tick).
+                    self.more_press = self.more_hot.map(|u| {
+                        (
+                            u,
+                            std::time::Instant::now()
+                                + std::time::Duration::from_millis(MORE_REPEAT_DELAY_MS),
+                        )
+                    });
+                    return true;
+                }
+                InputEvent::MouseUp { .. } if self.more_press.is_some() => {
+                    self.more_press = None;
                     return true;
                 }
                 _ => {}
@@ -2613,11 +2675,69 @@ mod tests {
             y: r.y + r.h / 2,
         });
         assert_eq!((m.more_hot, m.hovered()), (None, Some(7)));
+        // 누르고 있으면 계속 넘어간다: 첫 누름 3행 → 지연 뒤 tick마다 한 행 · 놓으면 멈춘다 · 끝에 닿으면 스스로 멈춘다.
+        m.on_event(&key(Key::Home));
+        let below = m.more_band(false).expect("아래 띠");
+        let (bx, by) = (below.x + below.w / 2, below.y + below.h / 2);
+        m.on_event(&InputEvent::MouseMove { x: bx, y: by });
+        m.on_event(&down(bx, by));
+        assert_eq!(m.vis_range(), 3..7);
+        let ms = std::time::Duration::from_millis;
+        let at = m.more_press.expect("반복 예약").1;
+        assert!(m.next_wake().is_some_and(|w| w <= at));
+        assert!(m.vis_range() == (3..7) && !m.tick(at - ms(1)), "지연 전");
+        assert!(m.tick(at));
+        assert_eq!(m.vis_range(), 4..8, "한 행 더");
+        let at2 = m.more_press.expect("다음 반복").1;
+        assert!(at2 > at && m.tick(at2));
+        assert_eq!(m.vis_range(), 5..9);
+        m.on_event(&up(bx, by));
+        assert!(m.more_press.is_none() && m.take_picked().is_none());
+        let _ = m.tick(at2 + ms(5000));
+        assert_eq!(m.vis_range(), 5..9, "놓으면 멈춤");
+        m.on_event(&down(bx, by));
+        for i in 1..40u64 {
+            let _ = m.tick(std::time::Instant::now() + ms(400 * i));
+        }
+        assert_eq!(m.vis_range(), 8..12, "끝까지");
+        assert!(m.more_press.is_none(), "끝에 닿으면 멈춤");
         // 종전 방식(오버레이 꺼짐) = 띠 없음.
         let mut plain = ContextMenu::new();
         plain.set_max_rows(Some(4));
         plain.open_at(10, 10, items(), Rect::new(0, 0, 800, 600), 80);
         assert!(plain.more_band(false).is_none());
+    }
+
+    /// 키보드 순환 이동(wrap-around · 150차): 기본 = 끝에서 ↓ = 처음 · 처음에서 ↑ = 끝. 끄면 양 끝에서 멈춘다 ·
+    /// hover가 없을 때의 첫 ↓/↑(처음/끝)는 그대로 · 하위 메뉴도 같은 설정을 따른다.
+    #[test]
+    fn keyboard_wrap_around_can_be_switched_off() {
+        let mut m = ContextMenu::new();
+        assert!(m.wrap_around(), "기본 = 순환");
+        m.open_at(10, 10, items(), host(), 60);
+        m.on_event(&key(Key::Up));
+        assert_eq!(m.hovered(), Some(3), "첫 ↑ = 끝(paste)");
+        m.on_event(&key(Key::Down));
+        assert_eq!(m.hovered(), Some(0), "끝에서 ↓ = 처음(copy)");
+        m.on_event(&key(Key::Up));
+        assert_eq!(m.hovered(), Some(3), "처음에서 ↑ = 끝");
+        m.set_wrap_around(false);
+        m.on_event(&key(Key::Down));
+        assert_eq!(m.hovered(), Some(3), "끝에서 멈춤");
+        m.on_event(&key(Key::Up));
+        m.on_event(&key(Key::Up));
+        assert_eq!(m.hovered(), Some(0), "처음에서 멈춤");
+        // 다시 열어도 설정은 남고 · 첫 ↑는 여전히 끝으로.
+        m.open_at(10, 10, items(), host(), 60);
+        assert!(!m.wrap_around());
+        m.on_event(&key(Key::Up));
+        assert_eq!(m.hovered(), Some(3));
+        // 하위 메뉴도 따른다.
+        let mut n = ContextMenu::new();
+        n.set_wrap_around(false);
+        n.open_at(10, 10, nested(), host(), 100);
+        n.open_child(1, true);
+        assert!(!n.child_for_test().expect("child").wrap_around());
     }
 
     #[test]
