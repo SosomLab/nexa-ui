@@ -331,6 +331,8 @@ pub struct ContextMenu {
     bar_drag: Option<i32>,
     /// 이 시각이 지나면 막대를 감춘다([`Self::tick`] · 활동마다 뒤로 민다 · `None` = 감추지 않음).
     bar_until: Option<std::time::Instant>,
+    /// 커서가 올라가 있는 "더 있음" 띠(`Some(true)` = 위 ∧ · `Some(false)` = 아래 ∨) — hover 강조 · 누르면 그쪽으로 스크롤(148차).
+    more_hot: Option<bool>,
 }
 
 /// 오버레이 스크롤 막대 — 가는 폭 · 굵은 폭(커서가 올라갔을 때) · 썸 최소 길이 · 농도([`super::scroll`]의 막대와 같은 값).
@@ -339,8 +341,9 @@ const BAR_THICK: i32 = 11;
 const BAR_MIN_THUMB: i32 = 16;
 const BAR_ALPHA_IDLE: f32 = 0.35;
 const BAR_ALPHA_HOT: f32 = 0.6;
-/// "더 있음" 띠 높이(위/아래 끝 · ∧/∨).
-const MORE_H: i32 = 12;
+/// "더 있음" 띠 높이(위/아래 끝 · ∧/∨) · 한 번 누를 때 넘기는 행 수.
+const MORE_H: i32 = 14;
+const MORE_STEP: i32 = 3;
 
 /// 하위 메뉴 유예(ms) — 자식이 화면 안에 맞추느라 부모 행과 세로가 어긋나면 대각선 이동 중 다른 부모 행을 지난다.
 /// 그 사이 자식이 닫히던 것(nexa-sql 사용자 09-16 "Copy SQL 메뉴 유실") → 자식 쪽으로 움직이는 동안은 유지.
@@ -755,6 +758,29 @@ impl ContextMenu {
         self.bar_hot = false;
         self.bar_drag = None;
         self.bar_until = None;
+        self.more_hot = None;
+    }
+
+    /// "더 있음" 띠의 자리(위 = `true`) — 오버레이 방식이고 그쪽에 가려진 항목이 있을 때만.
+    fn more_band(&self, up: bool) -> Option<Rect> {
+        if !self.overlay_bar || !self.scrollable() {
+            return None;
+        }
+        let (above, below) = self.more_hidden();
+        let v = self.view_rect();
+        let bh = self.s(MORE_H);
+        match up {
+            true if above => Some(Rect::new(v.x, v.y, v.w, bh)),
+            false if below => Some(Rect::new(v.x, v.bottom() - bh, v.w, bh)),
+            _ => None,
+        }
+    }
+
+    /// 그 자리가 어느 "더 있음" 띠 위인가(위 = `Some(true)`).
+    fn more_at(&self, p: Point) -> Option<bool> {
+        [true, false]
+            .into_iter()
+            .find(|&up| self.more_band(up).is_some_and(|r| r.contains(p)))
     }
 
     /// **`(x, y)`에 연다** — `host`는 팝업이 넘어가면 안 되는 영역(보통 창 전체).
@@ -1053,6 +1079,14 @@ impl ContextMenu {
                         }
                     }
                     if hot {
+                        self.more_hot = None;
+                        return true;
+                    }
+                    // "더 있음" 띠 위 = 그 띠를 강조(어디를 누르게 되는지 보인다) · 아래 행의 hover는 지운다.
+                    // 벗어나면 아래 일반 처리가 행 hover를 다시 잡는다.
+                    self.more_hot = self.more_at(Point { x, y });
+                    if self.more_hot.is_some() {
+                        self.hover = None;
                         return true;
                     }
                 }
@@ -1072,6 +1106,14 @@ impl ContextMenu {
                 InputEvent::MouseUp { .. } if self.bar_drag.is_some() => {
                     self.bar_drag = None;
                     self.wake_bar();
+                    return true;
+                }
+                // "더 있음" 띠를 누름 = 그쪽으로 몇 행 넘긴다(항목은 고르지 않는다) · 끝에 닿아 띠가 사라지면 강조도 사라진다.
+                InputEvent::MouseDown { x, y, .. } if self.more_at(Point { x, y }).is_some() => {
+                    let up = self.more_at(Point { x, y }) == Some(true);
+                    self.scroll_rows(if up { -MORE_STEP } else { MORE_STEP });
+                    self.more_hot = self.more_at(Point { x, y });
+                    self.pressed = None;
                     return true;
                 }
                 _ => {}
@@ -1682,7 +1724,12 @@ impl ContextMenu {
                         continue;
                     }
                     let band = Rect::new(view.x + 1, band_y, view.w - 2, bh);
-                    ctx.fill_rect_alpha(band, theme.panel_bg, 0.9);
+                    // 커서가 올라가 있으면 강조(누를 수 있는 자리임을 보인다 · 148차) — 바탕을 덮고 강조색을 옅게 얹는다.
+                    let hot = self.more_hot == Some(dir < 0);
+                    ctx.fill_rect_alpha(band, theme.panel_bg, if hot { 1.0 } else { 0.9 });
+                    if hot {
+                        ctx.fill_rect_alpha(band, theme.accent, 0.22);
+                    }
                     let cy = band_y + bh / 2;
                     ctx.polyline(
                         &[
@@ -1690,7 +1737,7 @@ impl ContextMenu {
                             (cx, cy + dir * half / 2),
                             (cx + half, cy - dir * half / 2),
                         ],
-                        theme.text_dim,
+                        if hot { theme.accent } else { theme.text_dim },
                         (1.5 * self.scale).max(1.5),
                     );
                 }
@@ -2523,6 +2570,54 @@ mod tests {
             y: r0.y + 2,
         });
         assert!(m.bar_on && !m.bar_hot && m.next_wake().is_some());
+    }
+
+    /// "더 있음" 띠(148차 · nexa-dir3 사용자 10-04): 커서를 올리면 그 띠가 강조되고(행 hover는 지워진다) · 누르면 그쪽으로 3행씩
+    /// 넘어가며 항목은 고르지 않는다 · 끝에 닿으면 띠와 강조가 사라진다 · 오버레이 방식이 아니면 띠 자체가 없다.
+    #[test]
+    fn more_bands_highlight_on_hover_and_scroll_on_click() {
+        let items = || -> Vec<CtxItem> {
+            (0..12)
+                .map(|i| CtxItem::item(format!("h{i}"), format!("item {i}")))
+                .collect()
+        };
+        let mut m = ContextMenu::new();
+        m.set_max_rows(Some(4));
+        m.set_overlay_scrollbar(true);
+        m.open_at(10, 10, items(), Rect::new(0, 0, 800, 600), 80);
+        assert!(m.more_band(true).is_none(), "처음 = 위 띠 없음");
+        let below = m.more_band(false).expect("아래 띠");
+        let (bx, by) = (below.x + below.w / 2, below.y + below.h / 2);
+        assert!(m.on_event(&InputEvent::MouseMove { x: bx, y: by }));
+        assert_eq!((m.more_hot, m.hovered()), (Some(false), None));
+        // 누름 = 3행 아래로 · 놓아도 고르지 않는다.
+        assert!(m.on_event(&down(bx, by)));
+        assert_eq!(m.vis_range(), 3..7);
+        m.on_event(&up(bx, by));
+        assert!(m.is_open() && m.take_picked().is_none());
+        // 끝까지: 8이 상한 → 아래 띠와 강조가 사라진다 · 위 띠가 생긴다.
+        m.on_event(&down(bx, by));
+        m.on_event(&down(bx, by));
+        assert_eq!(m.vis_range(), 8..12);
+        assert!(m.more_band(false).is_none() && m.more_hot.is_none());
+        let top = m.more_band(true).expect("위 띠");
+        let (tx, ty) = (top.x + top.w / 2, top.y + top.h / 2);
+        m.on_event(&InputEvent::MouseMove { x: tx, y: ty });
+        assert_eq!(m.more_hot, Some(true));
+        m.on_event(&down(tx, ty));
+        assert_eq!(m.vis_range(), 5..9);
+        // 띠에서 벗어나면 강조가 풀리고 행 hover가 돌아온다.
+        let r = m.row_rect_of(7).unwrap();
+        m.on_event(&InputEvent::MouseMove {
+            x: r.x + 5,
+            y: r.y + r.h / 2,
+        });
+        assert_eq!((m.more_hot, m.hovered()), (None, Some(7)));
+        // 종전 방식(오버레이 꺼짐) = 띠 없음.
+        let mut plain = ContextMenu::new();
+        plain.set_max_rows(Some(4));
+        plain.open_at(10, 10, items(), Rect::new(0, 0, 800, 600), 80);
+        assert!(plain.more_band(false).is_none());
     }
 
     #[test]

@@ -57,6 +57,8 @@ pub enum StatusMarker {
 const MARK_W: i32 = 6;
 const MARK_H: i32 = 4;
 const MARK_GAP: i32 = 4;
+/// 쌓는 줄의 몸통 사이 간격(물리 px).
+const ROW_GAP: i32 = 1;
 /// 표식 농도 — 깜빡임의 어두운 위상 · 단계 0(움직임 없음).
 const MARK_DIM: f32 = 0.3;
 
@@ -594,15 +596,21 @@ impl Widget for StatusBar {
                     ctx.text(tx, ty, *r, &p.text, p.color.unwrap_or(color));
                     x += w + gap;
                 }
-                // 쌓는 줄: 칸 높이를 줄 수로 나눠 한 줄씩(오른쪽 정렬 — 숫자 자리가 위아래로 맞는다).
-                let n = seg.rows.len() as i32;
-                for (k, row) in seg.rows.iter().enumerate() {
+                // 쌓는 줄(149차 · nexa-dir3 사용자 10-04 "줄 사이 여백 최소 · 두 줄을 세로 가운데로"): 줄마다 **숫자 몸통 높이**만큼의
+                // 띠를 [`ROW_GAP`] px 간격으로 바짝 붙여 쌓고, 그 묶음 전체를 칸 높이 가운데에 둔다(종전 = 칸 높이를 줄 수로 고르게
+                // 나눠 줄마다 가운데 → 몸통 사이가 2~3 px 벌어졌다). 오른쪽 정렬 — 숫자 자리가 위아래로 맞는다.
+                let dhs: Vec<i32> = seg
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        pick_c(ctx, row.font_delta_c.unwrap_or(seg.font_delta_c));
+                        ctx.text_digit_height().max(1)
+                    })
+                    .collect();
+                let block = dhs.iter().sum::<i32>() + ROW_GAP * (dhs.len() as i32 - 1).max(0);
+                let mut by = b.y + 1 + (b.h - 1 - block) / 2;
+                for (row, band_h) in seg.rows.iter().zip(dhs) {
                     pick_c(ctx, row.font_delta_c.unwrap_or(seg.font_delta_c));
-                    // 띠 = 칸 높이를 줄 수로 **남김없이** 나눈 것(143차) · 글은 숫자 높이 기준으로 띠 가운데에 —
-                    // 줄 글꼴을 띠에 꽉 차게 주면 위아래 · 줄 사이 여백이 최소가 된다(호스트가 크기를 정한다).
-                    let avail = b.h - 1;
-                    let by = b.y + 1 + avail * k as i32 / n.max(1);
-                    let band_h = b.y + 1 + avail * (k as i32 + 1) / n.max(1) - by;
                     let ry = ctx.text_center_y(by, band_h);
                     let mw = mark_w(seg);
                     let row_color = row.color.unwrap_or(color);
@@ -623,6 +631,7 @@ impl Widget for StatusBar {
                     }
                     let tx = x + mw + rows_w[i] - ctx.text_width(&row.text);
                     ctx.text(tx, ry, *r, &row.text, row_color);
+                    by += band_h + ROW_GAP;
                 }
             }
         }

@@ -671,6 +671,16 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         (y as f32 + h as f32 / 2.0 + cap / 2.0 - asc).round() as i32
     }
 
+    fn text_digit_height(&mut self) -> i32 {
+        let size = self.px_size();
+        let f = if (self.mono_mult - 1.0).abs() > f32::EPSILON {
+            self.fonts.base
+        } else {
+            self.font
+        };
+        f.digit_height(size).round() as i32
+    }
+
     fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
         let clip = self.clipped(clip);
         if clip.is_empty() {

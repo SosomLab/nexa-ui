@@ -81,6 +81,21 @@ pub fn fast_scroll() -> FastScroll {
     FAST.read().map(|g| *g).unwrap_or_default()
 }
 
+/// 키보드 이동(↑/↓ 자동 반복)에도 고속 스크롤을 적용할지(150차 · nexa-dir3 `scroll.fast_keys` — 기본 켜짐 = 종전 동작).
+/// 끄면 키는 늘 한 번에 한 행 · 휠 가속은 그대로.
+static FAST_KEYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// 키보드 이동의 고속 스크롤 켬/끔(설정 즉시 적용).
+pub fn set_fast_scroll_keys(on: bool) {
+    FAST_KEYS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 키보드 이동에 고속 스크롤을 적용하는가.
+#[must_use]
+pub fn fast_scroll_keys() -> bool {
+    FAST_KEYS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 파일 그리드 전용 **한 단계 더 빠른** 설정(nexa-sql `scroll.fast_grid_extra` — 결과 그리드 규약:
 /// 한 번 먼저 오르고(step-1) 상한 두 배). None = 전역과 동일. 호스트가 설정 적용 때 넣는다.
 static FAST_GRID: std::sync::RwLock<Option<FastScroll>> = std::sync::RwLock::new(None);
@@ -329,6 +344,15 @@ impl FastScroller {
 
     /// 키 자동 반복 사건(`dir` 부호) → 한 번에 옮길 행 수(= 배수).
     pub fn key(&mut self, dir: i32) -> i32 {
+        self.key_with(dir, fast_scroll_keys())
+    }
+
+    /// [`Self::key`]의 본체 — `keys_on`이 꺼져 있으면 가속하지 않는다(늘 1행 · 연속 기록도 끊는다 · 배지 없음).
+    fn key_with(&mut self, dir: i32, keys_on: bool) -> i32 {
+        if !keys_on {
+            self.accel.reset();
+            return 1;
+        }
         let cfg = self.cfg();
         let k = self.accel.factor_at(dir, Instant::now(), &cfg);
         self.hud.note(k, &cfg);
@@ -395,6 +419,19 @@ mod tests {
         assert_eq!(*ks.last().unwrap(), 16, "상한");
         let g = grid_extra_of(&c);
         assert_eq!((g.step, g.max), (2, 32), "그리드 = 한 단계 먼저·상한 두 배");
+    }
+
+    /// 키보드 이동의 고속 스크롤(150차): 켜져 있으면 연달아 누를 때 배수가 오른다 · 꺼져 있으면 늘 1행이고 연속 기록도 끊겨,
+    /// 다시 켠 직후 첫 키가 곧바로 큰 배수로 뛰지 않는다. 기본 = 켜짐(종전 동작).
+    #[test]
+    fn keyboard_acceleration_can_be_switched_off() {
+        assert!(fast_scroll_keys(), "기본 = 켜짐");
+        let mut f = FastScroller::default();
+        let on: Vec<i32> = (0..12).map(|_| f.key_with(1, true)).collect();
+        assert!(on.iter().any(|k| *k > 1), "켜짐 = 가속: {on:?}");
+        let off: Vec<i32> = (0..12).map(|_| f.key_with(1, false)).collect();
+        assert!(off.iter().all(|k| *k == 1), "꺼짐 = 늘 1행: {off:?}");
+        assert_eq!(f.key_with(1, true), 1, "끊긴 뒤 첫 키 = 1");
     }
 
     #[test]

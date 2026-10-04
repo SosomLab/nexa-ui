@@ -137,6 +137,12 @@ pub trait DrawCtx {
         y + (h - self.text_height()) / 2
     }
 
+    /// 현재 글꼴의 **숫자 높이**(px · 숫자 · 대문자 몸통 — [`Self::text_center_y`]가 가운데에 맞추는 그 높이). 여러 줄을 몸통끼리
+    /// 바짝 붙여 쌓을 때의 줄 간격 계산용(149차). 기본 = 상자 높이의 7/10(측정 전용 백엔드).
+    fn text_digit_height(&mut self) -> i32 {
+        self.text_height() * 7 / 10
+    }
+
     /// 삼각형을 단색 AA로 채운다(말풍선 꼬리 등 — 08-10). 기본 = no-op.
     fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
         let _ = (a, b, c, color);
