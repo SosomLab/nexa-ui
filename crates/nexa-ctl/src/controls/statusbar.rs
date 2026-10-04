@@ -37,6 +37,34 @@ pub struct StatusPart {
     pub hints: Vec<String>,
     /// 이 조각만의 글꼴 크기 증분(논리 px × 100 · 141차 — `None` = 칸의 크기). 값보다 단위를 더 작게 그릴 때.
     pub font_delta_c: Option<i32>,
+    /// **표식**(147차 · 쌓는 줄에서만 그린다) — 글 왼쪽 **고정 자리**의 작은 삼각형(글 폭이 바뀌어도 움직이지 않는다).
+    pub marker: Option<StatusMarker>,
+    /// 표식 깜빡임 단계(0 = 깜빡이지 않음 · 흐리게 / 1 = 느리게 … 9 = 빠르게 — [`StatusBar::blink_half_ms`]). 호스트가
+    /// [`StatusBar::tick`]을 불러야 움직인다.
+    pub blink: u8,
+}
+
+/// 줄 표식 모양(147차).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusMarker {
+    /// 위 삼각형(▲ — 올리기 · 읽기).
+    Up,
+    /// 아래 삼각형(▼ — 내려받기 · 쓰기).
+    Down,
+}
+
+/// 표식 삼각형의 폭 · 높이 · 글과의 간격(논리 px).
+const MARK_W: i32 = 6;
+const MARK_H: i32 = 4;
+const MARK_GAP: i32 = 4;
+/// 표식 농도 — 깜빡임의 어두운 위상 · 단계 0(움직임 없음).
+const MARK_DIM: f32 = 0.3;
+
+/// 두 색을 섞는다(`t` = `a`의 몫 0..=1).
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    let ((ar, ag, ab), (br, bg, bb)) = (a.rgb(), b.rgb());
+    let f = |x: u8, y: u8| (f32::from(x) * t + f32::from(y) * (1.0 - t)).round() as u8;
+    Color::from_rgb(f(ar, br), f(ag, bg), f(ab, bb))
 }
 
 impl StatusPart {
@@ -67,6 +95,14 @@ impl StatusPart {
     #[must_use]
     pub fn font_delta(mut self, px: f32) -> Self {
         self.font_delta_c = Some((px * 100.0).round() as i32);
+        self
+    }
+
+    /// 표식(작은 삼각형)과 깜빡임 단계(0~9 · 넘으면 9)를 붙인다(체이닝 · 쌓는 줄에서만 그려진다).
+    #[must_use]
+    pub fn marker(mut self, marker: StatusMarker, blink: u8) -> Self {
+        self.marker = Some(marker);
+        self.blink = blink.min(9);
         self
     }
 }
@@ -109,6 +145,12 @@ impl StatusSeg {
         for r in &rows {
             if !self.text.is_empty() {
                 self.text.push(' ');
+            }
+            // 표식은 덤프 글에 ▲/▼로 남긴다(그리기는 도형).
+            match r.marker {
+                Some(StatusMarker::Up) => self.text.push_str("▲ "),
+                Some(StatusMarker::Down) => self.text.push_str("▼ "),
+                None => {}
             }
             self.text.push_str(&r.text);
         }
@@ -165,6 +207,9 @@ pub struct StatusBar {
     hover: Option<usize>,
     pressed: Option<usize>,
     click: Option<(String, bool)>,
+    /// 표식 깜빡임의 시계(ms · [`StatusBar::tick`]이 넣는다) · 마지막으로 그리게 한 위상(표식마다 1비트).
+    now_ms: u64,
+    blink_mask: u64,
 }
 
 impl StatusBar {
@@ -221,6 +266,50 @@ impl StatusBar {
         self.segs = segs;
         inv.push(self.base.bounds);
         true
+    }
+
+    /// 깜빡임 단계의 반주기(ms · 밝음 ↔ 어두움이 바뀌는 간격): 1 = 500 … 9 = 60. 0 = 깜빡이지 않음(`None`).
+    #[must_use]
+    pub fn blink_half_ms(level: u8) -> Option<u64> {
+        (level > 0).then(|| 555 - 55 * u64::from(level.min(9)))
+    }
+
+    /// 지금 밝은 위상인가(단계 0 = 늘 어둡게 — 움직임이 없다는 표시).
+    fn blink_on(level: u8, now_ms: u64) -> bool {
+        Self::blink_half_ms(level).is_some_and(|half| (now_ms / half) % 2 == 0)
+    }
+
+    /// 깜빡이는 표식들의 단계(칸 · 줄 순서).
+    fn blink_levels(&self) -> impl Iterator<Item = u8> + '_ {
+        self.segs
+            .iter()
+            .flat_map(|s| s.rows.iter())
+            .filter(|r| r.marker.is_some() && r.blink > 0)
+            .map(|r| r.blink)
+    }
+
+    /// 시간 처리(147차) — 표식 깜빡임의 위상이 바뀌었으면 `true`(다시 그리기). 깜빡이는 표식이 없으면 늘 `false`.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.now_ms = now_ms;
+        let mask = self
+            .blink_levels()
+            .take(64)
+            .enumerate()
+            .fold(0u64, |m, (i, l)| {
+                m | (u64::from(Self::blink_on(l, now_ms)) << i)
+            });
+        let changed = mask != self.blink_mask;
+        self.blink_mask = mask;
+        changed
+    }
+
+    /// 다음 위상 전환까지 남은 시간(ms · 깜빡이는 표식이 없으면 `None` = 깨울 필요 없음).
+    #[must_use]
+    pub fn next_blink_ms(&self, now_ms: u64) -> Option<u64> {
+        self.blink_levels()
+            .filter_map(Self::blink_half_ms)
+            .map(|half| half - now_ms % half)
+            .min()
     }
 
     /// 칸을 왼쪽부터 놓는다(패널 아래 상태바) — 이때 왼쪽 글은 칸들 뒤(오른쪽)에 온다.
@@ -396,6 +485,14 @@ impl Widget for StatusBar {
                 w
             })
             .collect();
+        // 표식 자리(줄에 표식이 하나라도 있으면 그 칸의 줄 왼쪽에 고정 폭으로 비워 둔다).
+        let mark_w = |s: &StatusSeg| {
+            if s.rows.iter().any(|r| r.marker.is_some()) {
+                self.s(MARK_W) + self.s(MARK_GAP)
+            } else {
+                0
+            }
+        };
         let widths: Vec<i32> = self
             .segs
             .iter()
@@ -404,7 +501,7 @@ impl Widget for StatusBar {
             .map(|((s, pw), rw)| {
                 if *rw > 0 {
                     let lead = pw.iter().sum::<i32>() + gap * pw.len() as i32;
-                    lead + rw + 2 * sp
+                    lead + mark_w(s) + rw + 2 * sp
                 } else if !pw.is_empty() {
                     pw.iter().sum::<i32>() + gap * (pw.len() as i32 - 1) + 2 * sp
                 } else if s.text.is_empty() {
@@ -507,8 +604,25 @@ impl Widget for StatusBar {
                     let by = b.y + 1 + avail * k as i32 / n.max(1);
                     let band_h = b.y + 1 + avail * (k as i32 + 1) / n.max(1) - by;
                     let ry = ctx.text_center_y(by, band_h);
-                    let tx = x + rows_w[i] - ctx.text_width(&row.text);
-                    ctx.text(tx, ry, *r, &row.text, row.color.unwrap_or(color));
+                    let mw = mark_w(seg);
+                    let row_color = row.color.unwrap_or(color);
+                    // 표식 = 줄 왼쪽 고정 자리의 작은 삼각형(글 폭과 무관) · 밝은 위상 = 줄 색 · 어두운 위상/단계 0 = 바탕 쪽으로 흐리게.
+                    if let Some(m) = row.marker {
+                        let c = if Self::blink_on(row.blink, self.now_ms) {
+                            row_color
+                        } else {
+                            mix(row_color, theme.chrome_bg, MARK_DIM)
+                        };
+                        let (w, h) = (self.s(MARK_W), self.s(MARK_H));
+                        let top = by + (band_h - h) / 2;
+                        let (base_y, tip_y) = match m {
+                            StatusMarker::Up => (top + h, top),
+                            StatusMarker::Down => (top, top + h),
+                        };
+                        ctx.fill_triangle((x, base_y), (x + w, base_y), (x + w / 2, tip_y), c);
+                    }
+                    let tx = x + mw + rows_w[i] - ctx.text_width(&row.text);
+                    ctx.text(tx, ry, *r, &row.text, row_color);
                 }
             }
         }
@@ -723,6 +837,54 @@ mod tests {
             StatusPart::new("MB/s").font_delta(-2.5).font_delta_c,
             Some(-250)
         );
+    }
+
+    /// 줄 표식(147차): 삼각형 자리는 **고정 폭**(6 + 4)으로 줄 왼쪽에 잡히고 글은 그 오른쪽에서 오른쪽 정렬 → 글이 길어져도 칸 폭 ·
+    /// 표식 자리가 같다 · 덤프 글에는 ▲/▼ · 깜빡임: 단계 0 = 깨우지 않음 · 단계가 높을수록 반주기가 짧다 · 위상이 바뀔 때만 다시 그린다.
+    #[test]
+    fn row_markers_keep_a_fixed_slot_and_blink_by_level() {
+        let seg = |up: &str, lvl: u8| {
+            StatusSeg::with_parts("net", vec![StatusPart::new("N")]).rows(vec![
+                StatusPart::new(up)
+                    .hints(vec!["999.9 MB/s".into()])
+                    .marker(StatusMarker::Up, lvl),
+                StatusPart::new("0 B/s")
+                    .hints(vec!["999.9 MB/s".into()])
+                    .marker(StatusMarker::Down, 0),
+            ])
+        };
+        assert_eq!(seg("1 KB/s", 3).text, "N ▲ 1 KB/s ▼ 0 B/s");
+        let mut sb = StatusBar::new();
+        let mut inv = Invalidations::default();
+        sb.set_bounds(Rect::new(0, 0, 400, 22), &mut inv);
+        let paint = |sb: &mut StatusBar, s: StatusSeg| {
+            let mut inv = Invalidations::default();
+            sb.set_segments(vec![s], &mut inv);
+            let mut rec = RecordCtx::with_surface(400, 60);
+            sb.paint(&mut rec, &Theme::dark());
+            sb.seg_rect("net").unwrap()
+        };
+        let a = paint(&mut sb, seg("1 KB/s", 3));
+        let b = paint(&mut sb, seg("512.3 MB/s", 9));
+        assert_eq!(a, b, "값 · 단계가 바뀌어도 칸 자리 불변");
+        // 폭 = N(7) + 간격 4 + 표식 자리(6 + 4) + 견본 10자 + 좌우 여백 14.
+        assert_eq!(a.w, 7 + 4 + 10 + 10 * 7 + 14);
+        // 깜빡임 단계.
+        assert_eq!(StatusBar::blink_half_ms(0), None);
+        assert_eq!(StatusBar::blink_half_ms(1), Some(500));
+        assert_eq!(StatusBar::blink_half_ms(9), Some(60));
+        assert!((1..9).all(|l| StatusBar::blink_half_ms(l) > StatusBar::blink_half_ms(l + 1)));
+        // 단계 9: 60 ms마다 위상이 바뀐다 → 그때만 tick이 true · 다음 전환까지 남은 시간을 알려 준다.
+        assert!(sb.tick(0) || !sb.tick(0), "첫 호출은 위상 기록");
+        assert!(!sb.tick(30), "같은 위상");
+        assert_eq!(sb.next_blink_ms(30), Some(30));
+        assert!(sb.tick(60), "위상 전환");
+        assert!(sb.tick(120) && !sb.tick(150));
+        // 깜빡이는 표식이 없으면(전부 단계 0) 깨우지 않는다.
+        let _ = paint(&mut sb, seg("0 B/s", 0));
+        assert_eq!(sb.next_blink_ms(1000), None);
+        let _ = sb.tick(1000);
+        assert!(!sb.tick(5000));
     }
 
     /// 왼쪽이 길면 오른쪽 글은 `x + pad`까지만 밀린다(겹침 허용 · dir2 규약).
