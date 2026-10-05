@@ -330,6 +330,11 @@ pub struct VirtualRows<S> {
     ta_off: bool,
     /// 마지막으로 본 시각(ms · `tick`/글자 입력이 갱신) — 시각이 없는 키 사건(↑/↓ 순환)의 유지 시간 리셋에 쓴다.
     ta_clock: u64,
+    /// OS 입력기가 **조합 중인 글**(158차 — 호스트가 [`Self::typeahead_ime`]로 넣는다 · 확정 전이라 버퍼에는 없다)과 마지막 갱신 시각.
+    ta_preedit: String,
+    ta_preedit_ms: u64,
+    /// 유지 시간 사본(ms · `set_typeahead_opts`가 갱신 — 조합 중인 글만 있을 때의 만료 판정).
+    ta_timeout_ms: u64,
     /// 인라인 이름변경(M3-2, 원본 B-6) — Some((행, 편집 상태)). 캐럿·선택은 edit.rs 공용 모델.
     rename: Option<(usize, crate::edit::EditState)>,
     /// 기선택 행 프레스(무수정키) — 클릭 확정(MouseUp·무드래그) 시 단일 선택으로 붕괴
@@ -409,6 +414,9 @@ impl<S: RowSource> VirtualRows<S> {
             ta_hud_pos: 6,
             ta_off: false,
             ta_clock: 0,
+            ta_preedit: String::new(),
+            ta_preedit_ms: 0,
+            ta_timeout_ms: TYPEAHEAD_TIMEOUT_MS,
             rename: None,
             press_pending: None,
             focused: true,
@@ -779,29 +787,70 @@ impl<S: RowSource> VirtualRows<S> {
 
     /// 타입어헤드 접두사(확정 글자 + 조합 중 글자 · 157차) — HUD에 보이는 그대로. 빈 값 = 비활성.
     pub fn typeahead_composing(&self) -> String {
-        self.typeahead.composing()
+        let mut s = self.typeahead.composing();
+        s.push_str(&self.ta_preedit);
+        s
+    }
+
+    /// **OS 입력기(IME) 입력**(158차 — 메인 창에 입력기를 붙인 호스트용): 확정된 글 `committed`는 버퍼에 넣고, 조합 중인 글
+    /// `preedit`는 버퍼 뒤에 **임시로** 붙여 접두사로 쓴다(조합이 바뀔 때마다 다시 부른다 · 빈 글 = 조합 없음).
+    /// 앱 조합기([`Self::typeahead_composing`]의 자모 경로)와 달리 한글 음절이 통째로 온다 — 작업 표시줄의 한/영 상태가 그대로 쓰인다.
+    pub fn typeahead_ime(
+        &mut self,
+        committed: &str,
+        preedit: &str,
+        now_ms: u64,
+        inv: &mut Invalidations,
+    ) {
+        self.ta_clock = self.ta_clock.max(now_ms);
+        if self.ta_off || self.is_renaming() {
+            return;
+        }
+        let mut include_caret = true;
+        for c in committed.chars() {
+            let ok = !c.is_control()
+                && if c == ' ' {
+                    self.ta_space && self.typeahead.is_active()
+                } else {
+                    self.ta_special || c.is_alphanumeric() || nexa_ctl::hangul::is_jamo(c)
+                };
+            if ok {
+                include_caret = self.typeahead.push(c, now_ms).include_caret;
+            }
+        }
+        self.ta_preedit = preedit.to_string();
+        self.ta_preedit_ms = now_ms;
+        self.typeahead.touch(now_ms);
+        let prefix = self.typeahead_composing();
+        if prefix.is_empty() {
+            inv.push(self.bounds);
+        } else {
+            self.typeahead_find(&prefix, include_caret, inv);
+        }
     }
 
     /// 타입어헤드 입력 중인가(버퍼나 한글 조합이 살아 있다 · 157차).
     pub fn typeahead_active(&self) -> bool {
-        self.typeahead.is_active()
+        self.typeahead.is_active() || !self.ta_preedit.is_empty()
     }
 
     /// 타입어헤드 켬/끔(157차 · 기본 켜짐). 끄면 글자 키를 무시하고 진행 중인 입력도 지운다.
     pub fn set_typeahead_enabled(&mut self, on: bool, inv: &mut Invalidations) {
         self.ta_off = !on;
-        if !on && self.typeahead.is_active() {
+        if !on && self.typeahead_active() {
             self.typeahead.clear();
+            self.ta_preedit.clear();
             inv.push(self.bounds);
         }
     }
 
     /// 타입어헤드 즉시 취소(Esc · 포커스 이탈 · 157차) — 지웠으면 `true`.
     pub fn typeahead_cancel(&mut self, inv: &mut Invalidations) -> bool {
-        if !self.typeahead.is_active() {
+        if !self.typeahead_active() {
             return false;
         }
         self.typeahead.clear();
+        self.ta_preedit.clear();
         inv.push(self.bounds);
         true
     }
@@ -809,10 +858,10 @@ impl<S: RowSource> VirtualRows<S> {
     /// 입력 중 ↑/↓ = **접두사가 같은 항목 사이**로만 이동(157차 · nexa-sql 탐색기 규칙): 아래 = 다음 일치 · 위 = 이전 일치
     /// (끝에서 처음으로 돈다). 움직일 때마다 유지 시간을 다시 잰다. 처리했으면 `true`(입력 중이 아니면 `false`).
     fn typeahead_cycle(&mut self, down: bool, inv: &mut Invalidations) -> bool {
-        if !self.typeahead.is_active() {
+        if !self.typeahead_active() {
             return false;
         }
-        let prefix = self.typeahead.composing();
+        let prefix = self.typeahead_composing();
         let hit = if down {
             self.src.find_prefix(self.caret, &prefix)
         } else {
@@ -824,6 +873,7 @@ impl<S: RowSource> VirtualRows<S> {
             self.scroll_into_view(idx);
         }
         self.typeahead.touch(self.ta_clock);
+        self.ta_preedit_ms = self.ta_clock;
         inv.push(self.bounds);
         true
     }
@@ -839,6 +889,7 @@ impl<S: RowSource> VirtualRows<S> {
         inv: &mut Invalidations,
     ) {
         self.typeahead.set_timeout(reset_ms);
+        self.ta_timeout_ms = reset_ms.max(1);
         self.ta_special = special;
         self.ta_space = space;
         self.ta_backspace = backspace;
@@ -851,7 +902,16 @@ impl<S: RowSource> VirtualRows<S> {
     /// 주기 점검(WM_TIMER) — 타입어헤드 타임아웃 소거 + 오버레이 바 유지/페이드(09-04).
     pub fn tick(&mut self, now_ms: u64, inv: &mut Invalidations) {
         self.ta_clock = self.ta_clock.max(now_ms);
+        // 조합 중인 글만 남아 있는 경우(확정 버퍼는 비었다)도 유지 시간이 지나면 지운다.
+        if !self.ta_preedit.is_empty()
+            && !self.typeahead.is_active()
+            && now_ms.saturating_sub(self.ta_preedit_ms) > self.ta_timeout_ms
+        {
+            self.ta_preedit.clear();
+            inv.push(self.bounds);
+        }
         if self.typeahead.tick(now_ms) {
+            self.ta_preedit.clear();
             inv.push(self.bounds);
         }
         self.fast.tick(self.bounds, inv); // 속도 배지 유지/페이드(10-02)
@@ -1874,8 +1934,8 @@ impl<S: RowSource> VirtualRows<S> {
             }
         }
         // 타입어헤드 HUD(리스트와 동일 — 위치 규약 공유)
-        if self.typeahead.is_active() {
-            let label = format!("찾기: {}", self.typeahead.composing());
+        if self.typeahead_active() {
+            let label = format!("찾기: {}", self.typeahead_composing());
             let tw_hud = ctx.text_width(&label);
             let hw = tw_hud + self.pad_x * 2;
             let hx = match self.ta_hud_pos % 3 {
@@ -2635,8 +2695,8 @@ impl<S: RowSource> VirtualRows<S> {
         }
 
         // ── 타입어헤드 HUD(본문 좌하단 플로팅 배지 — 원본 docs/32 §7-A) ──
-        if self.typeahead.is_active() {
-            let label = format!("찾기: {}", self.typeahead.composing());
+        if self.typeahead_active() {
+            let label = format!("찾기: {}", self.typeahead_composing());
             let tw = ctx.text_width(&label);
             // HUD 배지 위치(원본 §7-A 3×3 피커 — 설정 07-15): 행=pos/3·열=pos%3
             let hw = tw + self.pad_x * 2;
@@ -3779,6 +3839,56 @@ mod tests {
         let before = v.caret();
         v.on_event(&ch('a', 6100), &mut inv);
         assert!(!v.typeahead_active() && v.caret() == before, "끔 = 무시");
+    }
+
+    /// OS 입력기 입력(158차): 조합 중인 글은 접두사에 임시로 붙고 · 확정되면 버퍼로 들어간다 · ↑/↓ 순환 · Esc · 만료가 같이 동작한다.
+    #[test]
+    fn typeahead_takes_ime_preedit_and_commit() {
+        let mut inv = Invalidations::default();
+        let mut v = VirtualRows::new(
+            SelRows::named(&["apple", "가방", "강아지", "강원도", "나무"]),
+            20,
+            12,
+            16,
+        );
+        v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        // 조합 시작: "ㄱ" → "가" → "강" (확정 전).
+        v.typeahead_ime("", "ㄱ", 0, &mut inv);
+        assert!(v.typeahead_active());
+        assert_eq!(v.typeahead_composing(), "ㄱ");
+        v.typeahead_ime("", "가", 100, &mut inv);
+        assert_eq!(v.caret(), Some(1), "가 → 가방");
+        v.typeahead_ime("", "강", 200, &mut inv);
+        assert_eq!(v.caret(), Some(2), "강 → 강아지");
+        assert_eq!(v.typeahead_text(), "", "아직 확정 전");
+        // ↑/↓ = 일치 항목 사이(강아지 ↔ 강원도).
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(3));
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(2));
+        // 확정 + 다음 글자 조합: "강" 확정 · "ㅇ" 조합 → 접두사 "강ㅇ"(일치 없음 = 제자리) → "강원".
+        v.typeahead_ime("강", "ㅇ", 300, &mut inv);
+        assert_eq!(v.typeahead_text(), "강");
+        assert_eq!(v.typeahead_composing(), "강ㅇ");
+        v.typeahead_ime("", "원", 400, &mut inv);
+        assert_eq!(v.caret(), Some(3), "강원 → 강원도");
+        // 조합 취소(빈 조합) → 접두사 = 확정분만.
+        v.typeahead_ime("", "", 500, &mut inv);
+        assert_eq!(v.typeahead_composing(), "강");
+        // Esc = 전부 지움.
+        v.on_event(&key(Key::Escape), &mut inv);
+        assert!(!v.typeahead_active());
+        // 조합 중인 글만 있어도 유지 시간이 지나면 지운다.
+        v.typeahead_ime("", "나", 1000, &mut inv);
+        assert_eq!(v.caret(), Some(4));
+        v.tick(2500, &mut inv);
+        assert!(v.typeahead_active());
+        v.tick(3200, &mut inv);
+        assert!(!v.typeahead_active(), "만료");
+        // 끔 = 무시.
+        v.set_typeahead_enabled(false, &mut inv);
+        v.typeahead_ime("가", "", 4000, &mut inv);
+        assert!(!v.typeahead_active());
     }
 
     /// 한글(157차): 자모가 오면 그리드 안에서 조합한다(IME 없이) — 조합 중인 글자도 접두사에 들어간다.
