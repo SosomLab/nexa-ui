@@ -8,8 +8,10 @@ use crate::event::{InputEvent, Key, WheelAccum};
 use crate::fastscroll::FastScroller;
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
-use crate::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
+// 타입어헤드 버퍼 = nexa-ctl 부품(157차 — 한글 조합기 내장 · nexa-sql 탐색기와 같은 규칙). 이 크레이트의 옛 `typeahead`
+// 모듈(dir2 규칙 · 같은 키 반복 = 순환)은 공개 API로만 남는다.
 use crate::widget::{Invalidations, Widget};
+use nexa_ctl::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 use nexa_ctl::DrawCtx as CtlDrawCtx;
 
 /// 휠 1노치당 스크롤 행 수(M0-7 계승).
@@ -189,6 +191,19 @@ pub trait RowSource {
         let _ = (caret, prefix);
         None
     }
+    /// 타입어헤드 **역방향** 매칭(157차 · 입력 중 ↑ = 이전 일치 항목): `caret` 바로 앞부터 위로 · 처음을 지나면 끝에서 이어 돈다.
+    /// 기본 = 보이는 행의 이름(`row(i).text`) 접두 비교(대소문자 무시) — 소스가 더 싼 길이 있으면 재정의한다.
+    fn find_prefix_rev(&self, caret: Option<usize>, prefix: &str) -> Option<usize> {
+        let n = self.len();
+        if n == 0 || prefix.is_empty() {
+            return None;
+        }
+        let lower = prefix.to_lowercase();
+        let start = caret.filter(|&c| c < n).unwrap_or(0);
+        (1..=n)
+            .map(|k| (start + n - k) % n)
+            .find(|&i| self.row(i).text.to_lowercase().starts_with(&lower))
+    }
     /// 행 아이콘 `(키, 로드 힌트)` — DrawCtx가 해석(M1-7 셸 아이콘). 기본 = 아이콘 없음.
     /// 타일 보기 보조 정보 — (보조 줄 텍스트, 사용량 0.0~1.0[드라이브 용량 바 — X-17]).
     /// 기본 = 없음. 소스가 종류/용량 등으로 구체화한다.
@@ -311,6 +326,10 @@ pub struct VirtualRows<S> {
     ta_space: bool,
     ta_backspace: bool,
     ta_hud_pos: u8,
+    /// 타입어헤드 끔(157차 · 기본 false = 켜짐 — 끄면 글자 키를 무시한다).
+    ta_off: bool,
+    /// 마지막으로 본 시각(ms · `tick`/글자 입력이 갱신) — 시각이 없는 키 사건(↑/↓ 순환)의 유지 시간 리셋에 쓴다.
+    ta_clock: u64,
     /// 인라인 이름변경(M3-2, 원본 B-6) — Some((행, 편집 상태)). 캐럿·선택은 edit.rs 공용 모델.
     rename: Option<(usize, crate::edit::EditState)>,
     /// 기선택 행 프레스(무수정키) — 클릭 확정(MouseUp·무드래그) 시 단일 선택으로 붕괴
@@ -388,6 +407,8 @@ impl<S: RowSource> VirtualRows<S> {
             ta_space: true,
             ta_backspace: true,
             ta_hud_pos: 6,
+            ta_off: false,
+            ta_clock: 0,
             rename: None,
             press_pending: None,
             focused: true,
@@ -751,9 +772,60 @@ impl<S: RowSource> VirtualRows<S> {
         taken
     }
 
-    /// 타입어헤드 버퍼(HUD·타이머 판단용). 빈 값 = 비활성.
+    /// 타입어헤드 확정 버퍼(조합 중인 한글 글자는 빠진다 — 화면 표시는 [`Self::typeahead_composing`]).
     pub fn typeahead_text(&self) -> &str {
         self.typeahead.text()
+    }
+
+    /// 타입어헤드 접두사(확정 글자 + 조합 중 글자 · 157차) — HUD에 보이는 그대로. 빈 값 = 비활성.
+    pub fn typeahead_composing(&self) -> String {
+        self.typeahead.composing()
+    }
+
+    /// 타입어헤드 입력 중인가(버퍼나 한글 조합이 살아 있다 · 157차).
+    pub fn typeahead_active(&self) -> bool {
+        self.typeahead.is_active()
+    }
+
+    /// 타입어헤드 켬/끔(157차 · 기본 켜짐). 끄면 글자 키를 무시하고 진행 중인 입력도 지운다.
+    pub fn set_typeahead_enabled(&mut self, on: bool, inv: &mut Invalidations) {
+        self.ta_off = !on;
+        if !on && self.typeahead.is_active() {
+            self.typeahead.clear();
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 타입어헤드 즉시 취소(Esc · 포커스 이탈 · 157차) — 지웠으면 `true`.
+    pub fn typeahead_cancel(&mut self, inv: &mut Invalidations) -> bool {
+        if !self.typeahead.is_active() {
+            return false;
+        }
+        self.typeahead.clear();
+        inv.push(self.bounds);
+        true
+    }
+
+    /// 입력 중 ↑/↓ = **접두사가 같은 항목 사이**로만 이동(157차 · nexa-sql 탐색기 규칙): 아래 = 다음 일치 · 위 = 이전 일치
+    /// (끝에서 처음으로 돈다). 움직일 때마다 유지 시간을 다시 잰다. 처리했으면 `true`(입력 중이 아니면 `false`).
+    fn typeahead_cycle(&mut self, down: bool, inv: &mut Invalidations) -> bool {
+        if !self.typeahead.is_active() {
+            return false;
+        }
+        let prefix = self.typeahead.composing();
+        let hit = if down {
+            self.src.find_prefix(self.caret, &prefix)
+        } else {
+            self.src.find_prefix_rev(self.caret, &prefix)
+        };
+        if let Some(idx) = hit {
+            self.caret = Some(idx);
+            self.src.select(idx, SelectOp::Single);
+            self.scroll_into_view(idx);
+        }
+        self.typeahead.touch(self.ta_clock);
+        inv.push(self.bounds);
+        true
     }
 
     /// 타입어헤드 옵션 적용(설정 — 07-15): 리셋 ms·특수문자·공백·Backspace·HUD 위치.
@@ -778,6 +850,7 @@ impl<S: RowSource> VirtualRows<S> {
 
     /// 주기 점검(WM_TIMER) — 타입어헤드 타임아웃 소거 + 오버레이 바 유지/페이드(09-04).
     pub fn tick(&mut self, now_ms: u64, inv: &mut Invalidations) {
+        self.ta_clock = self.ta_clock.max(now_ms);
         if self.typeahead.tick(now_ms) {
             inv.push(self.bounds);
         }
@@ -1801,8 +1874,8 @@ impl<S: RowSource> VirtualRows<S> {
             }
         }
         // 타입어헤드 HUD(리스트와 동일 — 위치 규약 공유)
-        if !self.typeahead.text().is_empty() {
-            let label = format!("찾기: {}", self.typeahead.text());
+        if self.typeahead.is_active() {
+            let label = format!("찾기: {}", self.typeahead.composing());
             let tw_hud = ctx.text_width(&label);
             let hw = tw_hud + self.pad_x * 2;
             let hx = match self.ta_hud_pos % 3 {
@@ -1958,6 +2031,15 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 if len == 0 {
                     return;
                 }
+                // 타입어헤드 입력 중(157차): ↑/↓ = 일치 항목 사이로만 이동 · Esc = 입력 취소. 수식키가 있으면 평소 이동.
+                if !shift && !primary {
+                    match key {
+                        Key::Down if self.typeahead_cycle(true, inv) => return,
+                        Key::Up if self.typeahead_cycle(false, inv) => return,
+                        Key::Escape if self.typeahead_cancel(inv) => return,
+                        _ => {}
+                    }
+                }
                 let caret = self.caret.unwrap_or(self.scroll_row).min(len - 1);
                 // 고속 스크롤(10-02): ↑/↓ 자동 반복이 짧은 간격으로 이어지면 한 번에 k행
                 let k = match key {
@@ -1983,7 +2065,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         Key::Home => 0,
                         Key::End => len as isize - 1,
                         Key::Space => {
-                            if !self.ta_space || self.typeahead.text().is_empty() {
+                            if !self.ta_space || !self.typeahead.is_active() {
                                 self.caret = Some(caret);
                                 self.src.select(caret, SelectOp::Toggle);
                                 inv.push(self.bounds);
@@ -2047,7 +2129,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     }
                     // Space/Ctrl+Space = 캐럿 행 선택 토글(docs/32 §7 결정 1)
                     // 접두사 입력 중 + 공백 포함 옵션이면 토글 대신 문자(Char 경로 처리)
-                    Key::Space if !self.ta_space || self.typeahead.text().is_empty() => {
+                    Key::Space if !self.ta_space || !self.typeahead.is_active() => {
                         self.caret = Some(caret);
                         self.src.select(caret, SelectOp::Toggle);
                         inv.push(self.bounds);
@@ -2057,6 +2139,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 }
             }
             InputEvent::Char { c, now_ms } => {
+                self.ta_clock = self.ta_clock.max(now_ms);
+                if self.ta_off {
+                    return;
+                }
                 if c == '\u{8}' {
                     // Backspace — 접두사 축소(옵션 off면 무시 — 원본 §7 체크), 비면 HUD 소거
                     if self.ta_backspace {
@@ -2067,11 +2153,13 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     }
                 } else if c == ' ' {
                     // 공백 = 접두사 입력 중일 때만 문자(원본 "Include Space while typing")
-                    if self.ta_space && !self.typeahead.text().is_empty() {
+                    if self.ta_space && self.typeahead.is_active() {
                         let q = self.typeahead.push(c, now_ms);
                         self.typeahead_find(&q.prefix, q.include_caret, inv);
                     }
-                } else if !c.is_control() && (self.ta_special || c.is_alphanumeric()) {
+                } else if !c.is_control()
+                    && (self.ta_special || c.is_alphanumeric() || nexa_ctl::hangul::is_jamo(c))
+                {
                     let q = self.typeahead.push(c, now_ms);
                     self.typeahead_find(&q.prefix, q.include_caret, inv);
                 }
@@ -2547,8 +2635,8 @@ impl<S: RowSource> VirtualRows<S> {
         }
 
         // ── 타입어헤드 HUD(본문 좌하단 플로팅 배지 — 원본 docs/32 §7-A) ──
-        if !self.typeahead.text().is_empty() {
-            let label = format!("찾기: {}", self.typeahead.text());
+        if self.typeahead.is_active() {
+            let label = format!("찾기: {}", self.typeahead.composing());
             let tw = ctx.text_width(&label);
             // HUD 배지 위치(원본 §7-A 3×3 피커 — 설정 07-15): 행=pos/3·열=pos%3
             let hw = tw + self.pad_x * 2;
@@ -3602,8 +3690,10 @@ mod tests {
 
     // ── 타입어헤드(M1-6, 원본 docs/32 §6) ──
 
+    /// 157차 규칙(nexa-ctl 부품 · nexa-sql 탐색기와 같다): 글자는 **누적**만 한다(같은 키 반복도 누적 — 자동 순환 없음) ·
+    /// 입력 중 ↑/↓ = 접두사가 같은 항목 사이로만 순환 · Backspace = 축소.
     #[test]
-    fn typeahead_jumps_cycles_and_accumulates() {
+    fn typeahead_accumulates_and_arrows_cycle_matches() {
         let mut inv = Invalidations::default();
         let mut v = VirtualRows::new(
             SelRows::named(&["apple", "apricot", "banana", "aardvark"]),
@@ -3612,69 +3702,116 @@ mod tests {
             16,
         );
         v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
-        v.on_event(&InputEvent::Char { c: 'a', now_ms: 0 }, &mut inv);
+        let ch = |c: char, now_ms: u64| InputEvent::Char { c, now_ms };
+        v.on_event(&ch('a', 0), &mut inv);
         assert_eq!(v.caret(), Some(0), "첫 'a' = apple");
-        assert!(v.source().is_selected(0));
-        v.on_event(
-            &InputEvent::Char {
-                c: 'a',
-                now_ms: 300,
-            },
-            &mut inv,
-        );
-        assert_eq!(v.caret(), Some(1), "반복 'a' = 다음 매치 cycle(apricot)");
-        v.on_event(
-            &InputEvent::Char {
-                c: 'a',
-                now_ms: 600,
-            },
-            &mut inv,
-        );
-        assert_eq!(v.caret(), Some(3), "banana 건너뛰고 aardvark");
-        v.on_event(
-            &InputEvent::Char {
-                c: 'p',
-                now_ms: 900,
-            },
-            &mut inv,
-        );
+        assert!(v.source().is_selected(0) && v.typeahead_active());
+        // ↓ = 다음 일치(banana는 건너뛴다) · 끝에서 처음으로 · ↑ = 이전 일치.
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(1), "↓ = apricot");
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(3), "↓ = aardvark(banana 건너뜀)");
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(0), "↓ = 처음으로(apple)");
+        v.on_event(&key(Key::Up), &mut inv);
+        assert_eq!(v.caret(), Some(3), "↑ = 이전 일치(aardvark)");
+        v.on_event(&key(Key::Up), &mut inv);
+        assert_eq!(v.caret(), Some(1), "↑ = apricot");
+        assert_eq!(v.typeahead_text(), "a", "순환은 접두사를 바꾸지 않는다");
+        // 누적: 'p' → "ap" = 지금 행(apricot)이 여전히 일치 → 그대로.
+        v.on_event(&ch('p', 300), &mut inv);
         assert_eq!(v.typeahead_text(), "ap");
-        assert_eq!(v.caret(), Some(0), "누적 'ap' = wrap 후 apple");
-        // Backspace → "a", 현재 행 포함 재평가 → apple 유지
-        v.on_event(
-            &InputEvent::Char {
-                c: '\u{8}',
-                now_ms: 1100,
-            },
-            &mut inv,
-        );
-        assert_eq!(v.typeahead_text(), "a");
+        assert_eq!(v.caret(), Some(1));
+        // 같은 키 반복도 누적("app") = apple로.
+        v.on_event(&ch('p', 400), &mut inv);
+        assert_eq!(v.typeahead_text(), "app");
         assert_eq!(v.caret(), Some(0));
+        // Backspace → "ap" · 지금 행 포함 재평가 → apple 유지.
+        v.on_event(&ch('\u{8}', 500), &mut inv);
+        assert_eq!(v.typeahead_text(), "ap");
+        assert_eq!(v.caret(), Some(0));
+        // 일치가 하나뿐이면 ↑/↓는 제자리(다른 행으로 새지 않는다).
+        v.on_event(&ch('p', 600), &mut inv);
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(0), "유일한 일치 = 제자리");
+        // Esc = 입력 취소 → 그 뒤 ↓는 평소 이동.
+        v.on_event(&key(Key::Escape), &mut inv);
+        assert!(!v.typeahead_active());
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(1), "입력이 끝나면 평소 한 칸 이동");
     }
 
+    /// 유지 시간(157차 · 기본 2000 ms): 마지막 활동 뒤 시간이 지나면 지운다 · **↑/↓로 한 번 움직일 때마다 다시 잰다** ·
+    /// 공백은 입력 중일 때만 글자 · 끄면 글자 키를 무시한다.
     #[test]
-    fn typeahead_times_out_via_tick_and_space_is_excluded() {
+    fn typeahead_timeout_resets_on_arrow_moves() {
         let mut inv = Invalidations::default();
-        let mut v = VirtualRows::new(SelRows::named(&["alpha", "beta"]), 20, 12, 16);
+        let mut v = VirtualRows::new(SelRows::named(&["alpha", "beta", "bravo"]), 20, 12, 16);
         v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
-        v.on_event(&InputEvent::Char { c: 'b', now_ms: 0 }, &mut inv);
+        let ch = |c: char, now_ms: u64| InputEvent::Char { c, now_ms };
+        v.on_event(&ch('b', 0), &mut inv);
         assert_eq!(v.typeahead_text(), "b");
-        v.tick(500, &mut inv);
-        assert_eq!(v.typeahead_text(), "b", "타임아웃 전 유지");
-        v.tick(1200, &mut inv);
-        assert_eq!(v.typeahead_text(), "", "1000ms 경과 → 버퍼 소거");
-        v.on_event(
-            &InputEvent::Char {
-                c: ' ',
-                now_ms: 1300,
-            },
-            &mut inv,
+        v.tick(1500, &mut inv);
+        assert!(v.typeahead_active(), "유지 시간 전");
+        // 1500 ms에 ↓로 이동 = 그때부터 다시 2000 ms.
+        v.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(v.caret(), Some(2), "beta → bravo");
+        v.tick(3000, &mut inv);
+        assert!(
+            v.typeahead_active(),
+            "이동이 유지 시간을 되돌렸다(3000 − 1500 < 2000)"
         );
-        assert_eq!(
-            v.typeahead_text(),
-            "",
-            "Space는 타입어헤드 제외(docs/32 §7)"
+        v.tick(3600, &mut inv);
+        assert!(!v.typeahead_active(), "마지막 이동 뒤 2000 ms 경과 = 소거");
+        // 공백: 입력 중이 아니면 글자가 아니다.
+        v.on_event(&ch(' ', 4000), &mut inv);
+        assert!(!v.typeahead_active(), "빈 상태의 공백 = 타입어헤드 아님");
+        // 유지 시간 설정.
+        v.set_typeahead_opts(500, true, true, true, 6, &mut inv);
+        v.on_event(&ch('a', 5000), &mut inv);
+        v.tick(5600, &mut inv);
+        assert!(!v.typeahead_active(), "설정한 500 ms");
+        // 끔 = 글자 키 무시 · 진행 중이던 입력도 지운다.
+        v.on_event(&ch('b', 6000), &mut inv);
+        assert!(v.typeahead_active());
+        v.set_typeahead_enabled(false, &mut inv);
+        assert!(!v.typeahead_active());
+        let before = v.caret();
+        v.on_event(&ch('a', 6100), &mut inv);
+        assert!(!v.typeahead_active() && v.caret() == before, "끔 = 무시");
+    }
+
+    /// 한글(157차): 자모가 오면 그리드 안에서 조합한다(IME 없이) — 조합 중인 글자도 접두사에 들어간다.
+    #[test]
+    fn typeahead_composes_hangul_jamo() {
+        let mut inv = Invalidations::default();
+        let mut v = VirtualRows::new(
+            SelRows::named(&["apple", "가방", "강아지", "나무"]),
+            20,
+            12,
+            16,
         );
+        v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        let ch = |c: char, now_ms: u64| InputEvent::Char { c, now_ms };
+        v.on_event(&ch('ㄱ', 0), &mut inv);
+        assert_eq!(v.typeahead_composing(), "ㄱ");
+        assert!(v.typeahead_active(), "조합 중 = 입력 중");
+        v.on_event(&ch('ㅏ', 100), &mut inv);
+        assert_eq!(v.typeahead_composing(), "가");
+        assert_eq!(v.caret(), Some(1), "가 → 가방");
+        v.on_event(&ch('ㅇ', 200), &mut inv);
+        assert_eq!(v.typeahead_composing(), "강");
+        assert_eq!(v.caret(), Some(2), "강 → 강아지");
+        // Backspace = 자모 단위("강" → "가") → 지금 행(강아지)은 "가"로 시작하지 않으므로 가방으로.
+        v.on_event(&ch('\u{8}', 300), &mut inv);
+        assert_eq!(v.typeahead_composing(), "가");
+        assert_eq!(v.caret(), Some(1));
+        // 특수문자 제외 설정이어도 자모는 받는다.
+        v.on_event(&key(Key::Escape), &mut inv);
+        v.set_typeahead_opts(2000, false, true, true, 6, &mut inv);
+        v.on_event(&ch('ㄴ', 5000), &mut inv);
+        v.on_event(&ch('ㅏ', 5100), &mut inv);
+        assert_eq!(v.caret(), Some(3), "나 → 나무");
     }
 
     // ── 소스 교체(M1-8 네비게이션) ──
