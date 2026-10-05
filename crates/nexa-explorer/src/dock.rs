@@ -85,6 +85,49 @@ pub const IMG_MARKER: &str = "\u{1}img|";
 /// 이미지 영역 예약 행(마커 다음 연속 — 내용 없음).
 pub const IMG_PAD: &str = "\u{1}pad";
 
+/// 글자 종류(더블클릭 단어 선택용 · 159차): 빈칸 · 낱말 글자(글자 · 숫자 · `_`) · 그 밖(문장 부호).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CharClass {
+    Space,
+    Word,
+    Other,
+}
+
+/// 글자 → [`CharClass`].
+#[must_use]
+pub fn char_class(c: char) -> CharClass {
+    if c.is_whitespace() {
+        CharClass::Space
+    } else if c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Other
+    }
+}
+
+/// `chars[idx]`가 든 **같은 종류 글자의 연속 구간** `[start, end)`(순수 · 159차 — 더블클릭 = 단어 선택): 낱말 위 = 그 낱말 ·
+/// 빈칸 위 = 그 빈칸들 · 문장 부호 위 = 이어진 부호들. 빈 줄 · 범위 밖 = `None`.
+#[must_use]
+pub fn word_span(chars: &[char], idx: usize) -> Option<(usize, usize)> {
+    let class = char_class(*chars.get(idx)?);
+    let mut start = idx;
+    while start > 0 && char_class(chars[start - 1]) == class {
+        start -= 1;
+    }
+    let mut end = idx + 1;
+    while end < chars.len() && char_class(chars[end]) == class {
+        end += 1;
+    }
+    Some((start, end))
+}
+
+/// 클릭 x(원점 상대)가 놓인 **글자 인덱스**(경계 목록 `offs` = 0..=글자 수 · 마지막 글자 뒤 = 마지막 글자).
+fn char_index(offs: &[i32], rel: i32) -> Option<usize> {
+    let n = offs.len().checked_sub(1).filter(|&n| n > 0)?;
+    let i = offs.iter().rposition(|&o| o <= rel).unwrap_or(0);
+    Some(i.min(n - 1))
+}
+
 /// 클릭 x(원점 상대) → 최근접 문자 경계 인덱스(edit.rs index_at 규약).
 fn nearest_boundary(offs: &[i32], rel: i32) -> usize {
     let mut best = 0usize;
@@ -425,6 +468,51 @@ impl InfoDock {
             ctx.text(cell.x + (cell.w - tw).max(0) / 2 + off, ty, cell, label, fg);
         }
         self.popout_range.set(cell);
+    }
+
+    /// 좌표의 (절대 라인, 그 자리 글자 인덱스) — 이미지 마커 줄 · 빈 줄 · 그리기 전 = `None`.
+    fn char_index_at(&self, x: i32, y: i32) -> Option<(usize, usize)> {
+        let i = self.line_at(x, y)?;
+        if self.lines[i].starts_with('\u{1}') {
+            return None;
+        }
+        let offs = self.offsets.borrow();
+        let line = offs.get(i - self.scroll)?;
+        let rel = x - (self.bounds.x + self.pad_x) + self.scroll_x;
+        Some((i, char_index(line, rel)?))
+    }
+
+    /// **단어 선택**(더블클릭 · 159차): 좌표의 글자가 든 같은 종류 구간([`word_span`])을 선택한다 — 선택했으면 `true`.
+    pub fn select_word_at(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
+        let Some((line, idx)) = self.char_index_at(x, y) else {
+            return false;
+        };
+        let chars: Vec<char> = self.lines[line].chars().collect();
+        let Some((a, b)) = word_span(&chars, idx) else {
+            return false;
+        };
+        self.sel = Some(((line, a), (line, b)));
+        self.sel_drag = false;
+        inv.push(self.bounds);
+        true
+    }
+
+    /// **줄 선택**(트리플 클릭 · 159차): 좌표의 줄 전체를 선택한다 — 선택했으면 `true`(빈 줄 · 이미지 줄 = `false`).
+    pub fn select_line_at(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
+        let Some(line) = self.line_at(x, y) else {
+            return false;
+        };
+        if self.lines[line].starts_with('\u{1}') {
+            return false;
+        }
+        let n = self.lines[line].chars().count();
+        if n == 0 {
+            return false;
+        }
+        self.sel = Some(((line, 0), (line, n)));
+        self.sel_drag = false;
+        inv.push(self.bounds);
+        true
     }
 
     /// 텍스트 내용 전체 선택(컨텍스트 메뉴/Edit 메뉴 — 10-01). 이미지·빈 내용은 무시.
@@ -1055,6 +1143,64 @@ mod tests {
         fn text_width(&mut self, text: &str) -> i32 {
             text.chars().count() as i32 * 8
         }
+    }
+
+    /// 더블클릭 = 단어 · 트리플 클릭 = 줄(159차): 낱말 · 빈칸 · 문장 부호 구간 · 한글 · 줄 끝 뒤 클릭 = 마지막 글자 기준 · 빈 줄 = 없음.
+    #[test]
+    fn word_and_line_selection_by_point() {
+        let cs = |s: &str| s.chars().collect::<Vec<char>>();
+        assert_eq!(word_span(&cs("ab cd"), 0), Some((0, 2)));
+        assert_eq!(word_span(&cs("ab cd"), 2), Some((2, 3)), "빈칸 = 빈칸 구간");
+        assert_eq!(word_span(&cs("ab  cd"), 3), Some((2, 4)));
+        assert_eq!(
+            word_span(&cs("a-->b"), 2),
+            Some((1, 4)),
+            "부호 = 이어진 부호"
+        );
+        assert_eq!(
+            word_span(&cs("file_1.txt"), 3),
+            Some((0, 6)),
+            "_ 는 낱말 글자"
+        );
+        assert_eq!(word_span(&cs("현재 폴더"), 4), Some((3, 5)));
+        assert_eq!(word_span(&cs(""), 0), None);
+        assert_eq!(word_span(&cs("ab"), 5), None);
+        assert_eq!(char_index(&[0, 8, 16, 24], 9), Some(1));
+        assert_eq!(
+            char_index(&[0, 8, 16, 24], 100),
+            Some(2),
+            "끝 뒤 = 마지막 글자"
+        );
+        assert_eq!(char_index(&[0, 8, 16, 24], -5), Some(0));
+        assert_eq!(char_index(&[0], 3), None, "빈 줄");
+        // Probe = 8px/문자 · 내용 top = 121 · 왼쪽 여백 6.
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        d.set_lines(
+            vec!["name: report.txt".into(), "".into(), "size 12 KB".into()],
+            &mut inv,
+        );
+        d.paint_dock(&mut Probe, &Theme::dark());
+        // "report" 위(글자 8 = 'p').
+        assert!(d.select_word_at(6 + 8 * 8 + 3, 125, &mut inv));
+        assert_eq!(d.selected_text().as_deref(), Some("report"));
+        // ':' 위 = 부호 하나.
+        assert!(d.select_word_at(6 + 8 * 4 + 3, 125, &mut inv));
+        assert_eq!(d.selected_text().as_deref(), Some(":"));
+        // 줄 끝 뒤 = 마지막 낱말.
+        assert!(d.select_word_at(6 + 8 * 30, 125, &mut inv));
+        assert_eq!(d.selected_text().as_deref(), Some("txt"));
+        // 줄 선택.
+        assert!(d.select_line_at(6 + 8 * 2, 125, &mut inv));
+        assert_eq!(d.selected_text().as_deref(), Some("name: report.txt"));
+        assert!(d.select_line_at(6 + 8 * 2, 165, &mut inv));
+        assert_eq!(d.selected_text().as_deref(), Some("size 12 KB"));
+        // 빈 줄 · 내용 밖 = 선택 없음(기존 선택은 그대로).
+        assert!(!d.select_word_at(6 + 4, 145, &mut inv));
+        assert!(!d.select_line_at(6 + 4, 145, &mut inv));
+        assert!(!d.select_word_at(6 + 4, 50, &mut inv));
+        assert_eq!(d.selected_text().as_deref(), Some("size 12 KB"));
     }
 
     #[test]
