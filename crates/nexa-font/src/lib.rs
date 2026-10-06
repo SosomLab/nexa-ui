@@ -221,7 +221,17 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+/// 프로세스에서 이미 매핑한 글꼴 파일(정규화한 경로 → 바이트). 같은 파일을 UI 체인과 터미널 체인이 따로 매핑하면 물리
+/// 페이지는 공유돼도 작업 집합에는 두 번 잡힌다(nexa-dir3 10-06 메모리 점검) — 한 번만 매핑해 나눠 쓴다.
+static MAPPED: std::sync::Mutex<Vec<(PathBuf, &'static [u8])>> = std::sync::Mutex::new(Vec::new());
+
 fn map_font(path: &Path) -> Option<&'static [u8]> {
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(m) = MAPPED.lock() {
+        if let Some((_, d)) = m.iter().find(|(p, _)| *p == key) {
+            return Some(d);
+        }
+    }
     let file = File::open(path).ok()?;
     // SAFETY: 폰트 파일은 실행 중 변경되지 않는 읽기 전용 자산(OS 배포본·사용자 설치본).
     let mmap = unsafe { Mmap::map(&file) }.ok()?;
@@ -229,7 +239,17 @@ fn map_font(path: &Path) -> Option<&'static [u8]> {
         return None;
     }
     let leaked: &'static Mmap = Box::leak(Box::new(mmap));
-    Some(&leaked[..])
+    let data: &'static [u8] = &leaked[..];
+    if let Ok(mut m) = MAPPED.lock() {
+        m.push((key, data));
+    }
+    Some(data)
+}
+
+/// 지금까지 매핑한 글꼴 파일 수(계측 · 시험용).
+#[must_use]
+pub fn mapped_font_files() -> usize {
+    MAPPED.lock().map_or(0, |m| m.len())
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -702,6 +722,22 @@ pub fn mono_font(family: Option<&str>) -> Option<Loaded> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 같은 글꼴 파일은 한 번만 매핑한다 — 두 번 찾아도 같은 버퍼(포인터 동일) · 매핑 수는 늘지 않는다.
+    #[test]
+    fn same_font_file_is_mapped_once() {
+        let Some(a) = system_ui_font() else {
+            return; // 글꼴 없는 환경(CI 최소 이미지)
+        };
+        let n = mapped_font_files();
+        let b = system_ui_font().expect("same lookup");
+        assert_eq!(a.data.as_ptr(), b.data.as_ptr(), "같은 파일 = 같은 매핑");
+        assert_eq!(
+            mapped_font_files(),
+            n,
+            "두 번째 조회는 새 매핑을 만들지 않는다"
+        );
+    }
 
     /// OS 래스터라이저 스위치(`set_text_gdi`)는 **프로세스 전역**이다 — 시험은 병렬로 도므로 켜고 끄는 시험끼리 직렬화한다.
     /// (09-22 CI windows-latest: `gdi_path_gives_integer_advances`가 끝나며 끈 순간 `gdi_cleartype_stems_bold_and_advances`가

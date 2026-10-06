@@ -835,18 +835,23 @@ impl Font {
         Self::from_static(Box::leak(data.into_boxed_slice()), index)
     }
 
+    /// 글꼴 파일 매핑들(폴백 체인 전체 · 같은 버퍼를 나눠 쓰는 face는 한 번만) — 호스트가 실제 상주 페이지를 재는 데 쓴다
+    /// (nexa-dir3 10-06: 매핑 크기 ≠ 메모리 점유 · 파일 매핑은 건드린 페이지만 상주하고 Private에는 들지 않는다).
+    #[must_use]
+    pub fn data_slices(&self) -> Vec<&'static [u8]> {
+        let mut out: Vec<&'static [u8]> = Vec::new();
+        for (data, _) in &self.raw {
+            if !out.iter().any(|d| d.as_ptr() == data.as_ptr()) {
+                out.push(data);
+            }
+        }
+        out
+    }
+
     /// 글꼴 파일 원본 바이트 합(폴백 체인 전체 · 같은 버퍼를 나눠 쓰는 face는 한 번만) — 호스트의 메모리 계측용(nexa-dir3 10-04).
     #[must_use]
     pub fn data_bytes(&self) -> u64 {
-        let mut seen: Vec<*const u8> = Vec::new();
-        let mut sum = 0u64;
-        for (data, _) in &self.raw {
-            if !seen.contains(&data.as_ptr()) {
-                seen.push(data.as_ptr());
-                sum += data.len() as u64;
-            }
-        }
-        sum
+        self.data_slices().iter().map(|d| d.len() as u64).sum()
     }
 
     /// 글리프 비트맵 캐시가 쥔 바이트(커버리지 버퍼 + 항목 머리 어림) — 호스트의 메모리 계측용. 복제본끼리 캐시를 공유하므로
