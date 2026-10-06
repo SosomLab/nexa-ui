@@ -113,7 +113,8 @@ const MAX_TAB_W: i32 = 240;
 /// 닫기(×)/자물쇠 상자 한 변(논리 px).
 const CLOSE_BOX: i32 = 16;
 /// 핀 표식 지름(논리 px).
-const PIN_MARK: i32 = 6;
+/// 고정 표식(압정) 한 변 — 종전 점(6)은 압정으로 바꾸니 너무 작았다(nexa-sql 10-06).
+const PIN_MARK: i32 = 9;
 /// 앞 표식([`TabBadge`]) 상자 한 변(논리 px).
 const BADGE_BOX: i32 = 18;
 /// 탭 아이콘 상자 한 변(논리 px · dir2 탭 아이콘 16).
@@ -947,6 +948,31 @@ impl TabBar {
 }
 
 /// `inner`가 `clip` 안에 완전히 들어가는가(클립 없는 폴리라인 글리프 보호).
+/// 압정(Pin) 아이콘 — 머리(둥근 원) + 어깨(가로 막대) + 바늘(아래로 가늘게). 도형으로(글꼴 글리프 X · 3-OS 동일) · `r` = 정사각형 자리.
+fn draw_pin(ctx: &mut dyn DrawCtx, r: Rect, color: Color) {
+    let g = r.w.max(6);
+    let x0 = r.x;
+    let y0 = r.y;
+    // 머리: 위쪽 가운데 둥근 원(지름 g/2).
+    let head = (g / 2).max(3);
+    ctx.fill_ellipse(Rect::new(x0 + (g - head) / 2, y0, head, head), color);
+    // 어깨: 머리 아래 가로 막대(폭 g·높이 1~2).
+    let bar_h = (g / 6).max(1);
+    let bar_y = y0 + head - bar_h / 2;
+    ctx.fill_rect(Rect::new(x0 + g / 8, bar_y, g - g / 4, bar_h), color);
+    // 바늘: 어깨 아래 가운데에서 바닥까지(폭 1~2).
+    let nw = (g / 6).max(1);
+    ctx.fill_rect(
+        Rect::new(
+            x0 + (g - nw) / 2,
+            bar_y + bar_h,
+            nw,
+            (y0 + g - (bar_y + bar_h)).max(1),
+        ),
+        color,
+    );
+}
+
 fn fully_inside(inner: Rect, clip: Rect) -> bool {
     !inner.is_empty()
         && inner.x >= clip.x
@@ -1169,15 +1195,12 @@ impl Widget for TabBar {
                 }
                 tx += br.w + gap;
             }
-            if self.is_pinned(i) {
-                let dot = Rect::new(tx, cell.y + (cell.h - mark) / 2, mark, mark);
-                if fully_inside(dot, clip) {
-                    ctx.fill_ellipse(dot, self.tab_accent(theme));
-                }
-                tx += mark + gap;
-            }
             let cr = self.close_rect(*cell);
-            let text_clip = Rect::new(tx, cell.y, cr.x - gap - tx, cell.h).intersection(&clip);
+            // 고정 표식은 제목 **뒤**(공백 1칸 뒤 · 압정 아이콘 · nexa-sql 사용자 10-06 — 종전 제목 앞 동그라미는 "무슨 뜻인지"
+            //   읽히지 않았다) → 제목 자리는 표식 폭만큼 줄인다.
+            let pin_w = if self.is_pinned(i) { mark + gap } else { 0 };
+            let text_clip =
+                Rect::new(tx, cell.y, cr.x - gap - tx - pin_w, cell.h).intersection(&clip);
             if !text_clip.is_empty() {
                 // 제목 색: 호스트 덮어쓰기(미저장 탭 등) > 활성 text · 비활성 text_dim.
                 let fg =
@@ -1185,6 +1208,13 @@ impl Widget for TabBar {
                         .unwrap_or(if active { theme.text } else { theme.text_dim });
                 let ty = ctx.text_center_y(cell.y, cell.h);
                 ctx.text(tx, ty, text_clip, &self.titles[i], fg);
+            }
+            if self.is_pinned(i) {
+                let tw = ctx.text_width(&self.titles[i]).min(text_clip.w.max(0));
+                let pr = Rect::new(tx + tw + gap, cell.y + (cell.h - mark) / 2, mark, mark);
+                if fully_inside(pr, clip) {
+                    draw_pin(ctx, pr, self.tab_accent(theme));
+                }
             }
             // 닫기 상자(Sublime식 · nexa-sql 09-28): 잠김 = 자물쇠 · **미저장 = 구분색 동그라미**(상자 hover면 같은 색 ×) ·
             //   저장할 것 없음 = hover/활성 때 구분색 ×. 구분색 = 그 탭의 줄 색(새 탭 = 경고색 · 파일 = 강조색 · 미리보기 = 미리보기색).
@@ -1560,7 +1590,7 @@ mod tests {
         let (mut t, mut inv) = bar(&["alpha", "beta"], 0);
         t.set_pinned(vec![true, false], &mut inv);
         t.paint(&mut ProbeCtx, &Theme::dark());
-        assert_eq!(t.tab_rect(0).map(|r| r.w), Some(71 + 6 + 4));
+        assert_eq!(t.tab_rect(0).map(|r| r.w), Some(71 + PIN_MARK + 4));
     }
 
     #[test]
