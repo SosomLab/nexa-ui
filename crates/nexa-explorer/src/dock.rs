@@ -37,6 +37,8 @@ pub struct InfoDock {
     /// (nexa-dir3 10-06 "네비 화살표와 같은 글리프 · 80 %").
     goto_glyph: String,
     goto_delta: f32,
+    /// 글리프 좌우 여백(px) — 기본 = `pad_x`(라벨과 같음) · 호스트가 줄여 터미널 라벨에 붙일 수 있다(nexa-dir3 10-06).
+    goto_pad: i32,
     /// 호스트 패널 포커스 — 비활성 패널은 강조색(accent·sel_bg)을 무채색으로 낮춘다.
     focused: bool,
     /// 내용 첫 가시 라인(세로 스크롤 — 미리보기 07-26. 내용 교체 시 0).
@@ -171,6 +173,7 @@ impl InfoDock {
             goto_range: std::cell::Cell::new((0, 0)),
             goto_glyph: "→".into(),
             goto_delta: 0.0,
+            goto_pad: pad_x,
             focused: false,
             scroll: 0,
             scroll_frac: 0,
@@ -402,10 +405,11 @@ impl InfoDock {
     }
 
     /// 우상단 "크게"(↗) 오버레이 표시 여부(호스트 — 미리보기 종류일 때만).
-    /// 터미널 옆 "폴더로 이동" 글리프 · 크기 증분(px · 본문 슬롯 위에 얹음).
-    pub fn set_goto_glyph(&mut self, glyph: impl Into<String>, delta_px: f32) {
+    /// 터미널 옆 "폴더로 이동" 글리프 · 크기 증분(px · 본문 슬롯 위에 얹음) · 좌우 여백(px · 칸 너비 = 글리프 + 여백 × 2).
+    pub fn set_goto_glyph(&mut self, glyph: impl Into<String>, delta_px: f32, pad_px: i32) {
         self.goto_glyph = glyph.into();
         self.goto_delta = delta_px;
+        self.goto_pad = pad_px.max(0);
     }
 
     pub fn set_popout(&mut self, on: bool, inv: &mut Invalidations) {
@@ -710,7 +714,7 @@ impl InfoDock {
                 // 터미널 옆 "폴더로 이동"(→) — 한 몸 버튼(QA 07-14, 원본 '터미널에서 열기').
                 // 활성=accent 배경(단, 패널 비활성이면 무채색 — 활성 영역과 구분), 비활성=무색
                 ctx.select_font_sized(crate::draw::FontSlot::Base, false, false, self.goto_delta);
-                let gw = ctx.text_width(&self.goto_glyph) + self.pad_x * 2;
+                let gw = ctx.text_width(&self.goto_glyph) + self.goto_pad * 2;
                 let gcell = Rect::new(x, strip.y, gw.min((strip.right() - x).max(0)), strip.h);
                 let (gfg, gbg) = if active && self.focused {
                     (theme.text, theme.accent)
@@ -724,7 +728,14 @@ impl InfoDock {
                 if gcell.w > 0 {
                     // 글리프 **잉크**를 칸 세로 가운데에(줄 상자 가운데는 아이콘 글꼴에서 아래로 처졌다 · nexa-dir3 10-06).
                     let gy = ctx.glyph_center_y(&self.goto_glyph, gcell.y, gcell.h);
-                    ctx.text_opaque(gcell.x + self.pad_x, gy, gcell, &self.goto_glyph, gfg, gbg);
+                    ctx.text_opaque(
+                        gcell.x + self.goto_pad,
+                        gy,
+                        gcell,
+                        &self.goto_glyph,
+                        gfg,
+                        gbg,
+                    );
                 }
                 ctx.select_font(crate::draw::FontSlot::Base, false, false);
                 self.goto_range.set((gcell.x, gcell.x + gw));
