@@ -403,6 +403,9 @@ pub struct TextBox {
     /// 멀티라인(소개글) 모드(08-17) — Enter가 확정 대신 개행, 세로 여러 줄 렌더.
     /// 단일 라인 경로는 이 플래그가 꺼져 있어 종전 그대로다.
     multiline: bool,
+    /// 멀티라인 위 여백(논리 px · 기본 8 · 아래 여백은 4 고정) — 한 줄 상자를 세로 가운데에 맞추려는 호스트가 줄인다
+    /// (nexa-sql 조건 바 10-07 = 4 → 28px 상자에 20px 행이 가운데).
+    ml_pad_y: i32,
     /// ★ 마스킹(●) — 비밀 값 표시용(09-03 동기화 패스프레이즈). 값·편집은 불변,
     ///   **표시 문자열만** 바꾼다(캐럿·히트테스트는 같은 마스킹 문자열을 재서 일관).
     masked: bool,
@@ -836,6 +839,7 @@ impl TextBox {
             char_filter: None,
             max_chars: 0,
             multiline: false,
+            ml_pad_y: 8,
             masked: false,
             wrap: false,
             vscroll: std::cell::Cell::new(0),
@@ -2134,6 +2138,11 @@ impl TextBox {
     #[must_use]
     pub fn masked(&self) -> bool {
         self.masked
+    }
+
+    /// 멀티라인 위 여백(논리 px · 기본 8). 보이는 줄 수 = `(높이 − 위 여백 − 4) / 줄 높이`.
+    pub fn set_ml_pad_y(&mut self, px: i32) {
+        self.ml_pad_y = px.clamp(0, 32);
     }
 
     /// ★ 줄 바꿈 토글(멀티라인 전용) — 켜면 가로 스크롤 대신 폭에 맞춰 접는다.
@@ -3500,7 +3509,7 @@ impl TextBox {
         };
         self.gutter_px.set(gw);
         let tx = b.x + self.s(10) + gw + self.s(self.text_inset);
-        let top0 = b.y + self.s(8);
+        let top0 = b.y + self.s(self.ml_pad_y);
         // ★ 미니맵 띠(멀티라인 + 켬) — 스크롤바(THICK 11 + MARGIN 2 = 13) 안쪽 · 본문은 띠 왼쪽 4px 앞에서 끝난다.
         let band = if self.minimap && self.multiline {
             let mw = self.s(self.minimap_w);
@@ -3591,7 +3600,7 @@ impl TextBox {
 
         // 보이는 줄 수 + 세로 스크롤. 08-18: 사용자가 휠로 스크롤 중이면 vscroll을
         // 그대로 존중(자유 스크롤 · 캐럿 안 따라감). 아니면 캐럿을 따라간다.
-        let rows = (((b.h - self.s(12)) / lh).max(1)) as usize;
+        let rows = (((b.h - self.s(self.ml_pad_y + 4)) / lh).max(1)) as usize;
         let max_top = n_rows.saturating_sub(rows);
         // ★ 늘 클램프(nexa-sql 10-07 조건 바): 1줄 보기에서 캐럿 추종으로 밀린 `vscroll`이 상자가 커진 뒤(3줄)에도 남아
         //   마지막 줄만 맨 위에 보였다 — 캐럿이 이미 보이면 추종이 첫 줄을 안 옮기므로 여기서 상한을 맞춘다.
@@ -3606,7 +3615,7 @@ impl TextBox {
         } else {
             0
         };
-        let vis = (((b.h - self.s(12) + rem_kept) / lh).max(1) as usize).max(rows);
+        let vis = (((b.h - self.s(self.ml_pad_y + 4) + rem_kept) / lh).max(1) as usize).max(rows);
         if self.ml_user_scrolled {
             top = top.min(max_top);
         } else {
@@ -4212,7 +4221,9 @@ impl TextBox {
                     let col = c.saturating_sub(*start_idx);
                     let cx = dx + w.get(col).copied().unwrap_or(0);
                     if cx >= vx0 && cx <= vx1 {
-                        if let Some(r) = clipv(Rect::new(cx, y, self.s(2).max(2), th)) {
+                        // 캐럿은 글자와 같은 `ty`(행 가운데)에서 — 행 위(`y`)에 두면 글자가 캐럿보다 (lh−th)/2 아래로 보인다
+                        //   (nexa-sql 조건 바 10-07 "플레이스홀더가 캐럿보다 약간 아래").
+                        if let Some(r) = clipv(Rect::new(cx, ty, self.s(2).max(2), th)) {
                             ctx.fill_rect(r, theme.text);
                         }
                     }

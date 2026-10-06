@@ -56,11 +56,11 @@ pub use controls::{
 pub use controls::{
     AutoIndent, BorderSpec, BracketOpts, Button, ButtonMode, Checkbox, Choose, ChoosePicker,
     ColorPanel, ColorPicker, Combo, ComboControl, ComboItem, Control, ControlBase, CtlMsg,
-    DiffKind, EditCtxAction, Flash, FlashTone, FlatRow, GridColumn, ImageFit, IndentRules,
-    LabelSide, LinkLine, LinkStyle, MenuIcon, OccurrenceStyle, Pair, PairKind, PairOpts, PairTable,
-    PopupHit, PositionDropdown, PositionPicker, PreparedText, RadioGroup, RadioOption, ScrollAccel,
-    ScrollBars, SpeedHud, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
-    WhitespaceMode, WhitespaceStyle,
+    DiffKind, EditCtxAction, Flash, FlashTone, FlatRow, GridColumn, HudStyle, ImageFit,
+    IndentRules, LabelSide, LinkLine, LinkStyle, MenuIcon, OccurrenceStyle, Pair, PairKind,
+    PairOpts, PairTable, PopupHit, PositionDropdown, PositionPicker, PreparedText, RadioGroup,
+    RadioOption, ScrollAccel, ScrollBars, SpeedHud, TextBox, TextHud, TreeControl, TreeGrid,
+    TreeModel, TreeNode, TreeView, WhitespaceMode, WhitespaceStyle,
 };
 pub use controls::{Palette, PaletteAction, PaletteItem, PaletteStrings};
 pub use controls::{ProbeCtx, RecordCtx, StatusBar, StatusMarker, StatusPart, StatusSeg};

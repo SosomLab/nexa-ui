@@ -249,6 +249,117 @@ impl SpeedHud {
     }
 }
 
+/// 일반 글 HUD의 모양 — 호스트 설정이 준다(nexa-sql `zoom.*` 10-07 · 고속 스크롤 HUD와 같은 항목).
+#[derive(Clone, Copy, Debug)]
+pub struct HudStyle {
+    pub pos: HudPos,
+    /// 보인 뒤 그대로 머무는 시간 · 그 뒤 사라지는 시간.
+    pub hold_ms: u64,
+    pub fade_ms: u64,
+    /// 배경(캡슐) 색 · 불투명도 0..=1 · 글자 색 · 불투명도 0..=1(글자는 배경 쪽으로 섞어 흉내).
+    pub bg: crate::theme::Color,
+    pub bg_alpha: f32,
+    pub fg: crate::theme::Color,
+    pub fg_alpha: f32,
+}
+
+/// 일반 글 HUD — 한 줄 글을 `SpeedHud`와 같은 자리·같은 유지→페이드로 보인다(글꼴 크기 변경 `Consolas · 17 px` 등 · nexa-sql 10-07).
+/// 글·색·시간은 호스트가 준다(`HudStyle`) · 상태는 글과 보인 시각뿐.
+#[derive(Debug, Default)]
+pub struct TextHud {
+    text: String,
+    shown: Option<std::time::Instant>,
+}
+
+impl TextHud {
+    /// 글을 보인다(이미 보이는 중이면 글만 바꾸고 시간을 새로 센다).
+    pub fn show(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+        self.shown = Some(std::time::Instant::now());
+    }
+
+    pub fn clear(&mut self) {
+        self.shown = None;
+    }
+
+    #[must_use]
+    pub fn visible(&self) -> bool {
+        self.shown.is_some()
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// 지금의 세기 0..=1(없으면 None) — `SpeedHud::alpha_at`과 같은 곡선(유지 → 1 − t²).
+    #[must_use]
+    pub fn alpha_at(&self, now: std::time::Instant, style: &HudStyle) -> Option<f32> {
+        let shown = self.shown?;
+        let held = now.saturating_duration_since(shown).as_millis() as u64;
+        if held < style.hold_ms {
+            return Some(1.0);
+        }
+        let f = held - style.hold_ms;
+        let fade = style.fade_ms.max(1);
+        if f >= fade {
+            return None;
+        }
+        let t = f as f32 / fade as f32;
+        Some(1.0 - t * t)
+    }
+
+    /// 호스트 tick — 사라지는 중이면 `true` · 다 사라지면 상태를 지우고 `true` 한 번.
+    pub fn tick(&mut self, now: std::time::Instant, style: &HudStyle) -> bool {
+        if self.shown.is_none() {
+            return false;
+        }
+        match self.alpha_at(now, style) {
+            None => {
+                self.clear();
+                true
+            }
+            Some(a) => a < 1.0,
+        }
+    }
+
+    /// 그리기 — `area` 안 `style.pos` 자리에 캡슐(글꼴 = 호출자 글꼴 · 여백 6/3 · 가장자리 8).
+    pub fn paint(&self, ctx: &mut dyn DrawCtx, area: Rect, scale: f32, style: &HudStyle) {
+        let Some(a) = self.alpha_at(std::time::Instant::now(), style) else {
+            return;
+        };
+        if a < 0.04 || self.text.is_empty() {
+            return;
+        }
+        let th_txt = ctx.text_height();
+        let tw = ctx.text_width(&self.text);
+        let (px, py) = (sc(6, scale), sc(3, scale));
+        let (w, h) = (tw + px * 2, th_txt + py * 2);
+        let m = sc(8, scale);
+        let (l, c, r) = (area.x + m, area.x + (area.w - w) / 2, area.right() - m - w);
+        let (t, mid, b) = (area.y + m, area.y + (area.h - h) / 2, area.bottom() - m - h);
+        let (x, y) = match style.pos {
+            HudPos::TopLeft => (l, t),
+            HudPos::TopCenter => (c, t),
+            HudPos::TopRight => (r, t),
+            HudPos::MidLeft => (l, mid),
+            HudPos::MidRight => (r, mid),
+            HudPos::BottomLeft => (l, b),
+            HudPos::BottomCenter => (c, b),
+            HudPos::BottomRight => (r, b),
+            _ => (c, mid),
+        };
+        let rect = Rect::new(x.max(area.x), y.max(area.y), w, h);
+        ctx.fill_round_rect_alpha(rect, h / 2, style.bg, (style.bg_alpha * a).clamp(0.0, 1.0));
+        // 글자 불투명도 = 배경 색 쪽으로 섞어 흉내(DrawCtx::text는 알파가 없다) · 페이드 세기도 곱한다.
+        let fa = (style.fg_alpha * a).clamp(0.0, 1.0);
+        if fa > 0.05 {
+            let fg = style.bg.lerp(style.fg, fa);
+            ctx.text(rect.x + px, rect.y + py, rect, &self.text, fg);
+        }
+    }
+}
+
 /// ★ **고속 스크롤 가속 부품**(nexa-sql 09-30 "상/하 이동시 고속 스크롤") — 같은 방향의 사건이 짧은 간격으로 이어지면
 /// 한 번의 이동량을 배수로 키운다(휠 틱 · 키 자동 반복 공통). 사건마다 `factor(dir)` 하나만 부른다 — 큐·타이머 없음.
 ///

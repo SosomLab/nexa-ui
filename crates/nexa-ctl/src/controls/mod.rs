@@ -65,7 +65,9 @@ pub use posgrid::PositionPicker;
 pub use progress::{allocate_widths, SegItem, SegProgress, SegStatus, SEG_PALETTE};
 pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
-pub use scroll::{fast_scroll, set_fast_scroll, FastScroll, ScrollAccel, ScrollBars, SpeedHud};
+pub use scroll::{
+    fast_scroll, set_fast_scroll, FastScroll, HudStyle, ScrollAccel, ScrollBars, SpeedHud, TextHud,
+};
 pub use splitter::{SplitAxis, SplitBand, SplitEvent, Splitter};
 pub use statusbar::{StatusBar, StatusMarker, StatusPart, StatusSeg};
 pub use switch::Switch;
