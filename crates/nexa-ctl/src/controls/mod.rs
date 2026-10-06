@@ -25,6 +25,7 @@ pub mod flash;
 pub mod glyphs;
 pub mod icondrop;
 pub mod listedit;
+pub mod palette;
 pub mod posdrop;
 pub mod posgrid;
 pub mod progress;
@@ -56,6 +57,9 @@ pub use flash::{Flash, FlashTone};
 pub use glyphs::{glyph, GlyphKind};
 pub use icondrop::{IconDropItem, IconDropdown};
 pub use listedit::ListEditor;
+pub use palette::{
+    fuzzy_score, rank, Palette, PaletteAction, PaletteItem, PaletteStrings, PALETTE_MAX_ROWS,
+};
 pub use posdrop::PositionDropdown;
 pub use posgrid::PositionPicker;
 pub use progress::{allocate_widths, SegItem, SegProgress, SegStatus, SEG_PALETTE};

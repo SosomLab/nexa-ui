@@ -62,6 +62,7 @@ pub use controls::{
     ScrollBars, SpeedHud, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
     WhitespaceMode, WhitespaceStyle,
 };
+pub use controls::{Palette, PaletteAction, PaletteItem, PaletteStrings};
 pub use controls::{ProbeCtx, RecordCtx, StatusBar, StatusMarker, StatusPart, StatusSeg};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
