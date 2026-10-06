@@ -713,6 +713,9 @@ impl InfoDock {
             if i == last && self.kinds.len() > 1 {
                 // 터미널 옆 "폴더로 이동"(→) — 한 몸 버튼(QA 07-14, 원본 '터미널에서 열기').
                 // 활성=accent 배경(단, 패널 비활성이면 무채색 — 활성 영역과 구분), 비활성=무색
+                // 라벨 글 상자(본문 글꼴 · `ty` 자리)를 먼저 재 두고 그 상자 안에서 글리프 잉크를 가운데에 — 칸 전체 가운데는
+                // 라벨보다 위로 떠 보였다(nexa-dir3 10-06).
+                let label_h = ctx.text_height();
                 ctx.select_font_sized(crate::draw::FontSlot::Base, false, false, self.goto_delta);
                 let gw = ctx.text_width(&self.goto_glyph) + self.goto_pad * 2;
                 let gcell = Rect::new(x, strip.y, gw.min((strip.right() - x).max(0)), strip.h);
@@ -726,8 +729,8 @@ impl InfoDock {
                     (theme.text_dim, crate::theme::header_bg(theme))
                 };
                 if gcell.w > 0 {
-                    // 글리프 **잉크**를 칸 세로 가운데에(줄 상자 가운데는 아이콘 글꼴에서 아래로 처졌다 · nexa-dir3 10-06).
-                    let gy = ctx.glyph_center_y(&self.goto_glyph, gcell.y, gcell.h);
+                    // 글리프 **잉크**를 라벨 글 상자 세로 가운데에.
+                    let gy = ctx.glyph_center_y(&self.goto_glyph, ty(gcell), label_h);
                     ctx.text_opaque(
                         gcell.x + self.goto_pad,
                         gy,
