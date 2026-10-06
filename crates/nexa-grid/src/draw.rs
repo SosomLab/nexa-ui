@@ -74,6 +74,12 @@ pub trait DrawCtx {
     fn select_font(&mut self, slot: FontSlot, bold: bool, italic: bool) {
         let _ = (slot, bold, italic);
     }
+    /// 슬롯 + 장식 + **크기 증분**(px · 슬롯 크기 위에 얹는다 — 도크의 "폴더로 이동" 글리프처럼 본문과 다른 크기로 그릴 때 ·
+    /// nexa-dir3 10-06). 기본 = 증분 무시.
+    fn select_font_sized(&mut self, slot: FontSlot, bold: bool, italic: bool, delta_px: f32) {
+        let _ = delta_px;
+        self.select_font(slot, bold, italic);
+    }
     /// rect를 단색으로 불투명하게 채운다.
     fn fill_rect(&mut self, rect: Rect, color: Color);
     /// `clip`을 `bg`로 채우면서 텍스트를 `(x, y)`에 그린다(행 배경+텍스트 1회).
@@ -174,6 +180,10 @@ impl std::fmt::Debug for Adapt<'_> {
 impl DrawCtx for Adapt<'_> {
     fn select_font(&mut self, slot: FontSlot, bold: bool, italic: bool) {
         self.0.select_font_styled(slot.to_ctl(), bold, italic);
+    }
+    fn select_font_sized(&mut self, slot: FontSlot, bold: bool, italic: bool, delta_px: f32) {
+        self.0
+            .select_font_sized_styled(slot.to_ctl(), bold, italic, delta_px);
     }
     fn fill_rect(&mut self, rect: Rect, color: Color) {
         self.0.fill_rect(rect, color);
