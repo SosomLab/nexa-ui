@@ -3593,7 +3593,9 @@ impl TextBox {
         // 그대로 존중(자유 스크롤 · 캐럿 안 따라감). 아니면 캐럿을 따라간다.
         let rows = (((b.h - self.s(12)) / lh).max(1)) as usize;
         let max_top = n_rows.saturating_sub(rows);
-        let mut top = self.vscroll.get();
+        // ★ 늘 클램프(nexa-sql 10-07 조건 바): 1줄 보기에서 캐럿 추종으로 밀린 `vscroll`이 상자가 커진 뒤(3줄)에도 남아
+        //   마지막 줄만 맨 위에 보였다 — 캐럿이 이미 보이면 추종이 첫 줄을 안 옮기므로 여기서 상한을 맞춘다.
+        let mut top = self.vscroll.get().min(max_top);
         // 캐럿 추종이 **실제로** 첫 줄을 옮겼는가 — 옮기지 않았으면(캐럿이 이미 보임 · 클릭으로 캐럿만 옮긴 경우) 화면은 그대로다.
         let mut followed = false;
         // ★ 잔여 px(휠로 부분 줄이 위에 걸린 상태)를 그대로 둘 때 **바닥까지 온전히 보이는 행 수** — 위로 밀린 만큼 아래에

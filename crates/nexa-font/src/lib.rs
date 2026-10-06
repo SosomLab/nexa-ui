@@ -729,14 +729,17 @@ mod tests {
         let Some(a) = system_ui_font() else {
             return; // 글꼴 없는 환경(CI 최소 이미지)
         };
-        let n = mapped_font_files();
         let b = system_ui_font().expect("same lookup");
         assert_eq!(a.data.as_ptr(), b.data.as_ptr(), "같은 파일 = 같은 매핑");
-        assert_eq!(
-            mapped_font_files(),
-            n,
-            "두 번째 조회는 새 매핑을 만들지 않는다"
-        );
+        // 병렬 시험이 다른 글꼴을 함께 매핑할 수 있다(전역 표 공유 · 10-07 풀 테스트 경합 = 총 수 비교가 흔들림) →
+        //   총 수가 아니라 **이 버퍼**가 표에 한 번만 있는지 본다.
+        let dups = MAPPED
+            .lock()
+            .expect("MAPPED lock")
+            .iter()
+            .filter(|(_, d)| d.as_ptr() == a.data.as_ptr())
+            .count();
+        assert_eq!(dups, 1, "두 번째 조회는 새 매핑을 만들지 않는다");
     }
 
     /// OS 래스터라이저 스위치(`set_text_gdi`)는 **프로세스 전역**이다 — 시험은 병렬로 도므로 켜고 끄는 시험끼리 직렬화한다.
