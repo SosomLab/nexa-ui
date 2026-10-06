@@ -722,8 +722,8 @@ impl InfoDock {
                     (theme.text_dim, crate::theme::header_bg(theme))
                 };
                 if gcell.w > 0 {
-                    // 글리프 크기가 본문과 다르니 실제 글 높이로 세로 가운데.
-                    let gy = gcell.y + (gcell.h - ctx.text_height()) / 2;
+                    // 글리프 **잉크**를 칸 세로 가운데에(줄 상자 가운데는 아이콘 글꼴에서 아래로 처졌다 · nexa-dir3 10-06).
+                    let gy = ctx.glyph_center_y(&self.goto_glyph, gcell.y, gcell.h);
                     ctx.text_opaque(gcell.x + self.pad_x, gy, gcell, &self.goto_glyph, gfg, gbg);
                 }
                 ctx.select_font(crate::draw::FontSlot::Base, false, false);

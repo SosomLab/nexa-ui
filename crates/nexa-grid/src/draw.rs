@@ -80,6 +80,12 @@ pub trait DrawCtx {
         let _ = delta_px;
         self.select_font(slot, bold, italic);
     }
+    /// 글리프(첫 글자)의 **잉크**가 `y..y+h` 세로 가운데에 오도록 `text*`에 넘길 y(nexa-ctl `glyph_center_y` 전달 ·
+    /// nexa-dir3 10-06 "터미널 화살표 세로 중앙"). 기본 = 줄 상자 가운데.
+    fn glyph_center_y(&mut self, text: &str, y: i32, h: i32) -> i32 {
+        let _ = text;
+        y + (h - self.text_height()) / 2
+    }
     /// rect를 단색으로 불투명하게 채운다.
     fn fill_rect(&mut self, rect: Rect, color: Color);
     /// `clip`을 `bg`로 채우면서 텍스트를 `(x, y)`에 그린다(행 배경+텍스트 1회).
@@ -184,6 +190,9 @@ impl DrawCtx for Adapt<'_> {
     fn select_font_sized(&mut self, slot: FontSlot, bold: bool, italic: bool, delta_px: f32) {
         self.0
             .select_font_sized_styled(slot.to_ctl(), bold, italic, delta_px);
+    }
+    fn glyph_center_y(&mut self, text: &str, y: i32, h: i32) -> i32 {
+        self.0.glyph_center_y(text, y, h)
     }
     fn fill_rect(&mut self, rect: Rect, color: Color) {
         self.0.fill_rect(rect, color);
