@@ -406,6 +406,9 @@ pub struct TextBox {
     /// 멀티라인 위 여백(논리 px · 기본 8 · 아래 여백은 4 고정) — 한 줄 상자를 세로 가운데에 맞추려는 호스트가 줄인다
     /// (nexa-sql 조건 바 10-07 = 4 → 28px 상자에 20px 행이 가운데).
     ml_pad_y: i32,
+    /// 멀티라인 줄 높이 **실측**(마지막 그리기 · 물리 px) = `max(20×배율, 글꼴 상자 + 4)` — 글꼴이 커지면 줄도 커진다
+    /// (종전 상수 20×배율 = 큰 글꼴에서 글자가 줄보다 커짐 · nexa-sql 10-07 글꼴 크기 조절). 그리기 전엔 0(= 20×배율).
+    ml_lh: std::cell::Cell<i32>,
     /// ★ 마스킹(●) — 비밀 값 표시용(09-03 동기화 패스프레이즈). 값·편집은 불변,
     ///   **표시 문자열만** 바꾼다(캐럿·히트테스트는 같은 마스킹 문자열을 재서 일관).
     masked: bool,
@@ -840,6 +843,7 @@ impl TextBox {
             max_chars: 0,
             multiline: false,
             ml_pad_y: 8,
+            ml_lh: std::cell::Cell::new(0),
             masked: false,
             wrap: false,
             vscroll: std::cell::Cell::new(0),
@@ -2587,11 +2591,11 @@ impl TextBox {
         line.start_idx + best
     }
 
-    /// 멀티라인 한 줄 높이(글꼴 실측 + 여백은 페인트와 같은 값).
-    /// 줄 높이(물리 px · 배율 반영) — 컨테이너가 "N줄 높이" 최소 크기를 셈할 때(nexa-sql 객체 상세 스플리터 09-26).
+    /// 멀티라인 한 줄 높이(물리 px · 배율 반영) — 컨테이너가 "N줄 높이" 최소 크기를 셈할 때(nexa-sql 객체 상세 스플리터 09-26).
+    /// 마지막 그리기의 실측(`max(20×배율, 글꼴 상자 + 4)`) · 아직 안 그렸으면 20×배율.
     #[must_use]
     pub fn line_h(&self) -> i32 {
-        self.s(20)
+        self.ml_lh.get().max(self.s(20))
     }
 
     /// 메뉴에서 고른 클립보드 행동(1회성) — 호스트가 ⌘C/X/V와 같은 경로로 잇는다.
@@ -3477,7 +3481,9 @@ impl TextBox {
         }
         ctx.select_font(FontSlot::Base, false);
         let th = ctx.text_height();
-        let lh = self.line_h();
+        // 줄 높이 = 글꼴을 따라간다(상자 + 4 · 최소 20×배율) · 히트 테스트·호스트 `line_h()`와 같은 값.
+        let lh = self.s(20).max(th + self.s(4));
+        self.ml_lh.set(lh);
         // ★ 본문은 버퍼에서 **보이는 줄만** 꺼낸다(T-142) — 종전에는 프레임마다 모든 줄의 (시작, 글) 목록을 만들었고(70만 줄 ≈ 13 ms),
         //   편집할 때마다 본문 전체를 문자열로 다시 모았다(65 MB ≈ 150 ms).
         let tbuf = self.edit.buf();
@@ -3863,8 +3869,10 @@ impl TextBox {
             let (start_idx, line_cow) = rows_src.get(li);
             let (start_idx, line_str): (&usize, &str) = (&start_idx, &line_cow);
             let y = top0 + (vi as i32) * lh - rem;
-            // 글자는 행(선택 반전·캐럿 띠) 안에서 **세로 중앙**(nexa-sql 사용자 09-17: 선택 배경 위쪽에 붙어 보였다).
-            let ty = y + ((lh - th) / 2).max(0);
+            // 글자는 행(선택 반전·캐럿 띠) 안에서 **세로 중앙**(nexa-sql 사용자 09-17: 선택 배경 위쪽에 붙어 보였다) —
+            //   상자 가운데(정수 내림)가 아니라 **몸통(잉크) 기준 · 반올림**(`text_center_y` · 글꼴·크기가 달라도 같은 자리 ·
+            //   nexa-sql 10-07 "위/아래 여백이 미묘하게 다르다").
+            let ty = ctx.text_center_y(y, lh).max(y);
             let line_len = line_str.chars().count();
             // 이 행이 선택에 걸리는가 — 줄번호를 선택 색으로 표시한다(여러 행 선택이 한눈에 · 사용자 09-15).
             let row_selected = sels.iter().any(|&(a, e)| {
