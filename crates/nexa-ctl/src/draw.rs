@@ -292,6 +292,22 @@ pub fn draw_tooltip_in(
     text: &str,
     scale: f32,
 ) {
+    draw_tooltip_in_dir(ctx, theme, anchor, clamp_x, text, scale, tooltip_above());
+}
+
+/// [`draw_tooltip_in`]과 같되 **세로 방향을 호출자가 고른다**(175차 · nexa-sql 편집기 탭 툴팁): `above = true` = 기준 위(넘치면 아래) ·
+/// `false` = 기준 아래(넘치면 위). 기준 위가 다른 크롬(툴바·메뉴바)인 탭 바 같은 자리는 전역 기본과 무관하게 아래로 두어야 한다 —
+/// 캡슐이 반투명(0.92)이라 위에 놓이면 툴바 아이콘이 비쳐 "가려진 것처럼" 보였다.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_tooltip_in_dir(
+    ctx: &mut dyn DrawCtx,
+    theme: &crate::theme::Theme,
+    anchor: Rect,
+    clamp_x: (i32, i32),
+    text: &str,
+    scale: f32,
+    above: bool,
+) {
     if text.is_empty() {
         return;
     }
@@ -312,11 +328,11 @@ pub fn draw_tooltip_in(
     let lo = clamp_x0.max(0) + s(4);
     let x = (anchor.x + (anchor.w - w) / 2).clamp(lo, (clamp_w - w - s(4)).max(lo));
     let below = anchor.bottom() + s(6);
-    let above = anchor.y - s(6) - h;
     let fits_below = surface.is_none_or(|(_, sh)| below + h <= sh);
-    let y = if tooltip_above() {
-        if above >= 0 {
-            above
+    let (prefer_above, above_y) = (above, anchor.y - s(6) - h);
+    let y = if prefer_above {
+        if above_y >= 0 {
+            above_y
         } else if fits_below {
             below
         } else {
@@ -324,8 +340,8 @@ pub fn draw_tooltip_in(
         }
     } else if fits_below {
         below
-    } else if above >= 0 {
-        above
+    } else if above_y >= 0 {
+        above_y
     } else {
         surface.map_or(below, |(_, sh)| (sh - h).max(0))
     };
