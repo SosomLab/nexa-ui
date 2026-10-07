@@ -222,6 +222,74 @@ impl MenuBar {
         changed
     }
 
+    /// ★ 항목 라벨 바꾸기(176차 · nexa-dir3 "테마/언어 '시스템' 항목에 OS 현재 값 표시") — 최상위·하위 항목 공통(id로 찾는다 ·
+    /// `Item`/`Emph`/`Disabled`/`Sub` 머리 모두) · 메뉴를 다시 만들지 않는다 · 폭 캐시를 비우고 열려 있으면 다시 그린다. 바뀌었으면 true.
+    pub fn set_label(&mut self, id: &str, text: &str, inv: &mut Invalidations) -> bool {
+        fn walk(entries: &mut [MenuEntry], id: &str, text: &str) -> bool {
+            let mut changed = false;
+            for e in entries.iter_mut() {
+                match e {
+                    MenuEntry::Item(it) | MenuEntry::Emph(it) | MenuEntry::Disabled(it)
+                        if it.value == id =>
+                    {
+                        if it.label != text {
+                            it.label = text.to_string();
+                            changed = true;
+                        }
+                    }
+                    MenuEntry::Sub(it, v) => {
+                        if it.value == id && it.label != text {
+                            it.label = text.to_string();
+                            changed = true;
+                        }
+                        changed |= walk(v, id, text);
+                    }
+                    _ => {}
+                }
+            }
+            changed
+        }
+        let mut changed = false;
+        for m in &mut self.menus {
+            changed |= walk(&mut m.entries, id, text);
+        }
+        if changed {
+            *self.measured.borrow_mut() = (Vec::new(), Vec::new());
+            *self.sub_measured.borrow_mut() = None;
+            if self.is_open() {
+                inv.push(self.popup_bounds());
+            }
+        }
+        changed
+    }
+
+    /// 항목 라벨(최상위·하위 공통 · 없으면 None).
+    #[must_use]
+    pub fn label_of(&self, id: &str) -> Option<&str> {
+        fn find<'a>(entries: &'a [MenuEntry], id: &str) -> Option<&'a str> {
+            for e in entries {
+                match e {
+                    MenuEntry::Item(it) | MenuEntry::Emph(it) | MenuEntry::Disabled(it)
+                        if it.value == id =>
+                    {
+                        return Some(it.label.as_str());
+                    }
+                    MenuEntry::Sub(it, v) => {
+                        if it.value == id {
+                            return Some(it.label.as_str());
+                        }
+                        if let Some(l) = find(v, id) {
+                            return Some(l);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        self.menus.iter().find_map(|m| find(&m.entries, id))
+    }
+
     /// 프로그램으로 `i`번째 최상위 메뉴를 연다(호스트 Alt/F10 진입 · dir2 GUI-062).
     pub fn open_menu_index(&mut self, i: usize, inv: &mut Invalidations) {
         if i < self.menus.len() {
@@ -1140,6 +1208,20 @@ mod tests {
     }
 
     /// `set_enabled(false)`면 클릭해도 발화하지 않고 흐리게 · 다시 켜면 발화 · 하위 메뉴 항목도 id로 닿는다 · `open_menu_index`.
+    /// 176차: 라벨 바꾸기 = 최상위 · 하위 항목 모두 id로 · 같은 글이면 false · 없는 id = None.
+    #[test]
+    fn set_label_updates_top_and_sub_items() {
+        let (mut m, mut inv) = bar();
+        assert_eq!(m.label_of("dup"), Some("Duplicate"));
+        assert!(m.set_label("dup", "Dup!", &mut inv));
+        assert_eq!(m.label_of("dup"), Some("Dup!"));
+        assert!(!m.set_label("dup", "Dup!", &mut inv), "같은 글 = 변화 없음");
+        assert!(m.set_label("settings", "Settings (ko)", &mut inv));
+        assert_eq!(m.label_of("settings"), Some("Settings (ko)"));
+        assert_eq!(m.label_of("nope"), None);
+        assert!(!m.set_label("nope", "x", &mut inv));
+    }
+
     #[test]
     fn set_enabled_toggles_and_open_menu_index() {
         let (mut m, mut inv) = bar();
