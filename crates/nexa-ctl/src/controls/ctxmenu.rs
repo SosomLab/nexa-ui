@@ -296,6 +296,8 @@ pub struct ContextMenu {
     /// 열린 하위 메뉴(+ 어느 항목의 것인가).
     child: Option<Box<ContextMenu>>,
     child_of: Option<usize>,
+    /// ★ 아이콘 칸 강제 예약(하위 메뉴 · 부모에 아이콘 칸이 있으면 물려받는다 — nexa-sql 사용자 10-07 "하위 메뉴에도 아이콘 영역").
+    icon_col_forced: bool,
     /// 마지막 커서 위치(하위 메뉴로 **가는 중**인지 판정용 · 09-16).
     last_pos: Option<Point>,
     /// 하위 메뉴가 열린 채 다른 부모 행 위에 머문 시각 — 유예([`SUBMENU_GRACE_MS`]) 안이면 자식을 유지한다.
@@ -954,6 +956,9 @@ impl ContextMenu {
     }
 
     fn has_icons(&self) -> bool {
+        if self.icon_col_forced {
+            return true;
+        }
         let any_mark = self
             .items
             .iter()
@@ -1127,6 +1132,8 @@ impl ContextMenu {
         c.set_scale(self.scale);
         c.no_wrap = self.no_wrap;
         c.char_jump = self.char_jump;
+        // 부모에 아이콘 칸이 있으면 하위 메뉴도 같은 칸(글자 시작선 정렬 · 10-07).
+        c.icon_col_forced = self.has_icons();
         // 라벨 폭 근사(부모와 같은 근사 · paint가 실측으로 보정).
         let approx = children
             .iter()
@@ -2902,6 +2909,34 @@ mod tests {
         k.open_at(10, 10, nested(), host(), 100);
         k.open_child(1, true);
         assert!(k.child_for_test().expect("child").char_jump());
+    }
+
+    /// 부모에 아이콘 칸이 있으면 하위 메뉴(아이콘 없음)도 아이콘 칸을 예약한다(10-07).
+    #[test]
+    fn submenu_inherits_icon_column_from_parent() {
+        let host = || Rect::new(0, 0, 800, 600);
+        let kids = vec![CtxItem::item("a", "하나"), CtxItem::item("b", "둘")];
+        let items = vec![
+            CtxItem::item("copy", "복사").with_icon(Some(MenuIcon::from_alpha(2, 2, &[255; 4]))),
+            CtxItem::submenu("more", "더 보기", kids.clone()),
+        ];
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items, host(), 160);
+        assert!(m.icon_col() > 0);
+        m.open_child(1, false);
+        let child = m.child.as_ref().expect("child");
+        assert!(child.icon_col_forced && child.icon_col() == m.icon_col());
+        // 부모에 아이콘이 없으면 하위 메뉴도 칸 없음.
+        let mut plain = ContextMenu::new();
+        plain.open_at(
+            10,
+            10,
+            vec![CtxItem::submenu("more", "더 보기", kids)],
+            host(),
+            160,
+        );
+        plain.open_child(0, false);
+        assert_eq!(plain.child.as_ref().expect("child").icon_col(), 0);
     }
 
     #[test]
