@@ -122,6 +122,8 @@ impl Drop for DirWatch {
 }
 
 /// 백엔드 → 코디네이터 날것.
+// Windows 백엔드만 있어 다른 OS에서는 변형이 만들어지지 않는다(`supported()` = false · macOS FSEvents · Linux inotify 후속) — OS별 허용(93 §P2 규칙).
+#[cfg_attr(not(windows), allow(dead_code))]
 enum Raw {
     Dir(PathBuf),
     Overflow(PathBuf),
