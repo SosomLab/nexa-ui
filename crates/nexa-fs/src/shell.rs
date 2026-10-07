@@ -1037,9 +1037,19 @@ mod tests {
         assert!(resolve_alias("C:\\Windows").is_none(), "접두가 아니면 None");
     }
 
+    /// 셸 아이콘 조회는 CI windows 러너에서 드물게 `None`(셸 COM/아이콘 캐시 흔들림 · nexa-ui 175 · 176 1회차 연속 실패 →
+    /// 재실행 통과 · 10-07) — 잠깐 쉬고 몇 번 다시 묻는다(실제 PC에서는 첫 번에 온다).
     #[test]
     fn folder_icon_and_kind_come_from_shell() {
-        let ic = icon_for_kind("", true, false).expect("폴더 아이콘");
+        let mut got = None;
+        for _ in 0..5 {
+            got = icon_for_kind("", true, false);
+            if got.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        let ic = got.expect("폴더 아이콘(5회 재시도)");
         assert!(ic.w >= 16 && ic.h >= 16);
         assert_eq!(ic.rgba.len(), (ic.w * ic.h * 4) as usize);
         assert!(
