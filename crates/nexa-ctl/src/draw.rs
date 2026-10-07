@@ -305,23 +305,29 @@ pub fn draw_tooltip_in(
     let th = ctx.text_height();
     let w = tw + s(12);
     let h = th * lines.len() as i32 + s(8);
-    // 가로: 호출자의 범위와 표면의 겹침 안에서 · 세로: 기준 아래 6px → 아래로 넘치면 **기준 위**로 → 그래도 안 되면 밀어 넣는다
-    // (창 아래쪽 도구줄·상태줄의 툴팁이 잘리던 것 · nexa-sql 사용자 09-21). 표면 크기를 모르면 종전대로 아래.
+    // 가로: 호출자의 범위와 표면의 겹침 안에서 · 세로: ★ **기본 = 기준 위 6px**(nexa-sql 사용자 10-07 "읽는 방향상 다음 줄을 계속 보게
+    // 되므로 항목 아래를 가리지 않게") → 위로 넘치면 아래 → 그래도 안 되면 밀어 넣는다. [`set_tooltip_above(false)`]면 종전(아래 → 위).
     let surface = ctx.surface_size();
     let clamp_w = surface.map_or(clamp_w, |(sw, _)| clamp_w.min(sw));
     let lo = clamp_x0.max(0) + s(4);
     let x = (anchor.x + (anchor.w - w) / 2).clamp(lo, (clamp_w - w - s(4)).max(lo));
     let below = anchor.bottom() + s(6);
-    let y = match surface {
-        Some((_, sh)) if below + h > sh => {
-            let above = anchor.y - s(6) - h;
-            if above >= 0 {
-                above
-            } else {
-                (sh - h).max(0)
-            }
+    let above = anchor.y - s(6) - h;
+    let fits_below = surface.is_none_or(|(_, sh)| below + h <= sh);
+    let y = if tooltip_above() {
+        if above >= 0 {
+            above
+        } else if fits_below {
+            below
+        } else {
+            surface.map_or(below, |(_, sh)| (sh - h).max(0))
         }
-        _ => below,
+    } else if fits_below {
+        below
+    } else if above >= 0 {
+        above
+    } else {
+        surface.map_or(below, |(_, sh)| (sh - h).max(0))
     };
     let r = Rect::new(x, y, w, h);
     ctx.fill_round_rect_alpha(r, s(4), theme.text, 0.92);
@@ -334,6 +340,19 @@ pub fn draw_tooltip_in(
             theme.panel_bg,
         );
     }
+}
+
+/// ★ **툴팁 기본 자리 = 기준 위**(nexa-sql 사용자 10-07): 사람은 글을 위→아래로 읽으므로 항목 아래(다음 줄)를 가리지 않는다.
+/// 끄면 종전(아래 → 위). 프로세스 전역 · 호스트 설정이 정한다.
+static TOOLTIP_ABOVE: AtomicBool = AtomicBool::new(true);
+
+pub fn set_tooltip_above(on: bool) {
+    TOOLTIP_ABOVE.store(on, Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn tooltip_above() -> bool {
+    TOOLTIP_ABOVE.load(Ordering::Relaxed)
 }
 
 /// ★ **전체 경로 보기 스위치**(nexa-sql 사용자 09-22 "긴 경로는 가운데 …로 축약 · Alt를 누르는 동안 전체 경로"): 호스트가
