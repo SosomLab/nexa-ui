@@ -13,6 +13,7 @@
 //! 새 컨트롤 = [`ControlBase`] 필드 1개 + [`Control`] 구현 2줄(`base`/`base_mut`)이면 이 전부를
 //! 물려받는다(확장 용이 — 사용자 요청).
 
+pub mod busy;
 pub mod button;
 pub mod carousel;
 pub mod checkbox;
@@ -76,6 +77,7 @@ pub const SWITCH_ON: crate::theme::Color = switch::ON_GREEN;
 pub use tabbar::{ScrollButtons, TabAction, TabBadge, TabBar};
 pub use toast::{bar_remaining, life_alpha, ToastKind, Toasts};
 pub mod pairs;
+pub use busy::{busy_style, set_busy_style, BusyRing, BusyState, BusyStyle};
 pub use pairs::{Pair, PairKind, PairOpts, PairTable};
 pub use textbox::{
     diff_lines, hangul_app_compose, set_hangul_app_compose, AutoIndent, BracketOpts, DiffKind,

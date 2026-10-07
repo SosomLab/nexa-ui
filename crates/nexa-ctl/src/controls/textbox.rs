@@ -351,6 +351,10 @@ pub struct TextBox {
     base: ControlBase,
     /// 포커스 링 표시 여부(기본 켬). 편집기처럼 거의 항상 포커스인 상자는 끈다(nexa-sql 사용자 09-16 "매번 눈에 띄어 불편").
     focus_ring: bool,
+    /// ★ 진행 표시 링(혜성 · [`crate::controls::busy`] · 10-07): 호스트가 `set_busy`로 상태만 알리면 상자가 그린다 — 모든 상자가 상속.
+    busy: crate::controls::busy::BusyRing,
+    /// 호스트가 자기 틀 둘레에 그린다(`busy_ring()`) → 상자는 안 그림(필터 틀처럼 상자를 틀 안에 품는 경우).
+    busy_host_paint: bool,
     edit: EditState,
     placeholder: String,
     /// 선행 이미지 아이콘(옵션 · 투명 배경 RGBA). 있으면 placeholder·캐럿이 그 뒤로 밀린다.
@@ -818,6 +822,8 @@ impl TextBox {
     pub fn new(placeholder: impl Into<String>) -> Self {
         Self {
             focus_ring: true,
+            busy: crate::controls::busy::BusyRing::default(),
+            busy_host_paint: false,
             base: ControlBase::default(),
             edit: EditState::new(),
             placeholder: placeholder.into(),
@@ -939,7 +945,8 @@ impl TextBox {
         let b = self.hover.tick(now_ms);
         let c = self.minimap_hover.tick(now_ms);
         let d = self.drag_autoscroll_tick(now_ms);
-        a || b || c || d
+        let e = self.busy.tick(now_ms);
+        a || b || c || d || e
     }
 
     /// 마우스를 누른 채 끄는 중인가(선택 드래그 · 열 선택 · 미니맵 드래그) — 호스트의 포인터 캡처·시험용(09-30).
@@ -987,6 +994,7 @@ impl TextBox {
         self.hover.is_animating()
             || self.minimap_hover.is_animating()
             || (!self.multiline && self.ml_bars.is_visible())
+            || self.busy.animating()
     }
 
     /// ★ 미니맵 켬/끔(멀티라인에서만 그려진다 · 기본 끔 · nexa-sql `editor.minimap`). 끄면 캐시를 비운다.
@@ -1740,6 +1748,33 @@ impl TextBox {
     }
 
     /// 포커스 링 표시 여부 — 끄면 포커스여도 헤일로를 그리지 않는다(캐럿·선택은 그대로).
+    /// ★ 진행 표시(혜성) 상태 — `Running` = 둘레를 도는 선 · `Done` = 두 번 깜빡임 뒤 완료 테두리 · `Idle` = 없음.
+    ///   스타일(사용·두께·색·시간)은 전역 [`crate::set_busy_style`]. 꺼져 있으면 상태만 기억한다.
+    pub fn set_busy(&mut self, st: crate::controls::busy::BusyState) {
+        self.busy.set_state(st);
+    }
+
+    #[must_use]
+    pub fn busy_state(&self) -> crate::controls::busy::BusyState {
+        self.busy.state()
+    }
+
+    /// 완료 테두리 원복(상자를 만졌다 — 글 변경·재포커스 · 호스트 규칙).
+    pub fn busy_dismiss(&mut self) {
+        self.busy.dismiss_done();
+    }
+
+    /// 진행 표시 링 자체(호스트가 자기 틀 둘레에 그릴 때 · `set_busy_host_painted(true)`와 함께).
+    #[must_use]
+    pub fn busy_ring(&self) -> &crate::controls::busy::BusyRing {
+        &self.busy
+    }
+
+    /// 링을 호스트가 그린다(상자는 생략) — 상자를 틀 안에 품는 필터 틀 같은 경우.
+    pub fn set_busy_host_painted(&mut self, on: bool) {
+        self.busy_host_paint = on;
+    }
+
     pub fn set_focus_ring(&mut self, on: bool) {
         self.focus_ring = on;
     }
@@ -3478,6 +3513,9 @@ impl TextBox {
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
         if self.focus_ring {
             self.draw_focus_ring(ctx, theme, b);
+        }
+        if !self.busy_host_paint {
+            self.busy.paint(ctx, theme, b, self.s(6), self.base.scale);
         }
         ctx.select_font(FontSlot::Base, false);
         let th = ctx.text_height();
@@ -5308,6 +5346,10 @@ impl Widget for TextBox {
         }
         if self.focus_ring && self.cell_pad.is_none() {
             self.draw_focus_ring(ctx, theme, b);
+        }
+        if self.cell_pad.is_none() && !self.busy_host_paint {
+            // 진행 표시 링(혜성) = 테두리 위에(셀 편집 상자는 제외 · 호스트가 그리면 생략).
+            self.busy.paint(ctx, theme, b, self.s(6), self.base.scale);
         }
 
         let cy = b.y + b.h / 2;
