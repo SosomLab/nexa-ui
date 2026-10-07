@@ -33,6 +33,14 @@ pub struct Flash {
     fade_ms: u64,
     /// 배경 상자(색조 배경 + 테두리 · 글이 돋보이게 · 기본 켬).
     background: bool,
+    /// 배경 상자 모서리 반지름(물리 px · 0 = 직각 · 174차 nexa-sql "둥근 모서리").
+    radius: i32,
+    /// ★ 즉시 모드(174차 · 성능 향상 모드): 페이드 없이 `hold_ms` 동안 그대로 보이다 **바로 숨김** — 프레임을 만들지 않는다.
+    instant: bool,
+    /// 배경 상자 테두리(기본 켬 · 174차 nexa-sql "테두리 없이 배경만").
+    border: bool,
+    /// 지정 색 `(배경, 글)` — 있으면 톤에서 뽑는 색 대신(세기 `a`로 `panel_bg`와 보간해 같이 사라진다 · 174차).
+    colors: Option<(Color, Color)>,
 }
 
 impl Flash {
@@ -40,8 +48,19 @@ impl Flash {
     pub fn new() -> Self {
         Self {
             background: true,
+            border: true,
             ..Self::default()
         }
+    }
+
+    /// 배경 상자 테두리 켜기/끄기(끄면 채움만).
+    pub fn set_border(&mut self, on: bool) {
+        self.border = on;
+    }
+
+    /// 지정 색 `(배경, 글)` — `None` = 톤 색(종전).
+    pub fn set_colors(&mut self, colors: Option<(Color, Color)>) {
+        self.colors = colors;
     }
 
     /// 배경 상자 켜기/끄기(빌더).
@@ -53,6 +72,46 @@ impl Flash {
 
     pub fn set_background(&mut self, on: bool) {
         self.background = on;
+    }
+
+    /// 배경 상자 모서리 반지름(물리 px · 0 = 직각).
+    pub fn set_radius(&mut self, px: i32) {
+        self.radius = px.max(0);
+    }
+
+    /// 즉시 모드 — 켜면 페이드 없이 유지 시간 뒤 바로 사라진다(애니메이션 프레임 0 · 호스트는 [`Self::deadline`]에 한 번 깨면 된다).
+    pub fn set_instant(&mut self, on: bool) {
+        self.instant = on;
+    }
+
+    #[must_use]
+    pub fn instant(&self) -> bool {
+        self.instant
+    }
+
+    /// 페이드가 **시작되는** 시각(= 유지 끝) — 호스트는 유지 중엔 그리지 않다가 이때 한 번 깨면 된다. 보이는 중이 아니면 `None`.
+    #[must_use]
+    pub fn fade_start(&self) -> Option<Instant> {
+        self.at
+            .map(|at| at + std::time::Duration::from_millis(self.hold_ms))
+    }
+
+    /// 지금 페이드 구간인가(유지가 끝났고 즉시 모드가 아님) — 이때만 프레임마다 다시 그릴 가치가 있다.
+    #[must_use]
+    pub fn fading(&self, now: Instant) -> bool {
+        !self.instant && self.fade_start().is_some_and(|t| now >= t)
+    }
+
+    /// 이 메시지가 끝나는 시각(유지 + 페이드 · 즉시 모드 = 유지 끝) — 보이는 중이 아니면 `None`.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        let at = self.at?;
+        let ms = if self.instant {
+            self.hold_ms
+        } else {
+            self.hold_ms + self.fade_ms
+        };
+        Some(at + std::time::Duration::from_millis(ms))
     }
 
     /// 보이기 — `ms` 동안(최소 200) 서서히 사라진다.
@@ -85,6 +144,10 @@ impl Flash {
         let el = now.saturating_duration_since(at).as_millis() as u64;
         if el < self.hold_ms {
             return Some(1.0);
+        }
+        if self.instant {
+            self.at = None;
+            return None;
         }
         let f = el - self.hold_ms;
         if f >= self.fade_ms {
@@ -127,7 +190,10 @@ impl Flash {
             FlashTone::Warn => th.warn,
             FlashTone::Info => th.text,
         };
-        let color: Color = th.panel_bg.lerp(base, a);
+        let color: Color = match self.colors {
+            Some((_, fg)) => th.panel_bg.lerp(fg, a),
+            None => th.panel_bg.lerp(base, a),
+        };
         let th_txt = dc.text_height();
         let gap = (th_txt / 3).max(3);
         let (px, py) = if self.background {
@@ -140,14 +206,27 @@ impl Flash {
         let tw = dc.text_width(&text);
         let r = Self::place(anchor, tw + px * 2, th_txt + py * 2, host, gap);
         if self.background {
-            // 글이 돋보이는 배경: 색조를 살짝 띤 어두운/밝은 상자 + 같은 색조 테두리(모두 세기 `a`로 함께 사라짐).
-            let bg = th.panel_bg.lerp(th.panel_bg_alt, a).lerp(base, 0.18 * a);
+            // 글이 돋보이는 배경: 지정 색이 있으면 그 색 · 없으면 색조를 살짝 띤 어두운/밝은 상자(+ 같은 색조 테두리 · 모두 세기 `a`로 함께 사라짐).
+            let bg = match self.colors {
+                Some((bg, _)) => th.panel_bg.lerp(bg, a),
+                None => th.panel_bg.lerp(th.panel_bg_alt, a).lerp(base, 0.18 * a),
+            };
             let border = th.panel_bg.lerp(base, 0.6 * a);
-            dc.fill_rect(r, bg);
-            dc.fill_rect(Rect::new(r.x, r.y, r.w, 1), border);
-            dc.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), border);
-            dc.fill_rect(Rect::new(r.x, r.y, 1, r.h), border);
-            dc.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), border);
+            if self.radius > 0 {
+                // 둥근 상자(174차) — 채움 (+ 1px 테두리를 같은 반지름으로).
+                dc.fill_round_rect(r, self.radius, bg);
+                if self.border {
+                    dc.stroke_round_rect(r, self.radius, border, 1.0);
+                }
+            } else {
+                dc.fill_rect(r, bg);
+                if self.border {
+                    dc.fill_rect(Rect::new(r.x, r.y, r.w, 1), border);
+                    dc.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), border);
+                    dc.fill_rect(Rect::new(r.x, r.y, 1, r.h), border);
+                    dc.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), border);
+                }
+            }
         }
         dc.text(r.x + px, r.y + py, r, &text, color);
         true
@@ -158,6 +237,33 @@ impl Flash {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// 즉시 모드(174차): 유지 중 = 1.0 · 유지 끝 = 바로 None(페이드 없음) · 마감 = 유지 끝 · 평소 모드 마감 = 유지 + 페이드.
+    #[test]
+    fn instant_mode_hides_at_hold_end_without_fade() {
+        let mut f = Flash::new();
+        f.set_instant(true);
+        f.show("x", FlashTone::Info, 100, 1000);
+        let at = f.at.unwrap_or_else(Instant::now);
+        assert_eq!(f.strength_at(at + Duration::from_millis(50)), Some(1.0));
+        assert_eq!(f.deadline(), Some(at + Duration::from_millis(100)));
+        assert_eq!(f.strength_at(at + Duration::from_millis(100)), None);
+        assert!(!f.active(), "즉시 모드는 유지 끝에서 스스로 지운다");
+        let mut g = Flash::new();
+        g.show("y", FlashTone::Info, 100, 1000);
+        let at = g.at.unwrap_or_else(Instant::now);
+        assert_eq!(g.deadline(), Some(at + Duration::from_millis(1100)));
+        assert_eq!(g.fade_start(), Some(at + Duration::from_millis(100)));
+        assert!(
+            !g.fading(at + Duration::from_millis(50)),
+            "유지 중 = 페이드 아님"
+        );
+        assert!(g.fading(at + Duration::from_millis(100)));
+        assert!(!f.fading(at), "즉시 모드는 페이드 구간이 없다");
+        assert!(g
+            .strength_at(at + Duration::from_millis(600))
+            .is_some_and(|a| a > 0.0 && a < 1.0));
+    }
 
     #[test]
     fn place_bottom_left_at_anchor_top_right_then_shift_then_below() {
