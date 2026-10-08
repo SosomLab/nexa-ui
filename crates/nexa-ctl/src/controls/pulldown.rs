@@ -83,6 +83,9 @@ const POPUP_MIN_W: i32 = 160;
 /// 메뉴바 컨트롤.
 #[derive(Debug)]
 pub struct MenuBar {
+    /// 항목 위에서 눌렀다(`(하위 메뉴인가, 항목 index)`) — 같은 항목 위에서 놓을 때 확정(사용자 10-09 "풀다운도 Down에서 동작하지 않게" ·
+    ///   Windows 메뉴 표준 = 누른 채 끌어 다른 항목에서 놓으면 그 항목).
+    pressed_entry: Option<(bool, usize)>,
     base: ControlBase,
     menus: Vec<MenuDef>,
     /// 열린 최상위 메뉴 index.
@@ -127,6 +130,7 @@ impl MenuBar {
             hover_item: None,
             sub_open: None,
             hover_sub: None,
+            pressed_entry: None,
             sub_measured: RefCell::new(None),
             surface: std::cell::Cell::new(None),
             picked: None,
@@ -687,11 +691,35 @@ impl Widget for MenuBar {
                 }
                 if self.open.is_some() {
                     if let Some(k) = self.sub_entry_at(x, y) {
-                        self.pick_sub(k, inv);
+                        self.pressed_entry = Some((true, k));
                     } else if let Some(k) = self.entry_at(x, y) {
-                        self.pick(k, inv);
+                        // 하위 메뉴 항목은 누를 때 펼친다(hover와 같음) · 일반 항목은 놓을 때 확정.
+                        let is_sub = matches!(
+                            self.open.and_then(|i| self.menus[i].entries.get(k)),
+                            Some(MenuEntry::Sub(..))
+                        );
+                        if is_sub {
+                            self.pick(k, inv);
+                        } else {
+                            self.pressed_entry = Some((false, k));
+                        }
                     } else {
                         self.close(inv); // 바깥 클릭 = 닫기
+                    }
+                }
+            }
+            InputEvent::MouseUp { x, y } => {
+                // 놓은 자리의 항목을 확정(누른 항목과 달라도 — 누른 채 끌어 고르는 표준) · 항목 밖에서 놓으면 아무것도 없음.
+                if self.pressed_entry.take().is_some() && self.open.is_some() {
+                    if let Some(k) = self.sub_entry_at(x, y) {
+                        self.pick_sub(k, inv);
+                    } else if let Some(k) = self.entry_at(x, y) {
+                        if !matches!(
+                            self.open.and_then(|i| self.menus[i].entries.get(k)),
+                            Some(MenuEntry::Sub(..))
+                        ) {
+                            self.pick(k, inv);
+                        }
                     }
                 }
             }
@@ -1045,6 +1073,12 @@ mod tests {
             primary: false,
         }
     }
+
+    /// 클릭 = 누름 + 놓음(놓을 때 동작 · 10-09).
+    fn tap<C: Control>(c: &mut C, x: i32, y: i32, inv: &mut Invalidations) {
+        c.on_event(&click(x, y), inv);
+        c.on_event(&InputEvent::MouseUp { x, y }, inv);
+    }
     fn key(key: Key) -> InputEvent {
         InputEvent::Key {
             key,
@@ -1057,12 +1091,12 @@ mod tests {
     fn click_opens_and_picks_action_once() {
         let (mut m, mut inv) = bar();
         let l0 = m.label_rect(0);
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         assert!(m.is_open());
         let pop = m.popup_rect();
         // 두 번째 항목(갤러리) 중앙.
         let y = pop.y + m.s(POPUP_PAD) + m.s(ITEM_H) + m.s(ITEM_H) / 2;
-        m.on_event(&click(pop.x + 20, y), &mut inv);
+        tap(&mut m, pop.x + 20, y, &mut inv);
         assert!(!m.is_open(), "선택 = 닫힘");
         assert_eq!(m.take_picked().as_deref(), Some("gallery"));
         assert!(m.take_picked().is_none(), "1회성");
@@ -1080,7 +1114,7 @@ mod tests {
         let (mut m, mut inv) = bar();
         assert!(m.wrap_around(), "기본 = 순환");
         let l0 = m.label_rect(0);
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         // 항목 3개(설정 · 갤러리 · About): ↓×4 = 한 바퀴 돌아 첫 항목.
         for _ in 0..4 {
             m.on_event(&key(Key::Down), &mut inv);
@@ -1091,13 +1125,13 @@ mod tests {
         // 끔: ↓를 많이 눌러도 마지막(About)에서 멈춘다 · ↑를 많이 눌러도 첫 항목에서 멈춘다.
         m.set_wrap_around(false);
         assert!(!m.wrap_around());
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         for _ in 0..9 {
             m.on_event(&key(Key::Down), &mut inv);
         }
         m.on_event(&key(Key::Enter), &mut inv);
         assert_eq!(m.take_picked().as_deref(), Some("about"), "끝에서 멈춤");
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         m.on_event(&key(Key::Down), &mut inv);
         for _ in 0..9 {
             m.on_event(&key(Key::Up), &mut inv);
@@ -1110,7 +1144,7 @@ mod tests {
     fn separator_is_not_pickable_and_keyboard_skips_it() {
         let (mut m, mut inv) = bar();
         let l0 = m.label_rect(0);
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         // ↓×3 = 설정→갤러리→(구분선 건너뜀)About.
         for _ in 0..3 {
             m.on_event(&key(Key::Down), &mut inv);
@@ -1124,7 +1158,7 @@ mod tests {
         let (mut m, mut inv) = bar();
         let l0 = m.label_rect(0);
         let l1 = m.label_rect(1);
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         // 열림 중 두 번째 라벨 hover = 전환.
         m.on_event(
             &InputEvent::MouseMove {
@@ -1137,12 +1171,12 @@ mod tests {
         let pop = m.popup_rect();
         assert_eq!(pop.x, l1.x, "팝업이 두 번째 라벨 아래로 이동");
         // 바깥 클릭 = 닫기(선택 없음).
-        m.on_event(&click(800, 600), &mut inv);
+        tap(&mut m, 800, 600, &mut inv);
         assert!(!m.is_open());
         assert!(m.take_picked().is_none());
         // 같은 라벨 재클릭 = 토글.
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         assert!(!m.is_open());
     }
 
@@ -1153,7 +1187,7 @@ mod tests {
         use crate::controls::RecordCtx;
         let (mut m, mut inv) = bar();
         let l0 = m.label_rect(0);
-        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        tap(&mut m, l0.x + 5, l0.y + 5, &mut inv);
         let w0 = m.popup_rect().w;
         m.set_shortcut("settings", "Ctrl+,");
         m.set_shortcut("about", "");
@@ -1235,13 +1269,13 @@ mod tests {
         assert_eq!(m.open_index(), Some(0));
         let pop = m.popup_rect();
         let y = pop.y + m.s(POPUP_PAD) + m.s(ITEM_H) + m.s(ITEM_H) / 2;
-        m.on_event(&click(pop.x + 20, y), &mut inv);
+        tap(&mut m, pop.x + 20, y, &mut inv);
         assert!(
             m.is_open() && m.take_picked().is_none(),
             "비활성 = 발화 없음 · 열린 채"
         );
         assert!(m.set_enabled("gallery", true, &mut inv));
-        m.on_event(&click(pop.x + 20, y), &mut inv);
+        tap(&mut m, pop.x + 20, y, &mut inv);
         assert_eq!(m.take_picked().as_deref(), Some("gallery"));
         m.open_menu_index(99, &mut inv);
         assert!(!m.is_open(), "범위 밖 = 무시");
@@ -1326,6 +1360,8 @@ mod sub_tests {
             },
             &mut inv,
         );
+        assert!(m.is_open(), "누름만으로는 확정 안 됨(10-09)");
+        m.on_event(&InputEvent::MouseUp { x: sr.x + 20, y }, &mut inv);
         assert!(!m.is_open());
         assert_eq!(m.take_picked().as_deref(), Some("join"));
     }

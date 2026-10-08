@@ -23,6 +23,8 @@ pub struct Checkbox {
     side: LabelSide,
     /// 값 변경 1회성 보고(즉시 적용 폴링).
     toggled: bool,
+    /// 상자 안에서 눌렀다(놓을 때 같은 상자 안이면 토글 — Windows/macOS 체크박스 표준 · nexa-sql 사용자 10-09 "클릭은 Release에서").
+    pressed: bool,
 }
 
 impl Checkbox {
@@ -35,6 +37,7 @@ impl Checkbox {
             label: label.into(),
             side: LabelSide::Right,
             toggled: false,
+            pressed: false,
         }
     }
 
@@ -123,7 +126,11 @@ impl Widget for Checkbox {
                     inv.push(self.base.bounds);
                     return;
                 }
-                if self.hit_rect().contains(Point { x, y }) {
+                // 누름만 기억 — 토글은 놓을 때(같은 상자 안).
+                self.pressed = self.hit_rect().contains(Point { x, y });
+            }
+            InputEvent::MouseUp { x, y } => {
+                if std::mem::take(&mut self.pressed) && self.hit_rect().contains(Point { x, y }) {
                     self.toggle(inv);
                 }
             }
@@ -177,11 +184,17 @@ mod tests {
         }
     }
 
+    /// 클릭 = 누름 + 놓음(놓을 때 동작 · 10-09).
+    fn tap<C: Control>(c: &mut C, x: i32, y: i32, inv: &mut Invalidations) {
+        c.on_event(&click(x, y), inv);
+        c.on_event(&InputEvent::MouseUp { x, y }, inv);
+    }
+
     #[test]
     fn click_toggles_and_reports_once() {
         let (mut c, mut inv) = cb();
         assert!(!c.is_checked());
-        c.on_event(&click(5, 12), &mut inv);
+        tap(&mut c, 5, 12, &mut inv);
         assert_eq!(c.take_toggled(), Some(true));
         assert!(c.take_toggled().is_none(), "1회성");
         assert!(c.is_checked());
@@ -208,7 +221,7 @@ mod tests {
         c.set_help("Sends anonymous crash reports.");
         c.set_show_help(true);
         let badge = c.help_badge_rect(c.hit_rect());
-        c.on_event(&click(badge.x + 2, badge.y + 2), &mut inv);
+        tap(&mut c, badge.x + 2, badge.y + 2, &mut inv);
         assert!(c.base().help_open, "툴팁 열림");
         assert!(!c.is_checked(), "도움말 클릭은 토글 아님");
     }
@@ -219,9 +232,9 @@ mod tests {
         c.set_help("x");
         c.set_show_help(true);
         let badge = c.help_badge_rect(c.hit_rect());
-        c.on_event(&click(badge.x + 2, badge.y + 2), &mut inv);
+        tap(&mut c, badge.x + 2, badge.y + 2, &mut inv);
         assert!(c.base().help_open, "1클릭 = 열림");
-        c.on_event(&click(badge.x + 2, badge.y + 2), &mut inv);
+        tap(&mut c, badge.x + 2, badge.y + 2, &mut inv);
         assert!(!c.base().help_open, "재클릭 = 닫힘(토글)");
     }
 
@@ -240,7 +253,7 @@ mod tests {
         c.set_help("x");
         // show_help = false → 배지 없음, 그 자리 클릭은 토글로 흐르지 않는다(영역 밖).
         let badge = c.help_badge_rect(c.hit_rect());
-        c.on_event(&click(badge.x + 2, badge.y + 2), &mut inv);
+        tap(&mut c, badge.x + 2, badge.y + 2, &mut inv);
         assert!(!c.base().help_open);
     }
 }

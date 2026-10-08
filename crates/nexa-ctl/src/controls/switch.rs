@@ -38,6 +38,8 @@ pub struct Switch {
     toggled: bool,
     /// 트랙 배율(1.0 = 20×12 논리 px · 작은 글자 옆에선 0.8처럼 — nexa-sql 로그 창 푸터 09-16).
     track_mult: f32,
+    /// 안에서 눌렀다(놓을 때 같은 자리면 토글 — 표준 · 사용자 10-09).
+    pressed: bool,
 }
 
 impl Switch {
@@ -51,6 +53,7 @@ impl Switch {
             side: LabelSide::Right,
             toggled: false,
             track_mult: 1.0,
+            pressed: false,
         }
     }
 
@@ -150,7 +153,10 @@ impl Widget for Switch {
                     inv.push(self.base.bounds);
                     return;
                 }
-                if self.base.bounds.contains(Point { x, y }) {
+                self.pressed = self.base.bounds.contains(Point { x, y });
+            }
+            InputEvent::MouseUp { x, y } => {
+                if std::mem::take(&mut self.pressed) && self.base.bounds.contains(Point { x, y }) {
                     self.toggle(inv);
                 }
             }
@@ -222,13 +228,19 @@ mod tests {
         }
     }
 
+    /// 클릭 = 누름 + 놓음(놓을 때 동작 · 10-09).
+    fn tap<C: Control>(c: &mut C, x: i32, y: i32, inv: &mut Invalidations) {
+        c.on_event(&click(x, y), inv);
+        c.on_event(&InputEvent::MouseUp { x, y }, inv);
+    }
+
     #[test]
     fn click_toggles_once() {
         let (mut s, mut inv) = sw(Switch::new("알림", false));
-        s.on_event(&click(10, 14), &mut inv);
+        tap(&mut s, 10, 14, &mut inv);
         assert_eq!(s.take_toggled(), Some(true), "클릭 = 켜짐");
         assert_eq!(s.take_toggled(), None, "1회성");
-        s.on_event(&click(10, 14), &mut inv);
+        tap(&mut s, 10, 14, &mut inv);
         assert_eq!(s.take_toggled(), Some(false), "다시 클릭 = 꺼짐");
     }
 
@@ -278,7 +290,7 @@ mod tests {
         let off_x = tr.x + pad;
         let on_x = tr.right() - pad - d;
         assert!(off_x < on_x, "좌=꺼짐 · 우=켜짐 위치 구분");
-        s.on_event(&click(tr.x + 2, tr.y + 2), &mut inv);
+        tap(&mut s, tr.x + 2, tr.y + 2, &mut inv);
         assert!(s.is_on());
     }
 }
