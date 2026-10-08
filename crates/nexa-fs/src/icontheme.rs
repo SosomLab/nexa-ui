@@ -404,6 +404,17 @@ pub fn app_icon_file(exe: &Path, px: u32) -> Option<PathBuf> {
     global::app_icon_file(exe, px)
 }
 
+/// 전역 조회 — **아이콘 이름**(`.desktop`의 `Icon=` 값 · freedesktop 이름 `utilities-terminal` 같은 것)의 PNG 경로(184차 · nexa-dir3
+/// T-131 우클릭 항목 아이콘): 절대 경로 PNG면 그대로 · 아니면 테마에서 `px`에 가장 가까운 것 → `pixmaps/<이름>.png`. Linux 밖 · OS 아이콘
+/// 끔 · 없음 = `None`.
+#[must_use]
+pub fn named_icon_file(icon: &str, px: u32) -> Option<PathBuf> {
+    if !crate::shell::os_icons_enabled() {
+        return None;
+    }
+    global::named_icon_file(icon, px)
+}
+
 /// 전역 조회 — 이 파일·폴더의 테마 아이콘 **PNG 경로**(`px` = 그릴 한 변 · 가장 가까운 크기를 고른다).
 ///
 /// Linux가 아니거나, OS 아이콘이 꺼져 있거나([`crate::shell::set_os_icons`]), 테마에 맞는 그림이 없으면 `None`(호출자 자체 그림).
@@ -432,6 +443,9 @@ mod global {
         None
     }
     pub(super) fn app_icon_file(_exe: &Path, _px: u32) -> Option<PathBuf> {
+        None
+    }
+    pub(super) fn named_icon_file(_icon: &str, _px: u32) -> Option<PathBuf> {
         None
     }
 }
@@ -605,6 +619,32 @@ mod global {
         out
     }
 
+    /// 아이콘 이름 → PNG 경로(절대 PNG · 테마 · pixmaps 순) — 잠금 안에서 쓰는 순수 조회.
+    fn resolve_named(st: &mut State, icon: &str, px: u32) -> Option<PathBuf> {
+        let p = Path::new(icon);
+        if p.is_absolute() {
+            return (p.extension().is_some_and(|e| e == "png") && p.is_file())
+                .then(|| p.to_path_buf());
+        }
+        st.theme.find(icon, px).or_else(|| {
+            st.data
+                .iter()
+                .map(|d| d.join("pixmaps").join(format!("{icon}.png")))
+                .find(|f| f.is_file())
+        })
+    }
+
+    pub(super) fn named_icon_file(icon: &str, px: u32) -> Option<PathBuf> {
+        let mut g = state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let st = &mut *g;
+        if st.theme.is_empty() || icon.is_empty() {
+            return None;
+        }
+        resolve_named(st, icon, px)
+    }
+
     pub(super) fn app_icon_file(exe: &Path, px: u32) -> Option<PathBuf> {
         let mut g = state()
             .lock()
@@ -627,21 +667,7 @@ mod global {
             cands.push(r);
         }
         let icon = desktop_icon_for(entries, &cands).map(str::to_string);
-        let mut got = None;
-        if let Some(icon) = icon {
-            let p = Path::new(&icon);
-            if p.is_absolute() {
-                got = (p.extension().is_some_and(|e| e == "png") && p.is_file())
-                    .then(|| p.to_path_buf());
-            } else {
-                got = st.theme.find(&icon, px).or_else(|| {
-                    st.data
-                        .iter()
-                        .map(|d| d.join("pixmaps").join(format!("{icon}.png")))
-                        .find(|f| f.is_file())
-                });
-            }
-        }
+        let mut got = icon.and_then(|icon| resolve_named(st, &icon, px));
         if got.is_none() {
             let names: Vec<String> = cands
                 .iter()
@@ -985,5 +1011,31 @@ Type=Fixed
     fn global_lookup_is_none_off_linux() {
         assert_eq!(icon_file(Path::new("/"), true, 16), None);
         assert_eq!(theme_name(), None);
+        assert_eq!(named_icon_file("folder", 16), None);
+    }
+
+    /// 184차 이름 기준 조회: 테마가 있으면 `folder` 같은 표준 이름은 PNG로 풀리고 · 빈 이름/없는 이름은 None · 절대 경로는 PNG 파일일
+    /// 때만 · 같은 질문은 같은 답(결정적).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn named_icon_lookup() {
+        assert_eq!(named_icon_file("", 16), None);
+        assert_eq!(named_icon_file("/definitely/not/here.png", 16), None);
+        if theme_name().is_none() {
+            eprintln!("icon theme 없음 — 이름 조회 생략");
+            return;
+        }
+        for name in ["folder", "utilities-terminal", "system-file-manager"] {
+            let got = named_icon_file(name, 16);
+            eprintln!("{name} -> {got:?}");
+            if let Some(f) = &got {
+                assert!(
+                    f.is_file() && f.extension().is_some_and(|e| e == "png"),
+                    "{f:?}"
+                );
+            }
+            assert_eq!(named_icon_file(name, 16), got);
+        }
+        assert_eq!(named_icon_file("no-such-icon-zzz", 16), None);
     }
 }
