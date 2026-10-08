@@ -19,6 +19,8 @@
 pub mod input_source;
 #[cfg(feature = "gui")]
 pub mod layer_present;
+/// ★ 네트워크 경로 변경 신호(L0 · nexa-sql T-313 ⑤ · Windows iphlpapi · 그 밖 OS = None).
+pub mod netwatch;
 
 /// 네 신호를 한 번에 읽은 스냅샷(호출자가 캐시한다).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
