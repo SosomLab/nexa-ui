@@ -50,6 +50,8 @@ pub struct IconDropdown {
     items: Vec<IconDropItem>,
     sel: usize,
     open: bool,
+    /// 눌린 항목(확정은 **뗄 때** · 같은 항목 위 — 179차 · nexa-dir3 사용자 10-09 "클릭 동작은 Release 뒤에").
+    pressed: Option<usize>,
     hover: Option<usize>,
     changed: Option<&'static str>,
     scale: f32,
@@ -71,6 +73,7 @@ impl IconDropdown {
             items,
             sel,
             open: false,
+            pressed: None,
             hover: None,
             changed: None,
             scale: 1.0,
@@ -227,16 +230,30 @@ impl Widget for IconDropdown {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
+            InputEvent::MouseUp { x, y } if self.open => {
+                if let Some(i) = self.pressed.take() {
+                    let p = Point { x, y };
+                    if !self.popup_row(i).contains(p) {
+                        return; // 다른 곳에서 뗌 = 취소(열린 채)
+                    }
+                    if self.sel != i {
+                        self.sel = i;
+                        self.changed = Some(self.items[i].value);
+                    }
+                    self.open = false;
+                    self.hover = None;
+                    inv.push(self.base.bounds);
+                    inv.push(self.popup_rect());
+                }
+            }
             InputEvent::MouseDown { x, y, .. } => {
                 let p = Point { x, y };
                 if self.open {
-                    // 팝업 우선(모달 캡처) — 행 클릭 = 선택, 밖 = 닫기.
+                    // 팝업 우선(모달 캡처) — 행 누름 = 기억(선택은 뗄 때 · 179차), 밖 = 닫기.
                     if let Some(i) = (0..self.items.len()).find(|&i| self.popup_row(i).contains(p))
                     {
-                        if self.sel != i {
-                            self.sel = i;
-                            self.changed = Some(self.items[i].value);
-                        }
+                        self.pressed = Some(i);
+                        return;
                     }
                     self.open = false;
                     self.hover = None;
@@ -357,6 +374,23 @@ mod tests {
         assert!(w.is_open());
         let r = w.popup_row(2);
         w.on_event(&down(r.x + 4, r.y + 4), &mut inv);
+        assert!(
+            w.is_open() && w.take_changed().is_none(),
+            "누름만 = 선택 없음(179차)"
+        );
+        w.on_event(&InputEvent::MouseUp { x: 900, y: 900 }, &mut inv);
+        assert!(
+            w.is_open() && w.take_changed().is_none(),
+            "밖에서 뗌 = 취소 · 열린 채"
+        );
+        w.on_event(&down(r.x + 4, r.y + 4), &mut inv);
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 4,
+                y: r.y + 4,
+            },
+            &mut inv,
+        );
         assert!(!w.is_open(), "선택 = 닫힘");
         assert_eq!(w.take_changed(), Some("c"));
         assert_eq!(w.take_changed(), None, "1회성");

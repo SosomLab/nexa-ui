@@ -93,6 +93,8 @@ pub struct Palette {
     /// 필터 결과 — items index(점수순).
     matches: Vec<usize>,
     sel: usize,
+    /// 눌린 항목(확정은 **뗄 때** · 같은 항목 위 — 179차 · nexa-dir3 사용자 10-09 "클릭 동작은 Release 뒤에").
+    pressed: Option<usize>,
     /// 보이는 첫 행(전체 결과 기준).
     top: usize,
     /// 마지막으로 본 마우스 위치 — 같은 자리의 MouseMove(키보드 이동 직후 재발행)로 선택이 되돌아가지 않게.
@@ -131,6 +133,7 @@ impl Palette {
             recent: Vec::new(),
             matches: Vec::new(),
             sel: 0,
+            pressed: None,
             top: 0,
             last_mouse: (i32::MIN, i32::MIN),
             bounds: Rect::new(0, 0, 0, 0),
@@ -473,7 +476,18 @@ impl Palette {
                     return PaletteAction::Close;
                 }
                 if self.rows_rect().contains(p) {
+                    // 행 누름 = 강조만 · 실행은 뗄 때(179차).
                     if let Some(i) = self.row_at(p) {
+                        self.pressed = Some(i);
+                        self.sel = i;
+                        inv.push(self.rows_rect());
+                    }
+                    return PaletteAction::None;
+                }
+            }
+            InputEvent::MouseUp { x, y } => {
+                if let Some(i) = self.pressed.take() {
+                    if self.row_at(Point { x, y }) == Some(i) {
                         return self.pick(i);
                     }
                     return PaletteAction::None;
@@ -870,8 +884,12 @@ mod tests {
             shift: false,
             primary: false,
         };
+        assert!(
+            matches!(p.on_event(&click, &mut inv), PaletteAction::None),
+            "누름만 = 실행 없음(179차)"
+        );
         assert!(matches!(
-            p.on_event(&click, &mut inv),
+            p.on_event(&InputEvent::MouseUp { x: rr.x + 10, y: rr.y + 3 }, &mut inv),
             PaletteAction::Pick(id) if id == format!("cmd.{}", 40 - PALETTE_MAX_ROWS)
         ));
         assert_eq!(

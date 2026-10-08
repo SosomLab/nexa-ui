@@ -105,6 +105,8 @@ pub struct PathBar {
     overlay_bottom: i32,
     /// 호스트가 수거할 이동 요청(세그먼트 클릭·편집 제출).
     pending_nav: Option<String>,
+    /// 눌린 세그먼트(이동은 **뗄 때** · 같은 세그먼트 위 — nexa-ctl 179차 규약 · nexa-dir3 사용자 10-09).
+    pressed_seg: Option<usize>,
     /// 페인트 시 계산한 세그먼트 x 범위(히트 테스트용 — 텍스트 측정은 DrawCtx에서만 가능).
     ranges: RefCell<Vec<(i32, i32)>>,
 }
@@ -132,6 +134,7 @@ impl PathBar {
             suggest: None,
             overlay_bottom: 0,
             pending_nav: None,
+            pressed_seg: None,
             ranges: RefCell::new(Vec::new()),
         }
     }
@@ -471,12 +474,10 @@ impl Widget for PathBar {
                     }
                     return;
                 }
-                if let Some(i) = self.segment_at(x, y) {
-                    // 현재(마지막) 세그먼트는 비활성(§1-3)
-                    if i + 1 < self.segments.len() {
-                        self.pending_nav = Some(self.segments[i].full.clone());
-                    }
-                }
+                // 세그먼트 누름 = 기억만 · 이동은 뗄 때(179차) · 현재(마지막) 세그먼트는 비활성(§1-3).
+                self.pressed_seg = self
+                    .segment_at(x, y)
+                    .filter(|&i| i + 1 < self.segments.len());
             }
             InputEvent::RightDown { x, y } => {
                 if self.bounds.contains(Point { x, y }) && !self.is_editing() {
@@ -499,9 +500,15 @@ impl Widget for PathBar {
                     inv.push(self.bounds);
                 }
             }
-            InputEvent::MouseUp { .. } => {
+            InputEvent::MouseUp { x, y } => {
                 if let Some(es) = &mut self.edit {
                     es.release();
+                    return;
+                }
+                if let Some(i) = self.pressed_seg.take() {
+                    if self.segment_at(x, y) == Some(i) {
+                        self.pending_nav = Some(self.segments[i].full.clone());
+                    }
                 }
             }
             _ => {}
@@ -748,6 +755,19 @@ mod tests {
             },
             &mut inv,
         );
+        assert_eq!(p.take_navigation(), None, "누름만 = 이동 없음(179차)");
+        p.on_event(&InputEvent::MouseUp { x: 400, y: 5 }, &mut inv);
+        assert_eq!(p.take_navigation(), None, "다른 곳에서 뗌 = 취소");
+        p.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: 5,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        p.on_event(&InputEvent::MouseUp { x: 10, y: 5 }, &mut inv);
         assert_eq!(p.take_navigation().as_deref(), Some("C:\\"));
         // 마지막 세그먼트(현재)는 무동작
         let last_x = p.ranges.borrow().last().unwrap().0 + 2;

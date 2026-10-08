@@ -155,14 +155,12 @@ impl Widget for PositionDropdown {
             InputEvent::MouseDown { x, y, .. } => {
                 let p = Point { x, y };
                 if self.open {
-                    // 팝업 우선(모달 캡처) — 셀 클릭 = 선택 후 닫기 · 밖(머리 포함) = 닫기.
+                    // 팝업 우선(모달 캡처) — 셀 누름 = 그리드에 전달(선택·닫기는 뗄 때 · 179차) · 밖(머리 포함) = 닫기.
                     if self.popup_rect().contains(p) {
                         self.picker.on_event(ev, inv);
-                        if let Some(v) = self.picker.take_changed() {
-                            self.changed = Some(v);
-                        }
+                    } else {
+                        self.close(inv);
                     }
-                    self.close(inv);
                     return;
                 }
                 if self.base.bounds.contains(p) && self.base.enabled {
@@ -171,6 +169,13 @@ impl Widget for PositionDropdown {
                     self.place_picker(inv);
                     self.picker.set_focused(true);
                     inv.push(self.popup_rect());
+                }
+            }
+            InputEvent::MouseUp { .. } if self.open => {
+                self.picker.on_event(ev, inv);
+                if let Some(v) = self.picker.take_changed() {
+                    self.changed = Some(v);
+                    self.close(inv);
                 }
             }
             InputEvent::Key { key, .. } if self.open => match key {
@@ -271,6 +276,11 @@ mod tests {
         let cx = p.x + pad + (cw + 5) * 2 + 5;
         let cy = p.y + pad + 5;
         d.on_event(&click(cx, cy), &mut inv);
+        assert!(
+            d.is_open() && d.take_changed().is_none(),
+            "누름만 = 선택 없음(179차)"
+        );
+        d.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
         assert!(!d.is_open());
         assert_eq!(d.take_changed().as_deref(), Some("tr"));
         assert!(d.take_changed().is_none(), "1회성");
@@ -297,6 +307,13 @@ mod tests {
         let p = d.popup_rect();
         let pad = d.s(POP_PAD);
         d.on_event(&click(p.x + pad + 5, p.y + pad + 5), &mut inv);
+        d.on_event(
+            &InputEvent::MouseUp {
+                x: p.x + pad + 5,
+                y: p.y + pad + 5,
+            },
+            &mut inv,
+        );
         assert_eq!(d.take_changed().as_deref(), Some("tl"));
     }
 

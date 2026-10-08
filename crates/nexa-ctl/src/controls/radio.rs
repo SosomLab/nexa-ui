@@ -39,6 +39,8 @@ pub struct RadioGroup {
     base: ControlBase,
     options: Vec<RadioOption>,
     selected: usize,
+    /// 눌린 보기(선택은 **뗄 때** · 같은 보기 위 — 179차).
+    pressed: Option<usize>,
     changed: bool,
 }
 
@@ -51,6 +53,7 @@ impl RadioGroup {
             base: ControlBase::default(),
             options,
             selected,
+            pressed: None,
             changed: false,
         }
     }
@@ -143,8 +146,13 @@ impl Widget for RadioGroup {
                     return;
                 }
                 let _ = x;
-                if let Some(i) = self.opt_at(y) {
-                    self.select(i, inv);
+                self.pressed = self.opt_at(y);
+            }
+            InputEvent::MouseUp { y, .. } => {
+                if let Some(i) = self.pressed.take() {
+                    if self.opt_at(y) == Some(i) {
+                        self.select(i, inv);
+                    }
                 }
             }
             InputEvent::Key { key, .. } if self.base.focused => match key {
@@ -210,6 +218,12 @@ mod tests {
             primary: false,
         }
     }
+
+    /// 누르고 뗌(동작은 **뗄 때** — 179차).
+    fn tap<C: Control>(c: &mut C, x: i32, y: i32, inv: &mut Invalidations) {
+        c.on_event(&click(x, y), inv);
+        c.on_event(&InputEvent::MouseUp { x, y }, inv);
+    }
     fn key(k: Key) -> InputEvent {
         InputEvent::Key {
             key: k,
@@ -227,7 +241,7 @@ mod tests {
     #[test]
     fn click_selects_and_reports() {
         let (mut g, mut inv) = group();
-        g.on_event(&click(5, 26 * 2 + 5), &mut inv); // 3번째 = column
+        tap(&mut g, 5, 26 * 2 + 5, &mut inv); // 3번째 = column
         assert_eq!(g.take_changed().as_deref(), Some("column"));
         assert!(g.take_changed().is_none(), "1회성");
     }
@@ -247,7 +261,7 @@ mod tests {
     #[test]
     fn reselecting_same_does_not_report() {
         let (mut g, mut inv) = group();
-        g.on_event(&click(5, 26 + 5), &mut inv); // 이미 list 선택
+        tap(&mut g, 5, 26 + 5, &mut inv); // 이미 list 선택
         assert!(g.take_changed().is_none());
     }
 }

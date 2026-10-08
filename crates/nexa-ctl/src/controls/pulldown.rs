@@ -710,7 +710,9 @@ impl Widget for MenuBar {
             }
             InputEvent::MouseUp { x, y } => {
                 // 놓은 자리의 항목을 확정(누른 항목과 달라도 — 누른 채 끌어 고르는 표준) · 항목 밖에서 놓으면 아무것도 없음.
-                if self.pressed_entry.take().is_some() && self.open.is_some() {
+                // ★ 라벨에서 누른 채 끌어 항목 위에서 놓아도 확정(Windows/GTK 메뉴바 표준 · nexa-dir3 10-09) — 라벨 위에서 놓으면 열린 채.
+                let from_label = self.pressed_entry.is_none() && self.label_at(x, y).is_none();
+                if (self.pressed_entry.take().is_some() || from_label) && self.open.is_some() {
                     if let Some(k) = self.sub_entry_at(x, y) {
                         self.pick_sub(k, inv);
                     } else if let Some(k) = self.entry_at(x, y) {
@@ -1085,6 +1087,29 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    /// 라벨을 누른 채 끌어 항목 위에서 놓으면 확정(표준) · 항목에서 누르고 라벨 위에서 놓으면 열린 채.
+    #[test]
+    fn press_label_drag_release_on_entry_picks() {
+        let (mut m, mut inv) = bar();
+        let l0 = m.label_rect(0);
+        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        let pop = m.popup_rect();
+        let y = pop.y + m.s(POPUP_PAD) + m.s(ITEM_H) + m.s(ITEM_H) / 2;
+        m.on_event(&InputEvent::MouseUp { x: pop.x + 20, y }, &mut inv);
+        assert_eq!(m.take_picked().as_deref(), Some("gallery"));
+        assert!(!m.is_open());
+        m.on_event(&click(l0.x + 5, l0.y + 5), &mut inv);
+        m.on_event(&click(pop.x + 20, y), &mut inv);
+        m.on_event(
+            &InputEvent::MouseUp {
+                x: l0.x + 5,
+                y: l0.y + 5,
+            },
+            &mut inv,
+        );
+        assert!(m.is_open() && m.take_picked().is_none());
     }
 
     #[test]

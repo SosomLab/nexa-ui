@@ -39,6 +39,8 @@ pub struct ColorPicker {
     value: u32,
     hex: TextBox,
     changed: bool,
+    /// 눌린 항목(확정은 **뗄 때** · 같은 항목 위 — 179차 · nexa-dir3 사용자 10-09 "클릭 동작은 Release 뒤에").
+    pressed: Option<usize>,
 }
 
 impl ColorPicker {
@@ -51,6 +53,7 @@ impl ColorPicker {
             value,
             hex: TextBox::new("#RRGGBB").with_text(&color_to_hex(Color(value))),
             changed: false,
+            pressed: None,
         }
     }
 
@@ -162,18 +165,27 @@ impl Widget for ColorPicker {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        if let InputEvent::MouseDown { x, y, .. } = *ev {
-            let p = Point { x, y };
-            // 프리셋 클릭 = 즉시 적용.
-            for (i, &c) in PRESETS.iter().enumerate() {
-                if self.preset_rect(i).contains(p) {
-                    self.base.focused = true;
+        if let InputEvent::MouseUp { x, y } = *ev {
+            // 프리셋 적용은 뗄 때(179차) — 눌렀던 칸 위에서.
+            if let Some(i) = self.pressed.take() {
+                if self.preset_rect(i).contains(Point { x, y }) {
+                    let c = PRESETS[i];
                     if c != self.value {
                         self.value = c;
                         self.changed = true;
                     }
                     self.hex.set_text(&self.value_hex());
                     inv.push(self.base.bounds);
+                    return;
+                }
+            }
+        }
+        if let InputEvent::MouseDown { x, y, .. } = *ev {
+            let p = Point { x, y };
+            for i in 0..PRESETS.len() {
+                if self.preset_rect(i).contains(p) {
+                    self.base.focused = true;
+                    self.pressed = Some(i);
                     return;
                 }
             }
@@ -235,10 +247,24 @@ mod tests {
         let (mut p, mut inv) = picker();
         let r = p.preset_rect(1); // 초록
         p.on_event(&click(r.x + 2, r.y + 2), &mut inv);
+        p.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 2,
+                y: r.y + 2,
+            },
+            &mut inv,
+        );
         assert_eq!(p.take_changed().as_deref(), Some("#2EA043"));
         assert!(p.take_changed().is_none(), "1회성");
         // 같은 프리셋 재클릭 = 변경 없음.
         p.on_event(&click(r.x + 2, r.y + 2), &mut inv);
+        p.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 2,
+                y: r.y + 2,
+            },
+            &mut inv,
+        );
         assert!(p.take_changed().is_none());
     }
 

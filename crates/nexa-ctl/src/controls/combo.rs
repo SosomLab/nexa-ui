@@ -789,6 +789,8 @@ pub struct Choose {
     picker: Option<Box<dyn ChoosePicker>>,
     /// 찾기 오버레이가 열려 있는가.
     picking: bool,
+    /// 눌린 항목(확정은 **뗄 때** · 같은 항목 위 — 179차 · nexa-dir3 사용자 10-09 "클릭 동작은 Release 뒤에").
+    pick_pressed: Option<usize>,
     /// 찾기 오버레이 세로 스크롤(물리 px).
     pick_scroll: i32,
     /// 찾기 오버레이 스크롤바.
@@ -813,6 +815,7 @@ impl Choose {
             chose: false,
             picker: None,
             picking: false,
+            pick_pressed: None,
             pick_scroll: 0,
             pick_bars: ScrollBars::new(),
         }
@@ -977,10 +980,17 @@ impl Widget for Choose {
             match *ev {
                 InputEvent::MouseDown { x, y, .. } if !consumed => {
                     if let Some(i) = self.picker_hit(x, y) {
-                        self.pick(i, inv);
+                        self.pick_pressed = Some(i); // 확정은 뗄 때(179차)
                     } else if !self.picker_rect().contains(Point { x, y }) {
                         self.picking = false; // 바깥 클릭 = 취소
                         inv.push(self.base.bounds);
+                    }
+                }
+                InputEvent::MouseUp { x, y } => {
+                    if let Some(i) = self.pick_pressed.take() {
+                        if self.picker_hit(x, y) == Some(i) {
+                            self.pick(i, inv);
+                        }
                     }
                 }
                 InputEvent::Key {

@@ -33,6 +33,8 @@ pub struct Carousel {
     scroll_px: i32,
     /// 아이템 클릭(전역 인덱스 · 1회성).
     clicked: Option<usize>,
+    /// 눌린 항목(확정은 **뗄 때** · 같은 항목 위 — 179차 · nexa-dir3 사용자 10-09 "클릭 동작은 Release 뒤에").
+    pressed: Option<usize>,
     /// 커서가 띠 위에 있는가 — 가로 휠 스크롤은 이 위에서만.
     hover: bool,
     /// 가로 휠 노치 누적(트랙패드 분수 delta).
@@ -53,6 +55,7 @@ impl Carousel {
             count: 0,
             scroll_px: 0,
             clicked: None,
+            pressed: None,
             hover: false,
             hwheel: WheelAccum::default(),
             invert_scroll: false,
@@ -191,6 +194,19 @@ impl Widget for Carousel {
             }
             _ => {}
         }
+        if let InputEvent::MouseUp { x, y } = *ev {
+            // 항목 클릭은 뗄 때(179차) — 눌렀던 항목 위에서.
+            if let Some(i) = self.pressed.take() {
+                if self
+                    .item_rect(i)
+                    .is_some_and(|r| r.contains(Point { x, y }))
+                {
+                    self.clicked = Some(i);
+                    inv.push(self.base.bounds);
+                }
+            }
+            return;
+        }
         let InputEvent::MouseDown { x, y, .. } = *ev else {
             return;
         };
@@ -209,8 +225,7 @@ impl Widget for Carousel {
         }
         for i in 0..self.count {
             if self.item_rect(i).is_some_and(|r| r.contains(p)) {
-                self.clicked = Some(i);
-                inv.push(self.base.bounds);
+                self.pressed = Some(i);
                 return;
             }
         }
@@ -274,6 +289,14 @@ mod tests {
                 y: r.y + r.h / 2,
                 shift: false,
                 primary: false,
+            },
+            &mut inv,
+        );
+        // 항목은 뗄 때 보고(179차) · 좌우 버튼은 누를 때(스크롤 단계).
+        c.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + r.w / 2,
+                y: r.y + r.h / 2,
             },
             &mut inv,
         );

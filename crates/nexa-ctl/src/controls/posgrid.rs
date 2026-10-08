@@ -31,6 +31,8 @@ pub struct PositionPicker {
     base: ControlBase,
     /// 선택 인덱스(0..9 · 행우선).
     selected: usize,
+    /// 눌린 항목(확정은 **뗄 때** · 같은 항목 위 — 179차 · nexa-dir3 사용자 10-09 "클릭 동작은 Release 뒤에").
+    pressed: Option<usize>,
     changed: bool,
 }
 
@@ -47,6 +49,7 @@ impl PositionPicker {
         Self {
             base: ControlBase::default(),
             selected: 6, // "bl"
+            pressed: None,
             changed: false,
         }
     }
@@ -179,9 +182,16 @@ impl Widget for PositionPicker {
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
             InputEvent::MouseDown { x, y, .. } => {
-                if let Some(i) = self.cell_at(x, y) {
+                self.pressed = self.cell_at(x, y);
+                if self.pressed.is_some() {
                     self.base.focused = true;
-                    self.pick(i, inv);
+                }
+            }
+            InputEvent::MouseUp { x, y } => {
+                if let Some(i) = self.pressed.take() {
+                    if self.cell_at(x, y) == Some(i) {
+                        self.pick(i, inv);
+                    }
                 }
             }
             InputEvent::Key { key, .. } if self.base.focused => {
@@ -243,10 +253,25 @@ mod tests {
         assert_eq!(p.value(), "bl", "기본 좌하");
         let tr = p.cell_rect(2);
         p.on_event(&click(tr.x + 5, tr.y + 5), &mut inv);
+        assert!(p.take_changed().is_none(), "누름만 = 선택 없음(179차)");
+        p.on_event(
+            &InputEvent::MouseUp {
+                x: tr.x + 5,
+                y: tr.y + 5,
+            },
+            &mut inv,
+        );
         assert_eq!(p.take_changed().as_deref(), Some("tr"));
         assert!(p.take_changed().is_none(), "1회성");
         // 같은 셀 재클릭 = 변경 보고 없음.
         p.on_event(&click(tr.x + 5, tr.y + 5), &mut inv);
+        p.on_event(
+            &InputEvent::MouseUp {
+                x: tr.x + 5,
+                y: tr.y + 5,
+            },
+            &mut inv,
+        );
         assert!(p.take_changed().is_none());
     }
 
