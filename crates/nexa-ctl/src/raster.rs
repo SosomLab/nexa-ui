@@ -702,7 +702,9 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         if rect.is_empty() || hint.is_empty() {
             return;
         }
-        let Some(img) = image_cache::get(hint) else {
+        // 표시 상자에 맞춘 축소본만 캐시(178차 — 4K 사진을 원본 RGBA로 들고 있던 힙 누적 제거).
+        #[allow(clippy::cast_sign_loss)]
+        let Some(img) = image_cache::get_fit(hint, rect.w.max(0) as u32, rect.h.max(0) as u32) else {
             return;
         };
         // 비율 유지 가운데(축소만 · 작은 그림은 원본 크기).
@@ -866,22 +868,47 @@ impl RasterCtx<'_, '_, '_> {
     }
 }
 
-/// 경로 힌트 → 디코드된 이미지 캐시(스레드 로컬 · 상한 32 · 실패도 기억해 매 프레임 재디코드를 막는다).
+/// 경로 힌트 → 디코드된 이미지 캐시(스레드 로컬 · 실패도 기억해 매 프레임 재디코드를 막는다).
 /// 파일이 바뀌면(mtime·길이) 다시 읽는다 — 미리보기 임시 파일은 내용 해시 이름이라 사실상 불변.
+///
+/// ★ **178차(nexa-dir3 10-08 "메모리 점검")**: 종전 = 원본 해상도 RGBA를 32장까지 보관(4K 사진 1장 = 33 MB · 도크에서 사진을 볼 때마다
+/// 힙 +35 MB가 쌓여 떠나도 · 유휴 트림 뒤에도 안 돌아왔다). 지금은
+/// - [`get_fit`]: **표시 상자에 맞춰 축소한 사본만** 보관(상자보다 작은 그림은 원본) — 도크 그림 1장 ≈ 1 MB. 더 큰 상자가 오면 다시 디코드.
+/// - **바이트 예산**([`set_budget`] · 기본 [`DEFAULT_BUDGET`]) — 넘으면 **오래 안 쓴 것부터**(LRU) 버린다. 개수 상한([`MAX`])도 LRU.
+/// - 호스트 계측·정리: [`bytes`] · [`evict_to`] · [`clear`].
 pub mod image_cache {
     use crate::theme::IconImage;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
 
-    const MAX: usize = 32;
-    const MAX_PIXELS: usize = 16 * 1024 * 1024;
+    /// 항목 수 상한(넘으면 LRU부터).
+    pub const MAX: usize = 32;
+    /// 디코드 허용 픽셀 상한(폭 × 높이).
+    pub const MAX_PIXELS: usize = 16 * 1024 * 1024;
+    /// 기본 바이트 예산(보관 RGBA 합) — 도크/창 그림 몇 장이면 충분하다.
+    pub const DEFAULT_BUDGET: usize = 16 * 1024 * 1024;
 
     type Stamp = (u64, u64);
-    type Slot = (Stamp, Option<Rc<IconImage>>);
+
+    struct Slot {
+        stamp: Stamp,
+        /// 보관 그림(디코드 실패 = None · 실패도 기억).
+        img: Option<Rc<IconImage>>,
+        /// 원본 크기(폭, 높이) — `img`가 축소본이면 이보다 크다.
+        full: (u32, u32),
+        /// 마지막 사용 시각(단조 카운터 · LRU).
+        used: u64,
+    }
+
+    struct Cache {
+        map: HashMap<String, Slot>,
+        tick: u64,
+        budget: usize,
+    }
 
     thread_local! {
-        static CACHE: RefCell<HashMap<String, Slot>> = RefCell::new(HashMap::new());
+        static CACHE: RefCell<Cache> = RefCell::new(Cache { map: HashMap::new(), tick: 0, budget: DEFAULT_BUDGET });
     }
 
     fn stamp(path: &str) -> Stamp {
@@ -897,37 +924,230 @@ pub mod image_cache {
             .unwrap_or((0, 0))
     }
 
-    /// 경로의 이미지(없거나 디코드 실패 = None).
+    fn img_bytes(img: &Option<Rc<IconImage>>) -> usize {
+        img.as_ref().map_or(0, |i| i.rgba.len())
+    }
+
+    /// 원본 `(w, h)`를 상자 `(max_w, max_h)` 안에 **비율 유지 · 축소만**(0 = 그 축 제한 없음) — 순수.
+    #[must_use]
+    pub fn fit_size(full: (u32, u32), max_w: u32, max_h: u32) -> (u32, u32) {
+        let (w, h) = full;
+        if w == 0 || h == 0 || (max_w == 0 && max_h == 0) {
+            return full;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let kw = if max_w == 0 {
+            1.0
+        } else {
+            max_w as f32 / w as f32
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let kh = if max_h == 0 {
+            1.0
+        } else {
+            max_h as f32 / h as f32
+        };
+        let k = kw.min(kh).min(1.0);
+        if (k - 1.0).abs() < f32::EPSILON {
+            return full;
+        }
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        (
+            ((w as f32 * k).round() as u32).max(1),
+            ((h as f32 * k).round() as u32).max(1),
+        )
+    }
+
+    fn evict_locked(c: &mut Cache, keep: usize, except: Option<&str>) {
+        loop {
+            let total: usize = c.map.values().map(|s| img_bytes(&s.img)).sum();
+            let too_many = c.map.len() > MAX;
+            if (total <= keep && !too_many) || c.map.is_empty() {
+                break;
+            }
+            // 오래 안 쓴 것부터(방금 넣은 것은 남긴다).
+            let victim = c
+                .map
+                .iter()
+                .filter(|(k, _)| except != Some(k.as_str()))
+                .min_by_key(|(_, s)| s.used)
+                .map(|(k, _)| k.clone());
+            match victim {
+                Some(k) => {
+                    c.map.remove(&k);
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// 경로의 이미지 **원본 크기**(없거나 디코드 실패 = None) — 작은 그림(아이콘)용. 큰 그림을 표시 상자에 그릴 때는 [`get_fit`].
     pub fn get(path: &str) -> Option<Rc<IconImage>> {
+        get_fit(path, 0, 0)
+    }
+
+    /// 경로의 이미지를 `(max_w, max_h)` 상자에 **맞춰 축소한 사본**(0 = 제한 없음 · 상자보다 작은 그림은 원본). 캐시에 같은 파일의
+    /// 사본이 있고 그 크기가 이 상자에 맞는 결과와 같거나(또는 원본이면) 그대로 돌려준다 · 더 큰 상자면 다시 디코드해 교체.
+    pub fn get_fit(path: &str, max_w: u32, max_h: u32) -> Option<Rc<IconImage>> {
         let st = stamp(path);
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
-            if let Some((s, img)) = c.get(path) {
-                if *s == st {
-                    return img.clone();
+            c.tick += 1;
+            let tick = c.tick;
+            if let Some(s) = c.map.get_mut(path) {
+                if s.stamp == st {
+                    let hit = match &s.img {
+                        None => true,
+                        Some(img) => {
+                            let is_full = (img.w, img.h) == s.full;
+                            is_full || (img.w, img.h) == fit_size(s.full, max_w, max_h)
+                        }
+                    };
+                    if hit {
+                        s.used = tick;
+                        return s.img.clone();
+                    }
                 }
             }
-            if c.len() >= MAX {
-                c.clear();
-            }
-            let img = std::fs::read(path)
+            let decoded = std::fs::read(path)
                 .ok()
-                .and_then(|b| nexa_gfx::image::decode(&b, MAX_PIXELS).ok())
-                .map(Rc::new);
-            c.insert(path.to_string(), (st, img.clone()));
+                .and_then(|b| nexa_gfx::image::decode(&b, MAX_PIXELS).ok());
+            let full = decoded.as_ref().map_or((0, 0), |i| (i.w, i.h));
+            let img = decoded.map(|i| {
+                let (fw, fh) = fit_size(full, max_w, max_h);
+                if (fw, fh) == full {
+                    Rc::new(i)
+                } else {
+                    Rc::new(i.resized(fw, fh))
+                }
+            });
+            c.map.insert(
+                path.to_string(),
+                Slot {
+                    stamp: st,
+                    img: img.clone(),
+                    full,
+                    used: tick,
+                },
+            );
+            let budget = c.budget;
+            evict_locked(&mut c, budget, Some(path));
             img
         })
     }
 
-    /// 캐시 비우기(시험 · 테마 전환 뒤 재렌더).
+    /// 캐시 비우기(시험 · 테마 전환 뒤 재렌더 · 호스트 [힙 정리]).
     pub fn clear() {
-        CACHE.with(|c| c.borrow_mut().clear());
+        CACHE.with(|c| c.borrow_mut().map.clear());
+    }
+
+    /// 보관 바이트 합이 `keep` 이하가 되도록 **오래 안 쓴 것부터** 버린다(호스트 유휴 트림 · 0 = 전부).
+    pub fn evict_to(keep: usize) {
+        CACHE.with(|c| evict_locked(&mut c.borrow_mut(), keep, None));
+    }
+
+    /// 바이트 예산(보관 RGBA 합 상한) — 넘으면 넣을 때 LRU부터 버린다.
+    pub fn set_budget(bytes: usize) {
+        CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            c.budget = bytes;
+            evict_locked(&mut c, bytes, None);
+        });
+    }
+
+    /// 지금 보관 중인 RGBA 바이트 합(호스트 메모리 창 계측).
+    #[must_use]
+    pub fn bytes() -> usize {
+        CACHE.with(|c| c.borrow().map.values().map(|s| img_bytes(&s.img)).sum())
     }
 
     /// 캐시 항목 수(시험).
     #[must_use]
     pub fn len() -> usize {
-        CACHE.with(|c| c.borrow().len())
+        CACHE.with(|c| c.borrow().map.len())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// 32bpp top-down BMP(디코더가 읽는 형식) — 시험용 그림 파일.
+        fn write_bmp(path: &std::path::Path, w: u32, h: u32) {
+            let n = (w * h * 4) as usize;
+            let mut f = Vec::with_capacity(54 + n);
+            f.extend_from_slice(b"BM");
+            f.extend_from_slice(&((54 + n) as u32).to_le_bytes());
+            f.extend_from_slice(&[0; 4]);
+            f.extend_from_slice(&54u32.to_le_bytes());
+            f.extend_from_slice(&40u32.to_le_bytes());
+            f.extend_from_slice(&(w as i32).to_le_bytes());
+            f.extend_from_slice(&(-(h as i32)).to_le_bytes());
+            f.extend_from_slice(&1u16.to_le_bytes());
+            f.extend_from_slice(&32u16.to_le_bytes());
+            f.extend_from_slice(&[0; 24]);
+            for _ in 0..(w * h) {
+                f.extend_from_slice(&[10, 20, 30, 255]);
+            }
+            std::fs::write(path, f).unwrap();
+        }
+
+        fn tmp(name: &str) -> std::path::PathBuf {
+            let d = std::env::temp_dir().join(format!("nexa-ctl-imgcache-{}", std::process::id()));
+            std::fs::create_dir_all(&d).unwrap();
+            d.join(name)
+        }
+
+        #[test]
+        fn fit_size_shrinks_only_and_keeps_aspect() {
+            assert_eq!(fit_size((4000, 2000), 400, 400), (400, 200));
+            assert_eq!(fit_size((4000, 2000), 0, 500), (1000, 500));
+            assert_eq!(fit_size((100, 50), 400, 400), (100, 50), "작은 그림은 원본");
+            assert_eq!(fit_size((4000, 2000), 0, 0), (4000, 2000), "제한 없음");
+            assert_eq!(fit_size((0, 0), 10, 10), (0, 0));
+        }
+
+        /// 상자 맞춤: 큰 그림은 축소본만 보관(바이트 ≪ 원본) · 같은 상자 = 재사용 · 더 큰 상자 = 재디코드 · 원본 요청은 원본 ·
+        /// 예산 초과 = 오래된 것부터 · evict_to(0) = 전부.
+        #[test]
+        fn fit_cache_keeps_scaled_copy_and_evicts_lru() {
+            clear();
+            set_budget(DEFAULT_BUDGET);
+            let a = tmp("a.bmp");
+            let b = tmp("b.bmp");
+            write_bmp(&a, 800, 400);
+            write_bmp(&b, 800, 400);
+            let pa = a.to_string_lossy().to_string();
+            let pb = b.to_string_lossy().to_string();
+            let s = get_fit(&pa, 200, 200).unwrap();
+            assert_eq!((s.w, s.h), (200, 100));
+            assert_eq!(bytes(), 200 * 100 * 4, "축소본만 보관");
+            let again = get_fit(&pa, 200, 200).unwrap();
+            assert!(Rc::ptr_eq(&s, &again), "같은 상자 = 캐시 적중");
+            let bigger = get_fit(&pa, 400, 400).unwrap();
+            assert_eq!((bigger.w, bigger.h), (400, 200), "더 큰 상자 = 재디코드");
+            let full = get(&pa).unwrap();
+            assert_eq!((full.w, full.h), (800, 400), "원본 요청 = 원본");
+            let full2 = get_fit(&pa, 200, 200).unwrap();
+            assert!(
+                Rc::ptr_eq(&full, &full2),
+                "원본이 있으면 작은 상자도 원본을 쓴다(그릴 때 축소)"
+            );
+            // 예산: 두 번째 그림을 넣으면 예산을 넘겨 오래된 a가 나간다.
+            set_budget(800 * 400 * 4 + 1024);
+            let _ = get_fit(&pb, 0, 0).unwrap();
+            assert_eq!(len(), 1, "예산 초과 = LRU(a) 퇴출");
+            assert!(bytes() <= 800 * 400 * 4 + 1024);
+            evict_to(0);
+            assert_eq!(len(), 0);
+            assert_eq!(bytes(), 0);
+            set_budget(DEFAULT_BUDGET);
+            let _ = std::fs::remove_file(&a);
+            let _ = std::fs::remove_file(&b);
+        }
     }
 }
 
