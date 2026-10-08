@@ -624,11 +624,17 @@ impl TabBar {
         Rect::new(cell.x + self.s(self.pad_x), cell.y + (cell.h - d) / 2, d, d)
     }
 
+    /// 닫기 상자 뒤 오른쪽 여백 = 왼쪽 여백의 40%(nexa-sql 사용자 10-09 "닫기 버튼 뒤 공백이 넓다 → 40% 수준으로") — × 상자 자체에
+    /// 안쪽 여백이 있어 그 만큼이면 충분하다.
+    fn pad_right(&self) -> i32 {
+        (self.s(self.pad_x) * 2 + 2) / 5
+    }
+
     /// 닫기(×)/자물쇠 상자 — 탭 오른쪽 여백 안쪽.
     fn close_rect(&self, cell: Rect) -> Rect {
         let d = self.s(CLOSE_BOX);
         Rect::new(
-            cell.right() - self.s(self.pad_x) - d,
+            cell.right() - self.pad_right() - d,
             cell.y + (cell.h - d) / 2,
             d,
             d,
@@ -865,7 +871,7 @@ impl TabBar {
                 } else {
                     0
                 };
-                (pad + ic + bd + m + ctx.text_width(t) + gap + close + pad).min(max_w)
+                (pad + ic + bd + m + ctx.text_width(t) + gap + close + self.pad_right()).min(max_w)
             })
             .collect();
         let plus_w = if self.show_new { lh } else { 0 };
@@ -1477,9 +1483,9 @@ mod tests {
     #[test]
     fn click_switches_close_box_closes_and_plus_creates() {
         let (mut t, mut inv) = bar(&["alpha", "beta"], 0);
-        // 탭0 폭 = 8+35+4+16+8 = 71 · 탭1 = 64 · [+] = 28.
-        assert_eq!(t.tab_rect(0), Some(Rect::new(0, 0, 71, 28)));
-        assert_eq!(t.tab_rect(1), Some(Rect::new(71, 0, 64, 28)));
+        // 탭0 폭 = 8+35+4+16+3 = 66(오른쪽 여백 = 왼쪽의 40% · 10-09) · 탭1 = 59 · [+] = 28.
+        assert_eq!(t.tab_rect(0), Some(Rect::new(0, 0, 66, 28)));
+        assert_eq!(t.tab_rect(1), Some(Rect::new(66, 0, 59, 28)));
         click(&mut t, &mut inv, 10, 14);
         assert_eq!(t.take_action(), Some(TabAction::Switch(0)));
         let (cx, cy) = close_center(&t, 1);
@@ -1590,7 +1596,7 @@ mod tests {
         let (mut t, mut inv) = bar(&["alpha", "beta"], 0);
         t.set_pinned(vec![true, false], &mut inv);
         t.paint(&mut ProbeCtx, &Theme::dark());
-        assert_eq!(t.tab_rect(0).map(|r| r.w), Some(71 + PIN_MARK + 4));
+        assert_eq!(t.tab_rect(0).map(|r| r.w), Some(66 + PIN_MARK + 4));
     }
 
     #[test]
@@ -1695,10 +1701,10 @@ mod tests {
         assert_eq!(t.scroll_x(), 0);
         assert_eq!(t.tab_rect(0).map(|r| r.x), Some(strip.x));
 
-        // ▶ 클릭 = 부분 가려진 다음 탭(탭2 [142,213))을 온전히 드러낸다 → 213-144 = 69.
+        // ▶ 클릭 = 부분 가려진 다음 탭(탭2 [132,198))을 온전히 드러낸다 → 198-144 = 54.
         let (bx, by) = center(rb);
         click(&mut t, &mut inv, bx, by);
-        assert_eq!(t.scroll_x(), 69);
+        assert_eq!(t.scroll_x(), 54);
         t.paint(&mut ProbeCtx, &Theme::dark());
         assert_eq!(t.tab_rect(2).map(|r| r.right()), Some(strip.right()));
         // ◀ 클릭 = 왼쪽으로 가려진 마지막 탭(탭0)을 드러낸다 → 0.
@@ -1724,7 +1730,11 @@ mod tests {
         assert_eq!(t.scroll_x(), 0);
         // 과대 스크롤은 페인트 범위로 클램프.
         t.scroll_by(10_000, &mut inv);
-        assert_eq!(t.scroll_x(), 596 - 144);
+        assert_eq!(
+            t.scroll_x(),
+            556 - 144,
+            "탭 8개 × 5px 줄어든 내용 폭(10-09)"
+        );
     }
 
     #[test]
@@ -1735,7 +1745,7 @@ mod tests {
         assert!(t.take_lines_changed(), "1→3줄 변경 표지");
         assert!(!t.take_lines_changed(), "표지는 1회성");
         assert_eq!(t.preferred_height(), 3 * DEFAULT_ROW_H);
-        assert_eq!(t.tab_rect(2), Some(Rect::new(0, 28, 71, 28)));
+        assert_eq!(t.tab_rect(2), Some(Rect::new(0, 28, 66, 28)));
         assert_eq!(t.tab_index_at(10, 30), Some(2));
         assert_eq!(t.tab_index_at(10, 5), Some(0));
         assert_eq!(t.scroll_x(), 0, "다중행은 스크롤 없음");
