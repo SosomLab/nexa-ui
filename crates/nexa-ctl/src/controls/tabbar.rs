@@ -158,6 +158,10 @@ pub struct TabBar {
     close_last: bool,
     row_h: i32,
     pad_x: i32,
+    /// 탭 최소 폭(논리 px · 0 = 없음 — 제목이 짧아도 이 폭은 지킨다 · nexa-dir3 사용자 10-09 `tabs.min_width`).
+    min_w: i32,
+    /// 닫기(×) 상자 뒤 여백(논리 px · `None` = 왼쪽 여백의 40 % = 기본). nexa-dir3 사용자 10-09 "× 뒤 여백을 40 %로" + 설정 키.
+    close_pad: Option<i32>,
     /// 활성 탭 상단 줄·핀 점의 색 덮어쓰기(None = `theme.accent`) — 편집기 탭과 결과 탭을 색으로 구별(nexa-sql 09-17).
     accent: Option<Color>,
     hover: Option<Zone>,
@@ -211,6 +215,8 @@ impl TabBar {
             close_last: false,
             row_h: DEFAULT_ROW_H,
             pad_x: space::S,
+            min_w: 0,
+            close_pad: None,
             accent: None,
             hover: None,
             pressed: None,
@@ -490,6 +496,18 @@ impl TabBar {
         inv.push(self.base.bounds);
     }
 
+    /// 탭 최소 폭(논리 px · 0 = 없음). 최대 폭(240)을 넘기면 최대 폭으로.
+    pub fn set_min_width(&mut self, px: i32, inv: &mut Invalidations) {
+        self.min_w = px.clamp(0, MAX_TAB_W);
+        inv.push(self.base.bounds);
+    }
+
+    /// 닫기(×) 상자 뒤 여백(논리 px) — `None` = 왼쪽 여백의 40 %(기본 · [`Self::pad_right`]).
+    pub fn set_close_pad(&mut self, px: Option<i32>, inv: &mut Invalidations) {
+        self.close_pad = px.map(|p| p.max(0));
+        inv.push(self.base.bounds);
+    }
+
     /// 한 줄 높이(논리 px).
     #[must_use]
     pub fn row_height(&self) -> i32 {
@@ -626,8 +644,12 @@ impl TabBar {
 
     /// 닫기 상자 뒤 오른쪽 여백 = 왼쪽 여백의 40%(nexa-sql 사용자 10-09 "닫기 버튼 뒤 공백이 넓다 → 40% 수준으로") — × 상자 자체에
     /// 안쪽 여백이 있어 그 만큼이면 충분하다.
+    /// 182차: `set_close_pad(Some(px))`로 호스트가 지정하면 그 값(배율 적용).
     fn pad_right(&self) -> i32 {
-        (self.s(self.pad_x) * 2 + 2) / 5
+        match self.close_pad {
+            Some(p) => self.s(p),
+            None => (self.s(self.pad_x) * 2 + 2) / 5,
+        }
     }
 
     /// 닫기(×)/자물쇠 상자 — 탭 오른쪽 여백 안쪽.
@@ -855,6 +877,8 @@ impl TabBar {
             b.h.max(1)
         };
         let max_w = self.s(MAX_TAB_W).min(b.w).max(1);
+        let min_w = self.s(self.min_w).min(max_w);
+        let pad_r = self.pad_right();
         let widths: Vec<i32> = self
             .titles
             .iter()
@@ -871,7 +895,9 @@ impl TabBar {
                 } else {
                     0
                 };
-                (pad + ic + bd + m + ctx.text_width(t) + gap + close + self.pad_right()).min(max_w)
+                (pad + ic + bd + m + ctx.text_width(t) + gap + close + pad_r)
+                    .max(min_w)
+                    .min(max_w)
             })
             .collect();
         let plus_w = if self.show_new { lh } else { 0 };
@@ -1357,6 +1383,39 @@ mod tests {
 
     fn bar(titles: &[&str], active: usize) -> (TabBar, Invalidations) {
         bar_sized(titles, active, 600, 28, false)
+    }
+
+    /// 182차(nexa-dir3 사용자 10-09): 최소 폭 = 짧은 제목도 그 폭 · 최대 폭 상한 · × 뒤 여백 = `set_close_pad`(기본 = pad_x) —
+    /// 줄이면 탭 폭도 그만큼 줄고 × 상자는 오른쪽 끝에 붙는다.
+    #[test]
+    fn min_width_and_close_pad() {
+        let (mut t, mut inv) = bar(&["a", "bb"], 0);
+        let w0 = t.tab_rect(0).unwrap().w;
+        t.set_min_width(120, &mut inv);
+        t.paint(&mut ProbeCtx, &Theme::dark());
+        assert_eq!(t.tab_rect(0).unwrap().w, 120, "짧은 제목 = 최소 폭");
+        assert_eq!(t.tab_rect(1).unwrap().w, 120);
+        t.set_min_width(9999, &mut inv);
+        t.paint(&mut ProbeCtx, &Theme::dark());
+        assert_eq!(t.tab_rect(0).unwrap().w, MAX_TAB_W, "최대 폭 상한");
+        t.set_min_width(0, &mut inv);
+        t.set_close_pad(Some(2), &mut inv);
+        t.paint(&mut ProbeCtx, &Theme::dark());
+        let r = t.tab_rect(0).unwrap();
+        let def = (space::S * 2 + 2) / 5;
+        assert_eq!(
+            r.w,
+            w0 - (def - 2),
+            "× 뒤 여백 기본(40 %) → 2 = 폭 그 차이만큼"
+        );
+        assert_eq!(
+            t.close_rect(r).right(),
+            r.right() - 2,
+            "× 상자가 오른쪽 끝 2 px 안쪽"
+        );
+        t.set_close_pad(None, &mut inv);
+        t.paint(&mut ProbeCtx, &Theme::dark());
+        assert_eq!(t.tab_rect(0).unwrap().w, w0, "None = 기본(40 %)");
     }
 
     /// ★ dir2 탭 기능(GUI-040·046 · nexa-dir3 103차): 아이콘이 탭 폭을 넓히고 제목 앞에 그려진다 · 툴팁은 hover 중인 탭에서만 ·
