@@ -421,6 +421,8 @@ pub struct TextBox {
     wrap: bool,
     /// 멀티라인 세로 스크롤(첫 보이는 논리 줄 인덱스 · 캐럿을 따라간다).
     vscroll: std::cell::Cell<usize>,
+    /// ★ 줄 배경 색조(논리 줄 index → (색, 알파) · 비면 없음 · nexa-sql diff 뷰어 10-09): 본문 뒤 · 선택 반전 앞에 칠한다.
+    row_tints: Vec<Option<(Color, f32)>>,
     /// 멀티라인 가로 스크롤(px · 캐럿 열을 따라간다 · 08-17 드래그 자동 스크롤).
     mhscroll: std::cell::Cell<i32>,
     /// 사용자가 휠/바로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
@@ -853,6 +855,7 @@ impl TextBox {
             masked: false,
             wrap: false,
             vscroll: std::cell::Cell::new(0),
+            row_tints: Vec::new(),
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
             select_all_keep_view: false,
@@ -1467,6 +1470,26 @@ impl TextBox {
 
     /// 휠 스크롤을 **줄 경계에 맞춰** 그리는가(`true` = 행 단위 · `false` = 픽셀 단위 기본). 잔여 px는 두 모드 모두
     /// 누적되므로 느린 트랙패드 이동도 잃지 않는다(nexa-sql `editor.scroll` · 09-16).
+    /// ★ 줄 배경 색조(논리 줄 index 순 · `None` = 없음) — diff 뷰어(추가 초록 · 삭제 빨강 · 변경 노랑)처럼 호스트가 색을 정한다.
+    pub fn set_row_tints(&mut self, tints: Vec<Option<(Color, f32)>>) {
+        self.row_tints = tints;
+    }
+
+    /// 멀티라인 첫 보이는 논리 줄(스크롤 동기용 · 2-pane 뷰어).
+    #[must_use]
+    pub fn vscroll_top(&self) -> usize {
+        self.vscroll.get()
+    }
+
+    /// 멀티라인 첫 보이는 논리 줄을 맞춘다(캐럿 불변 · 자유 스크롤 상태로 · 다음 그리기에서 범위 안으로 클램프).
+    pub fn set_vscroll_top(&mut self, top: usize) {
+        if self.vscroll.get() != top {
+            self.vscroll.set(top);
+            self.ml_wheel_rem.set(0);
+            self.ml_user_scrolled = true;
+        }
+    }
+
     pub fn set_scroll_snap(&mut self, on: bool) {
         self.scroll_snap = on;
     }
@@ -3911,6 +3934,17 @@ impl TextBox {
             //   상자 가운데(정수 내림)가 아니라 **몸통(잉크) 기준 · 반올림**(`text_center_y` · 글꼴·크기가 달라도 같은 자리 ·
             //   nexa-sql 10-07 "위/아래 여백이 미묘하게 다르다").
             let ty = ctx.text_center_y(y, lh).max(y);
+            // ★ 줄 배경 색조(diff 뷰어) — 본문 영역 전체 폭 · 선택 반전·글자 앞.
+            if !self.row_tints.is_empty() {
+                if let Some(Some((col, alpha))) = rows_src
+                    .logical_no(li, &logical_starts)
+                    .and_then(|n| self.row_tints.get(n))
+                {
+                    if let Some(tr) = clipv(Rect::new(tx - self.s(4), y, avail + self.s(8), lh)) {
+                        ctx.fill_rect_alpha(tr, *col, *alpha);
+                    }
+                }
+            }
             let line_len = line_str.chars().count();
             // 이 행이 선택에 걸리는가 — 줄번호를 선택 색으로 표시한다(여러 행 선택이 한눈에 · 사용자 09-15).
             let row_selected = sels.iter().any(|&(a, e)| {

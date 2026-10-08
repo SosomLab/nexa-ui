@@ -29,6 +29,8 @@
 
 pub mod avatar;
 pub mod controls;
+/// ★ 줄 단위 정렬 디프(2-pane 뷰어용 · nexa-sql T-283 2단계 · 10-09).
+pub mod diff;
 pub mod draw;
 pub mod edit;
 pub mod event;
