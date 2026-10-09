@@ -77,7 +77,8 @@ pub fn parse(text: &str) -> Doc {
 }
 
 /// 직렬화 — `_schema` 먼저, 아는 키(호출자 순서), 그 뒤 미지 키 **그대로 재방출**
-/// (F-1 정정: 구버전이 저장해도 신버전 키가 살아남는다).
+/// (F-1 정정: 구버전이 저장해도 신버전 키가 살아남는다). 단 **아는 키와 겹치는 미지 키는
+/// 건너뛴다**(같은 키 두 줄 금지 — 09-05).
 /// 값 속 개행은 **줄 분리자 U+2028/2029로 치환**해 한 줄 = 한 키 불변식을 지키되
 /// **왕복 보존**한다(08-18 — 멀티라인 소개글 등). `str::lines()`는 U+2028/2029로
 /// 줄을 나누지 않으므로 값이 한 물리 줄에 머문다. parse가 역치환한다. ★ `\n`→`\\n`
@@ -103,7 +104,9 @@ pub fn serialize(known: &[(&str, &str)], unknown: &[(String, String)]) -> String
     for (k, v) in known {
         line(k, v);
     }
-    // ★ 미지 키가 나중에 아는 키가 되면(등재·런타임 set) known이 이긴다 — 같은 키 두 줄 금지(09-05).
+    // ★ 미지 키가 나중에 아는 키가 되면(등재·런타임 set) known이 이긴다 — 같은 키 두 줄
+    //   금지(09-05 · nexa-clip 전달문 A-2 이식 — clip 실측 = 뒤늦게 등재한 창 위치 키 5개가
+    //   파일에 두 줄씩 남아 계속 자랐다. 파서는 마지막 줄을 채택하므로 값은 무해했다).
     for (k, v) in unknown {
         if known.iter().any(|(kk, _)| *kk == k.as_str()) {
             continue;
@@ -118,7 +121,7 @@ pub fn serialize(known: &[(&str, &str)], unknown: &[(String, String)]) -> String
 /// temp 이름 충돌 방지용 프로세스 내 일련번호(동시 인스턴스는 PID로 갈린다).
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 원자적 쓰기(F-2 정정) — PID·일련 접미 temp → `sync_all` → **덮어쓰기 rename**
+/// 원자적 쓰기(F-2 정정) — **소유자 전용(0600 · Unix)** PID·일련 접미 temp → `sync_all` → **덮어쓰기 rename**
 /// (Unix rename·Windows `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` — std가 보장) →
 /// 부모 디렉터리 fsync(Unix — rename 내구성 · Windows는 해당 API 없음).
 /// 실패 시 temp를 지우고 기존 파일은 건드리지 않는다.
@@ -137,8 +140,10 @@ pub fn write_atomic(path: &Path, contents: &str) -> io::Result<()> {
     let write = (|| -> io::Result<()> {
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true);
-        // ★ 소유자만(09-05) — 설정에는 비밀(페어링 패스프레이즈 등)이 실릴 수 있다. umask 기본(0644/0664)은
-        //   같은 PC의 다른 계정·백업 도구에 그대로 노출된다. rename이 temp의 모드를 그대로 나른다.
+        // ★ 소유자만(0600) — 설정에는 비밀이 실릴 수 있다(09-05 · nexa-clip 전달문 A-1
+        //   이식). umask 기본(0644/0664)은 같은 PC의 다른 계정·백업 도구·동기화 클라이언트에
+        //   그대로 노출되고, rename이 temp의 모드를 최종 파일로 나른다. Windows는 사용자
+        //   프로필 ACL이 같은 역할이라 변경 없음. 기존 파일은 [`Store::open`]이 죈다.
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -161,6 +166,25 @@ pub fn write_atomic(path: &Path, contents: &str) -> io::Result<()> {
         let _ = d.sync_all();
     }
     Ok(())
+}
+
+/// 기존 파일을 **소유자 전용(0600)** 으로 죈다 — [`write_atomic`]이 0600을 보장하기 전에
+/// 만들어진 파일(umask 기본 0644/0664)을 다음 저장을 기다리지 않고 부팅 때 정리한다.
+/// 파일이 없거나 권한 변경이 거부되면 조용히 지나간다(기능을 막지 않는다). Windows no-op.
+pub fn tighten(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Ok(meta) = fs::metadata(path) {
+            if meta.is_file() && meta.permissions().mode() & 0o077 != 0 {
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 // ------------------------------------------------------------ 저장 스케줄러
@@ -246,6 +270,7 @@ impl Store {
     #[must_use]
     pub fn open(path: PathBuf, quiet_ms: u64, max_delay_ms: u64) -> (Self, Doc) {
         let doc = parse(&fs::read_to_string(&path).unwrap_or_default());
+        tighten(&path);
         (
             Self {
                 path,
@@ -439,32 +464,6 @@ mod tests {
     }
 
     /// T-5: 미지 키가 왕복 후에도 남아 있다(F-1).
-    /// ★ 09-05: 미지 키로 보존된 것이 나중에 known으로 오면 한 줄만(known 값) 남는다.
-    #[test]
-    fn known_wins_over_stale_unknown() {
-        let text = serialize(
-            &[("a", "new")],
-            &[
-                ("a".to_string(), "old".to_string()),
-                ("z".to_string(), "keep".to_string()),
-            ],
-        );
-        assert_eq!(text, "_schema=1\na=new\nz=keep\n");
-    }
-
-    /// ★ 09-05: 설정 파일은 소유자만 읽는다(비밀이 실릴 수 있다).
-    #[cfg(unix)]
-    #[test]
-    fn written_file_is_owner_only() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let d = tmpdir("perm");
-        let p = d.join("settings.cfg");
-        write_atomic(&p, "_schema=1\n").unwrap();
-        let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "mode {mode:o}");
-        let _ = fs::remove_dir_all(d);
-    }
-
     #[test]
     fn unknown_keys_survive_roundtrip() {
         let d = tmpdir("t5");
@@ -482,6 +481,48 @@ mod tests {
         assert!(re.pairs.contains(&("future.key".into(), "keepme".into())));
         assert!(re.pairs.contains(&("known".into(), "new".into())));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    /// 미지 키로 보존된 것이 나중에 known으로 오면 한 줄만(known 값) 남는다(09-05 · A-2).
+    #[test]
+    fn known_wins_over_stale_unknown() {
+        let text = serialize(
+            &[("a", "new")],
+            &[
+                ("a".to_string(), "old".to_string()),
+                ("z".to_string(), "keep".to_string()),
+            ],
+        );
+        assert_eq!(text, "_schema=1\na=new\nz=keep\n");
+    }
+
+    /// 설정 파일은 소유자만 읽는다(비밀이 실릴 수 있다 — 09-05 · A-1).
+    #[cfg(unix)]
+    #[test]
+    fn written_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = tmpdir("perm");
+        let p = d.join("settings.cfg");
+        write_atomic(&p, "_schema=1\n").unwrap();
+        let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode {mode:o}");
+        let _ = fs::remove_dir_all(d);
+    }
+
+    /// 예전에 느슨하게(0644) 만들어진 파일은 `Store::open`이 0600으로 죈다(09-05).
+    #[cfg(unix)]
+    #[test]
+    fn open_tightens_legacy_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = tmpdir("tighten");
+        let p = d.join("settings.cfg");
+        fs::write(&p, "_schema=1\nk=v\n").unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+        let (_st, doc) = Store::open(p.clone(), 1000, 10_000);
+        assert_eq!(doc.pairs.len(), 1, "내용은 그대로 읽힌다");
+        let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode {mode:o}");
+        let _ = fs::remove_dir_all(d);
     }
 
     /// T-6: 쓰레기 파일에도 파싱이 실패하지 않는다.
@@ -542,25 +583,25 @@ mod tests {
     #[test]
     fn replaced_on_upgrade_matches_bundle_keg_and_system_prefix() {
         let yes = [
-            "/Applications/Nexa Clip.app/Contents/MacOS",
-            "/Users/u/Applications/Nexa Clip.app/Contents/MacOS",
-            "/opt/homebrew/Cellar/nexa-clip-portable/0.2.8/bin",
+            "/Applications/Nexa Beep.app/Contents/MacOS",
+            "/Users/u/Applications/Nexa Beep.app/Contents/MacOS",
+            "/opt/homebrew/Cellar/nexa-beep-portable/0.2.8/bin",
             "/opt/homebrew/bin",
-            "/usr/local/Cellar/nexa-clip-portable/0.2.8/bin",
-            "/home/linuxbrew/.linuxbrew/Cellar/nexa-clip-portable/0.2.8/bin",
+            "/usr/local/Cellar/nexa-beep-portable/0.2.8/bin",
+            "/home/linuxbrew/.linuxbrew/Cellar/nexa-beep-portable/0.2.8/bin",
             "/usr/bin",
             "/usr/local/bin",
-            "/opt/nexa-clip",
+            "/opt/nexa-beep",
         ];
         for p in yes {
             assert!(is_replaced_on_upgrade(Path::new(p)), "{p}");
         }
         let no = [
-            "/Users/u/Downloads/nexa-clip-0.1.0-macos-arm64-portable",
-            "/Users/u/.nexa-clip-multi/a",
+            "/Users/u/Downloads/nexa-beep-0.2.8-macos-arm64-portable",
+            "/Users/u/.nexa-beep-multi/a",
             "/home/u/bin",
             "/home/u/opt/tools",
-            "/Users/u/Projects/nexa-clip/target/release",
+            "/Users/u/Projects/nexa-beep/target/release",
             "C:\\Users\\u\\AppData\\Local\\Programs\\NexaBeep",
             "D:\\portable\\nexa-beep",
             "usr/bin",
