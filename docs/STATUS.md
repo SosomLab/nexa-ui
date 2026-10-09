@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-10 (193차 · mac · nexa-beep 성능)** — nexa-sys `LayerPresenter::trim_idle`(유휴 때 IOSurface 풀 해제 · 추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) — beep이 IOSurface 경로를 기본으로 켜며 DR-5 유휴 예산을 지키기 위한 훅.
 - **2026-10-10 (192차 · win · nexa-clip 이관 선행)** — nexa-gfx 비트맵 컬러 이모지 + nexa-font Linux 이모지 후보(추가 · 윤곽 글리프 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · clip 이관(P1-c)은 clip 저장소에서 이어진다.
 - **2026-10-04 (144차 · linux · nexa-dir3 전송 닫기 버튼)** — `Button::tone()` 조회(추가 · 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-04 (143차 · linux · nexa-dir3 두 줄 여백)** — StatusBar 세로 줄 높이 분할 수정(rows 소비자만 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
