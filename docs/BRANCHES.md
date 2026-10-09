@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/bitmap-glyph | 2026-10-10 | 2026-10-10 → main(삭제 · 61e3073) | 1 | 192차 — nexa-gfx 비트맵 컬러 이모지(clip T-18f 이식 · 자체 PNG) · nexa-font Linux Noto Color Emoji 후보 |
 | feat/dlg-focused-ref | 2026-10-09 | 2026-10-09 → main(삭제) | 2 | 188차: nexa-dlg `FilePicker::focused_textbox_ref`(읽기 전용 포커스 상자 — nexa-beep P3 복사 라우팅) |
 | feat/conf-tighten-locale | 2026-10-09 | 2026-10-09 → main(삭제) | 4 | 185~187차(nexa-beep 협업 세션 · beep 설정 개편 docs/50 P1-a): nexa-conf `tighten`+`Store::open` 0600(beep 사본 본문 동일화) · nexa-sys `locale::ui_language()`(OS 화면 언어 주 태그 · 매 호출) · nexa-ctl 툴바 `StatusMask.dim`·`Avatar.ring`(beep 09-07 이관) |
 | work/2026-10-07-tooltip-dir-175 | 2026-10-07 | 2026-10-07 → main(삭제) | 1 | 175차: `draw::draw_tooltip_in_dir`(호출자가 위/아래 방향) · 기존 둘 위임 — nexa-sql 편집기 탭 툴팁(탭 바 위 = 툴바) |
