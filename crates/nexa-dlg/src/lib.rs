@@ -592,6 +592,19 @@ impl FilePicker {
         }
     }
 
+    /// 포커스 텍스트 박스(읽기 전용) — 호스트의 **복사**(Ctrl/⌘+C) 라우팅용(nexa-beep `clipboard_copy_for(&self)` · 10-09).
+    /// [`Self::focused_textbox`]와 같은 판정(경로 편집 중이면 경로 상자 · 아니면 이름 상자).
+    #[must_use]
+    pub fn focused_textbox_ref(&self) -> Option<&TextBox> {
+        if self.path_editing && self.path_box.is_focused() {
+            Some(&self.path_box)
+        } else if self.name_box.is_focused() {
+            Some(&self.name_box)
+        } else {
+            None
+        }
+    }
+
     // ───────────────────────── 데이터 ─────────────────────────
 
     fn rebuild_places(&mut self) {
@@ -3195,6 +3208,28 @@ mod tests {
         p.set_default_name("b.txt");
         p.confirm();
         assert_eq!(p.take_action(), PickerAction::Confirm(d.join("b.txt")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 읽기 전용 포커스 상자 = 가변 접근자와 같은 판정(복사 라우팅 · nexa-beep 10-09).
+    #[test]
+    fn focused_textbox_ref_matches_mut_accessor() {
+        let d = temp_dir("focusref");
+        let mut p = FilePicker::new(PickerMode::Save, Some(&d), Vec::new(), labels());
+        p.set_default_name("keep.cfg");
+        p.name_box.set_focused(false);
+        p.path_box.set_focused(false);
+        assert!(p.focused_textbox_ref().is_none());
+        assert!(p.focused_textbox().is_none());
+        p.name_box.set_focused(true);
+        assert_eq!(
+            p.focused_textbox_ref().map(TextBox::text).as_deref(),
+            Some("keep.cfg")
+        );
+        assert_eq!(
+            p.focused_textbox().map(|tb| tb.text()).as_deref(),
+            Some("keep.cfg")
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 }
