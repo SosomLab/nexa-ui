@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/conf-tighten-locale | 2026-10-09 | 2026-10-09 → main(삭제) | 4 | 185~187차(nexa-beep 협업 세션 · beep 설정 개편 docs/50 P1-a): nexa-conf `tighten`+`Store::open` 0600(beep 사본 본문 동일화) · nexa-sys `locale::ui_language()`(OS 화면 언어 주 태그 · 매 호출) · nexa-ctl 툴바 `StatusMask.dim`·`Avatar.ring`(beep 09-07 이관) |
 | work/2026-10-07-tooltip-dir-175 | 2026-10-07 | 2026-10-07 → main(삭제) | 1 | 175차: `draw::draw_tooltip_in_dir`(호출자가 위/아래 방향) · 기존 둘 위임 — nexa-sql 편집기 탭 툴팁(탭 바 위 = 툴바) |
 | work/2026-10-07-flash-174 | 2026-10-07 | 2026-10-07 → main(삭제) | 2 | 174차: nexa-ctl `Flash` = `set_radius`(둥근 모서리) · `set_border`(끔) · `set_colors`(지정 색) · `set_instant`(즉시 모드 · 성능 향상) · `deadline`/`fade_start`/`fading`(호스트 = 유지 중 그리기 0 · 페이드만 프레임) · 시험 +1 — nexa-sql 10-07 프로젝트 탐색기 플래시 |
 | work/2026-10-04-posdrop-chevron | 2026-10-04 | 2026-10-04 → main(삭제) | 1 | 140차: `PosDrop` ▾ `draw_chevron_down_scaled`(배율 하한 · 138차 후보 해소) — nexa-sql 10-04 후속 |
