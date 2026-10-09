@@ -75,6 +75,9 @@ pub struct RasterCtx<'s, 'b, 'f> {
     tab_origin: Option<i32>,
     /// 이번 프레임의 캐럿 표시 위상(08-13 — 깜빡임). 호스트가 시각·포커스로 주입.
     caret_on: bool,
+    /// 이번 페인트에서 **누군가 `caret_on()`을 물었다**(= 깜빡이는 캐럿을 그리는 컨트롤이 있다 · 포커스된 TextBox 등).
+    /// 호스트가 캐럿 틱 재페인트를 **이 창에만** 걸 때 쓴다(nexa-beep 10-10: 틱마다 목록 창 전체 재도색 = 유휴 CPU 2%).
+    caret_asked: std::cell::Cell<bool>,
     /// 클립 스택(UIC-310 · 10-03 nexa-dir3 T-31) — `push_clip`은 꼭대기와 **교차**해 쌓고, 모든 그리기는
     /// 꼭대기 사각형 밖을 건드리지 않는다. 비어 있으면 종전과 같다(표면 전체).
     clips: Vec<Rect>,
@@ -108,6 +111,7 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
             mono_mult: 1.0,
             tab_origin: None,
             caret_on: true,
+            caret_asked: std::cell::Cell::new(false),
             clips: Vec::new(),
         }
     }
@@ -137,6 +141,13 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
     pub fn with_caret_on(mut self, on: bool) -> Self {
         self.caret_on = on;
         self
+    }
+
+    /// 이번 페인트 동안 `caret_on()`이 한 번이라도 불렸는가 — 깜빡임 틱 재페인트가 필요한 창인지의 근거
+    /// (안 불렸으면 캐럿을 그리는 컨트롤이 없다 = 위상이 바뀌어도 화면 불변).
+    #[must_use]
+    pub fn caret_asked(&self) -> bool {
+        self.caret_asked.get()
     }
 
     /// 사용자 글꼴 설정 지정.
@@ -386,6 +397,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn caret_on(&self) -> bool {
+        self.caret_asked.set(true);
         self.caret_on
     }
 
