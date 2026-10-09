@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-10 (194차 · mac · nexa-beep 성능)** — nexa-ctl `RasterCtx::caret_asked()`(`caret_on()` 질의 플래그 · 캐럿 틱 재페인트 대상 창 판정) — journal 10-10 §3.
 - **2026-10-10 (193차 · mac · nexa-beep 성능)** — nexa-sys `LayerPresenter::trim_idle()`(유휴 IOSurface 풀 해제 · 호스트 호출 · 스텁 0) — journal 10-10 §2.
 - **2026-10-10 (192차 · win · nexa-clip 이관 선행)** — nexa-gfx 비트맵 컬러 이모지(CBDT·sbix PNG 글리프 · clip T-18f 이식 · 자체 PNG 디코더) + nexa-font Linux Noto Color Emoji 후보(추가 · 윤곽 글리프 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) — journal 10-10 §1.
 - **2026-10-04 (144차 · linux · nexa-dir3 전송 닫기 버튼)** — nexa-ctl `Button::tone()` 조회(동작 변화 없음) — journal 10-04 §11.
