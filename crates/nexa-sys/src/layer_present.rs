@@ -81,6 +81,11 @@ mod other {
         }
 
         /// 도달하지 않는다.
+        /// 늘 0(표면이 없다).
+        pub fn trim_idle(&mut self) -> usize {
+            0
+        }
+        /// 늘 `false`.
         pub fn resize(&mut self, _w: u32, _h: u32, _scale: f64) -> bool {
             false
         }
@@ -520,6 +525,36 @@ mod mac {
             send_void(tx, sel(c"commit"));
         }
 
+        /// ★ 유휴 해제(10-10 nexa-beep DR-5 유휴 RSS ≤30MB): **화면에 걸린 앞 장과 잠긴 장만 남기고** 나머지 표면을 놓는다.
+        /// 풀 3장이 상주하면 레티나 메인 창에서 +16MB(실측 beep 유휴 20→36MB)라, 호스트가 "한동안 프레임이 없었다"고
+        /// 판단할 때 부른다. 다음 프레임은 새 장을 만든다(`IOSurfaceCreate` 1회 — 유휴 메모리와 첫 프레임 비용의 거래).
+        /// 반환 = 놓은 장 수(0 = 할 일 없음 · 호출 비용 0에 가깝다).
+        pub fn trim_idle(&mut self) -> usize {
+            let keep = |i: usize, front: Option<usize>, locked: Option<usize>| {
+                Some(i) == front || Some(i) == locked
+            };
+            if (0..self.pool.len()).all(|i| keep(i, self.front, self.locked)) {
+                return 0;
+            }
+            let old = std::mem::take(&mut self.pool);
+            let (mut nf, mut nl) = (None, None);
+            let mut dropped = 0;
+            for (i, surf) in old.into_iter().enumerate() {
+                if Some(i) == self.front {
+                    nf = Some(self.pool.len());
+                    self.pool.push(surf);
+                } else if Some(i) == self.locked {
+                    nl = Some(self.pool.len());
+                    self.pool.push(surf);
+                } else {
+                    drop(surf); // CFRelease — 레이어는 앞 장만 쥐고 있어 다른 장은 우리 참조뿐.
+                    dropped += 1;
+                }
+            }
+            self.front = nf;
+            self.locked = nl;
+            dropped
+        }
         /// 지금 풀에 있는 표면 수(진단).
         #[must_use]
         pub fn pool_len(&self) -> usize {
