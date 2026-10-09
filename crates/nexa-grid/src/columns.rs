@@ -37,6 +37,12 @@ impl Column {
         self.align = Align::Right;
         self
     }
+
+    /// 헤더 클릭으로 정렬하지 않는 열(191차 · 예: 내 PC 전체/여유 공간 — 소스가 정렬 키를 모르는 열은 ▲ 표시만 남지 않게).
+    pub fn not_sortable(mut self) -> Column {
+        self.sortable = false;
+        self
+    }
 }
 
 /// 정렬 상태 표시용 원문자(다중 정렬 순번 — 원본 docs/23 §4 "컬럼명 뒤 원문자").

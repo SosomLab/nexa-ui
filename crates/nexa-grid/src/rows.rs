@@ -316,6 +316,8 @@ pub struct VirtualRows<S> {
     col_resized: bool,
     /// 컬럼 순서가 드래그로 변경됨(호스트 폴링 — take_col_reordered).
     col_reordered: bool,
+    /// 사용자가 헤더를 눌러 정렬을 바꿈(호스트 폴링 — [`Self::take_sort_changed`] · 191차). [`Self::set_sort`] 시드는 세우지 않는다.
+    sort_changed: bool,
     band: Option<BandDrag>,
     /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
@@ -405,6 +407,7 @@ impl<S: RowSource> VirtualRows<S> {
             col_drag: None,
             col_resized: false,
             col_reordered: false,
+            sort_changed: false,
             band: None,
             caret: None,
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
@@ -477,9 +480,28 @@ impl<S: RowSource> VirtualRows<S> {
         let order = self.sort.iter().position(|(k, _)| *k == key)?;
         let mut s = String::from(if self.sort[order].1 { "▼" } else { "▲" });
         if self.sort.len() > 1 {
+            s.push(' '); // 화살표와 순번 사이 여백(191차 · nexa-dir3 T-128)
             s.push_str(&(order + 1).to_string());
         }
         Some(s)
+    }
+
+    /// 정렬 상태를 **시드**한다(191차 · 새 탭 상속 · 세션 복원): 키 목록을 그대로 두고 소스에 알린다 · 모르는 키는
+    /// 소스가 거른다. 사용자 클릭이 아니므로 [`Self::take_sort_changed`]는 세우지 않는다. 빈 목록 = 소스 기본 정렬.
+    pub fn set_sort(&mut self, keys: &[(u32, bool)], inv: &mut Invalidations) {
+        if self.sort == keys {
+            return;
+        }
+        self.sort = keys.to_vec();
+        let keys = self.sort.clone();
+        self.src.set_sort(&keys);
+        self.clamp_scroll();
+        inv.push(self.bounds);
+    }
+
+    /// 헤더 클릭으로 정렬이 바뀌었는가(1회성 — 호스트가 세션 저장 등에 쓴다 · 191차).
+    pub fn take_sort_changed(&mut self) -> bool {
+        std::mem::take(&mut self.sort_changed)
     }
 
     /// 폰트 장식 설정(X-12) — 폴더 이름 굵게 / 헤더 굵게·이탤릭.
@@ -1610,6 +1632,7 @@ impl<S: RowSource> VirtualRows<S> {
         }
         let keys = self.sort.clone();
         self.src.set_sort(&keys);
+        self.sort_changed = true;
         self.clamp_scroll(); // 정렬로 행 수는 불변이지만 방어
         inv.push(self.bounds); // 헤더 글리프 + 본문 전체
     }
@@ -3356,11 +3379,11 @@ mod tests {
             "단일 정렬 = 순번 없음"
         );
         click(&mut v, &mut inv, 250, 5, true); // Shift+크기 → 다중
-        assert_eq!(v.sort_mark(k[0]).as_deref(), Some("▲1"));
-        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▲2"));
+        assert_eq!(v.sort_mark(k[0]).as_deref(), Some("▲ 1"));
+        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▲ 2"));
         assert_eq!(v.sort_mark(k[2]), None);
         click(&mut v, &mut inv, 250, 5, true); // Shift 다시 = 내림
-        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▼2"));
+        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▼ 2"));
         click(&mut v, &mut inv, 250, 5, true); // Shift 또 = 없음
         assert_eq!(v.sort_mark(k[1]), None);
         assert_eq!(
@@ -3372,9 +3395,31 @@ mod tests {
         click(&mut v, &mut inv, 250, 5, true);
         let mut rec = nexa_ctl::RecordCtx::with_surface(600, 300);
         v.paint(&mut rec, &Theme::dark());
-        assert!(rec.drew_text("이름") && rec.drew_text("▲1") && rec.drew_text("▲2"));
+        assert!(rec.drew_text("이름") && rec.drew_text("▲ 1") && rec.drew_text("▲ 2"));
         assert!(!rec.drew_text("▲ 이름 ①"));
-        assert_eq!(v.autofit_texts(0)[0].0, "이름 ▲1");
+        assert_eq!(v.autofit_texts(0)[0].0, "이름 ▲ 1");
+    }
+
+    /// 191차: 정렬 시드(`set_sort`) = 새 탭 상속 · 세션 복원 — 소스에 전달되고 표시에 반영되지만 `take_sort_changed`는 세우지
+    /// 않는다 · 헤더 클릭은 세운다 · 같은 값 시드는 무효화 없음.
+    #[test]
+    fn seeded_sort_applies_without_change_flag() {
+        let (mut v, mut inv) = list_with_cols(10, 220);
+        v.set_sort_mark_trailing(true, &mut inv);
+        let k: Vec<u32> = v.columns().iter().map(|c| c.key).collect();
+        assert!(!v.take_sort_changed());
+        v.set_sort(&[(k[1], true), (k[0], false)], &mut inv);
+        assert_eq!(v.sort(), &[(k[1], true), (k[0], false)]);
+        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▼ 1"));
+        assert_eq!(v.sort_mark(k[0]).as_deref(), Some("▲ 2"));
+        assert!(!v.take_sort_changed(), "시드는 사용자 변경이 아니다");
+        let n = inv.drain().count();
+        v.set_sort(&[(k[1], true), (k[0], false)], &mut inv);
+        assert_eq!(inv.drain().count(), 0, "같은 값 = 무효화 없음");
+        assert!(n > 0);
+        click(&mut v, &mut inv, 50, 5, false); // 이름 단순 클릭 = 단일 정렬(시드된 ▲ → ▼)
+        assert!(v.take_sort_changed() && !v.take_sort_changed());
+        assert_eq!(v.sort(), &[(k[0], true)]);
     }
 
     // ── 리사이즈 드래그 ──
