@@ -19,6 +19,8 @@
 pub mod input_source;
 #[cfg(feature = "gui")]
 pub mod layer_present;
+/// ★ OS 화면 언어 — BCP 47 주 언어 태그(`ko`·`en`… · 매 호출 판정 · nexa-beep 설정 개편 · 원천 nexa-sql `syslang.rs`).
+pub mod locale;
 /// ★ 네트워크 경로 변경 신호(L0 · nexa-sql T-313 ⑤ · Windows iphlpapi · 그 밖 OS = None).
 pub mod netwatch;
 

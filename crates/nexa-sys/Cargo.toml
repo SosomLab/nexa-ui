@@ -9,7 +9,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Nexa UI OS 신호 — 배터리 전원·원격 세션·동작 줄이기·CPU 코어 수 (의존 0 · 3-OS cfg + no-op 폴백)"
+description = "Nexa UI OS 신호 — 배터리 전원·원격 세션·동작 줄이기·CPU 코어 수·화면 언어 (의존 0 · 3-OS cfg + no-op 폴백)"
 
 [lints]
 workspace = true
