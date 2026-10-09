@@ -486,6 +486,19 @@ impl Toolbar {
 
     /// 항목 목록(읽기).
     #[must_use]
+    /// 항목 툴팁 교체(id로 · 190차 10-09 nexa-beep "한국어 UI에 영어 툴팁"): 툴팁은 생성 시 고정이라 **언어 전환** 뒤
+    /// 호스트가 다시 쓴다. 없는 id = false(변경 0). 같은 문구면 false(다시 그릴 필요 없음).
+    pub fn set_tip(&mut self, id: &str, tip: impl Into<String>) -> bool {
+        let tip = tip.into();
+        match self.items.iter_mut().find(|it| it.id == id) {
+            Some(it) if it.tip != tip => {
+                it.tip = tip;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn items(&self) -> &[ToolItem] {
         &self.items
     }
@@ -1102,6 +1115,19 @@ impl Toolbar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_tip_replaces_by_id_and_reports_change() {
+        let mut tb = Toolbar::new(vec![
+            ToolItem::new("a", ToolIcon::Glyph("a".into())).tip("old"),
+            ToolItem::new("b", ToolIcon::Glyph("b".into())).tip("keep"),
+        ]);
+        assert!(tb.set_tip("a", "new"));
+        assert!(!tb.set_tip("a", "new")); // 같은 문구 = 변경 없음
+        assert!(!tb.set_tip("zzz", "x")); // 없는 id
+        assert_eq!(tb.items()[0].tip, "new");
+        assert_eq!(tb.items()[1].tip, "keep");
+    }
     use crate::event::InputEvent;
 
     /// 4×4 더미 마스크.
