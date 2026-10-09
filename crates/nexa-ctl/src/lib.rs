@@ -74,6 +74,7 @@ pub use geom::{Point, Rect, Size};
 pub use highlight::{to_html, Highlighter, SyntaxSpec, TokenKind};
 pub use raster::{FontSet, RasterCtx};
 pub mod merge3;
+pub mod natural;
 pub mod order;
 pub use merge3::{line_edits, merge3, Merge3};
 pub use theme::{
