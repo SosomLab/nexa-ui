@@ -172,6 +172,30 @@ const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
         0,
         "Symbola",
     ),
+    // ★ 컬러 이모지(CBDT · nexa-clip T-18f · 192차) — **반드시 마지막**: 앞의 기호 본에 있는 글자(✓ · → 등)는 흑백 윤곽으로 남는다.
+    //   nexa-gfx가 윤곽 없는 글리프의 내장 PNG를 풀어 색으로 그린다(`nexa-gfx/src/bitmap_glyph.rs`). 배포판별 설치 경로
+    //   (같은 이름은 첫 것만 쓴다): Debian/Ubuntu · Arch · Fedora · openSUSE 계열. macOS Apple Color Emoji(sbix)는 미검증이라
+    //   아직 넣지 않았고, Windows Segoe UI Emoji의 색은 COLR/CPAL(벡터)이라 범위 밖(흑백 윤곽으로 나온다).
+    (
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        0,
+        "Noto Color Emoji",
+    ),
+    (
+        "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+        0,
+        "Noto Color Emoji",
+    ),
+    (
+        "/usr/share/fonts/google-noto-color-emoji-fonts/NotoColorEmoji.ttf",
+        0,
+        "Noto Color Emoji",
+    ),
+    (
+        "/usr/share/fonts/noto-color-emoji/NotoColorEmoji.ttf",
+        0,
+        "Noto Color Emoji",
+    ),
 ];
 
 /// 고정 경로에 없을 때 **폰트 폴더를 이름으로 훑는** 기호 본(파일명 어간 · 앞이 우선) — OS별.
