@@ -47,6 +47,9 @@ pub enum ToolIcon {
         alpha: &'static [u8],
         /// 표시 한 변(논리 px).
         size: i32,
+        /// 흐림(nexa-beep 09-07 — 통로가 닫힌 상태: 보류·재접속 대기·LAN만). `false` = accent.
+        /// (10-09 beep 이관으로 이식 · 소비자 영향: beep만 생성)
+        dim: bool,
     },
     /// **내 프로필 미니 아바타**(08-14 사용자 요청 — 프로필 버튼이 곧 내 얼굴).
     /// 사진·내장 그림·이니셜·빈 원 + 보더 링(소형 2px)을 아바타 문법 그대로 그린다.
@@ -59,6 +62,9 @@ pub enum ToolIcon {
         seed: Vec<u8>,
         /// 아바타 보더 색(소형이라 2px — 사용자 확정).
         border: Option<Color>,
+        /// 신원 링(nexa-beep 09-07 — 사용자 인증 보라·문제 호박): 원 **바깥** 2px. `None` = 없음.
+        /// (10-09 beep 이관으로 이식 · 소비자 영향: beep만 생성)
+        ring: Option<Color>,
     },
 }
 
@@ -986,10 +992,17 @@ impl Toolbar {
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, img, slot);
                 }
-                ToolIcon::StatusMask { w, h, alpha, size } => {
-                    // 상태 표시 = 항상 accent · 슬롯 폭 = 아이콘 폭(밀착 배치라
-                    // 여백이 없다) · 세로만 중앙(hover 무변).
-                    let img = self.tinted(i, *w, *h, alpha, theme.accent);
+                ToolIcon::StatusMask {
+                    w,
+                    h,
+                    alpha,
+                    size,
+                    dim,
+                } => {
+                    // 상태 표시 = accent(통로 열림) / text_dim(닫힘 · beep 09-07) · 슬롯 폭 =
+                    // 아이콘 폭(밀착 배치라 여백이 없다) · 세로만 중앙(hover 무변).
+                    let color = if *dim { theme.text_dim } else { theme.accent };
+                    let img = self.tinted(i, *w, *h, alpha, color);
                     let d = self.s(*size);
                     let dst = Rect::new(slot.x, slot.y + (slot.h - d) / 2, d, d);
                     ctx.image_scaled(dst, &img, slot);
@@ -1053,7 +1066,19 @@ impl Toolbar {
                     initials,
                     seed,
                     border,
+                    ring,
                 } => {
+                    // 신원 링(beep 09-07) — 원 **바깥**에 2px(보더와 겹치지 않게 1px 띄움).
+                    if let Some(c) = ring {
+                        let g = self.s(1).max(1);
+                        let outer = Rect::new(
+                            icon_area.x - g,
+                            icon_area.y - g,
+                            icon_area.w + g * 2,
+                            icon_area.h + g * 2,
+                        );
+                        ctx.stroke_ellipse(outer, *c, self.s(2).max(2) as f32);
+                    }
                     // 내 얼굴 미니(08-14) — 목록 행과 같은 시각 문법(원 배경 + 그림/이니셜).
                     if let Some(img) = img {
                         ctx.fill_ellipse(icon_area, crate::avatar::avatar_color(seed));
