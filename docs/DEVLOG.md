@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-10 (198차 · mac · nexa-sql 118차 실기)** — nexa-ctl `EditState::set_preedit` 되돌리기 묶음 + `hangul_flush` 순서(선택 위 한글 조합 → ⌘Z 복원) · 시험 1 — journal 10-10 §7.
+- **2026-10-10 (197차 · mac · nexa-sql 118차 크래시)** — nexa-ctl `scroll` 비례 곱 i64(`mul_div`) · `v_thumb_for_test` · 회귀 시험 — journal 10-10 §6.
+- **2026-10-10 (196차 · mac · nexa-sql 118차)** — nexa-fs `dirwatch` macOS FSEvents(실제 경로 → 루트 모양 매핑 `map_dir`) — journal 10-10 §5.
+- **2026-10-10 (195차 · mac · nexa-sql 118차)** — nexa-sys `netwatch` macOS(SystemConfiguration · 전용 스레드 CFRunLoop) — journal 10-10 §4.
 - **2026-10-10 (194차 · mac · nexa-beep 성능)** — nexa-ctl `RasterCtx::caret_asked()`(`caret_on()` 질의 플래그 · 캐럿 틱 재페인트 대상 창 판정) — journal 10-10 §3.
 - **2026-10-10 (193차 · mac · nexa-beep 성능)** — nexa-sys `LayerPresenter::trim_idle()`(유휴 IOSurface 풀 해제 · 호스트 호출 · 스텁 0) — journal 10-10 §2.
 - **2026-10-10 (192차 · win · nexa-clip 이관 선행)** — nexa-gfx 비트맵 컬러 이모지(CBDT·sbix PNG 글리프 · clip T-18f 이식 · 자체 PNG 디코더) + nexa-font Linux Noto Color Emoji 후보(추가 · 윤곽 글리프 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) — journal 10-10 §1.

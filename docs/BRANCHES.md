@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/mac-netwatch-dirwatch-scroll | 2026-10-10 | 2026-10-10 → main(삭제) | 4 | 195~198차(nexa-sql 118차 mac · 협업 쌍): nexa-sys `netwatch` macOS(49e4c0e) · nexa-fs `dirwatch` macOS FSEvents(5aa5ac6) · nexa-ctl `scroll` 비례 곱 i64(b35522a) · nexa-ctl 조합 시작 선택 삭제 = 되돌리기 묶음(6e945ae) |
 | feat/bitmap-glyph | 2026-10-10 | 2026-10-10 → main(삭제 · 61e3073) | 1 | 192차 — nexa-gfx 비트맵 컬러 이모지(clip T-18f 이식 · 자체 PNG) · nexa-font Linux Noto Color Emoji 후보 |
 | feat/dlg-focused-ref | 2026-10-09 | 2026-10-09 → main(삭제) | 2 | 188차: nexa-dlg `FilePicker::focused_textbox_ref`(읽기 전용 포커스 상자 — nexa-beep P3 복사 라우팅) |
 | feat/conf-tighten-locale | 2026-10-09 | 2026-10-09 → main(삭제) | 4 | 185~187차(nexa-beep 협업 세션 · beep 설정 개편 docs/50 P1-a): nexa-conf `tighten`+`Store::open` 0600(beep 사본 본문 동일화) · nexa-sys `locale::ui_language()`(OS 화면 언어 주 태그 · 매 호출) · nexa-ctl 툴바 `StatusMask.dim`·`Avatar.ring`(beep 09-07 이관) |

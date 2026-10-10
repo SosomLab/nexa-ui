@@ -2,6 +2,10 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-10 (198차 · mac)** — 조합 시작의 선택 삭제 = 되돌리기 묶음(`set_preedit` `begin_group`+`record` · 수정 · 모든 `TextBox` 공통 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql 사용자 실기 ✓ · journal 10-10 §7.
+- **2026-10-10 (197차 · mac)** — `ScrollBars` 비례 곱 i64(수정 · 큰 내용에서만 결과 달라짐 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-10 §7-1.
+- **2026-10-10 (196차 · mac)** — `dirwatch` macOS FSEvents(동작 변경 · `supported()` macOS = true — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-10 §7.
+- **2026-10-10 (195차 · mac)** — `netwatch` macOS SystemConfiguration(동작 변경 · `start` macOS = Some — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-10 §7.
 - **2026-10-10 (194차 · mac · nexa-beep 성능)** — nexa-ctl `RasterCtx::caret_asked()`(캐럿 틱 재페인트를 캐럿 창에만 · 추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)).
 - **2026-10-10 (193차 · mac · nexa-beep 성능)** — nexa-sys `LayerPresenter::trim_idle`(유휴 때 IOSurface 풀 해제 · 추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) — beep이 IOSurface 경로를 기본으로 켜며 DR-5 유휴 예산을 지키기 위한 훅.
 - **2026-10-10 (192차 · win · nexa-clip 이관 선행)** — nexa-gfx 비트맵 컬러 이모지 + nexa-font Linux 이모지 후보(추가 · 윤곽 글리프 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · clip 이관(P1-c)은 clip 저장소에서 이어진다.
