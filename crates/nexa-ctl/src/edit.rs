@@ -73,6 +73,8 @@ pub struct EditState {
     /// **긴 정지 뒤에는 새 묶음**(nexa-sql docs/60 D-131): 이어 붙이던 타이핑·삭제라도 직전 편집에서 이만큼 쉬었으면 끊는다 —
     /// 되돌리기 단위가 "한 번에 친 만큼"에 가까워진다. `None` = 끔. 단어 경계 규칙의 **보조**다(단독 기준이 아니다).
     group_pause: Option<std::time::Duration>,
+    /// 조합 시작이 선택을 지우며 연 되돌리기 묶음이 열려 있는가(조합이 끝나면 닫는다 · 10-10).
+    preedit_group: bool,
     last_edit_at: Option<std::time::Instant>,
     /// **거대 편집 확인**(nexa-sql docs/60 D-130): 한 번에 이만큼(바이트) 이상을 지우는 편집은 되돌리기 기록이 그만큼을
     /// 들어야 한다 — 예산을 넘겨 드는 대신 **두 번 눌러야** 하고, 하고 나면 이 문서의 히스토리를 비운다(Emacs `undo-outer-limit`).
@@ -177,6 +179,7 @@ impl Default for EditState {
             group_depth: 0,
             group_open: false,
             group_pause: None,
+            preedit_group: false,
             last_edit_at: None,
             giant_limit: 0,
             giant_armed_until: None,
@@ -1074,12 +1077,24 @@ impl EditState {
             let n = self.selected_bytes();
             self.giant_refused(n, false)
         };
-        let cut = if !giant && !text.is_empty() && self.selection().is_some() {
+        let starting = !text.is_empty() && self.preedit.is_empty();
+        let cut = if !giant && starting && self.selection().is_some() {
+            // ★ 되돌리기(nexa-sql 10-10 118차 mac "선택 위에 ㅋ → ⌘Z 복원 없음"): 조합 시작의 선택 삭제도 **기록**한다 — 종전엔
+            //   `record` 없이 `splice_rec`를 불러 단계가 열리지 않았고(스택이 비면 `note_op`가 기록을 통째로 버림 · 아니면 직전의 무관한
+            //   단계에 섞임) ⌘Z가 확정 글자만 걷어 냈다. **묶음**으로 열어 조합이 끝나며 들어오는 확정 글자까지 한 단계(라틴 글자를
+            //   선택 위에 치는 것과 같은 단위) — 조합이 비면(확정·취소) 닫는다.
+            self.begin_group();
+            self.preedit_group = true;
+            self.record(EditOp::Other, true);
             self.delete_selection()
         } else {
             false
         };
         self.preedit = text.to_string();
+        if text.is_empty() && self.preedit_group {
+            self.preedit_group = false;
+            self.end_group();
+        }
         cut
     }
 

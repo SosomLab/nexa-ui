@@ -4531,8 +4531,10 @@ impl TextBox {
     /// 조합 중 음절을 확정(본문에 넣고 preedit을 비운다).
     fn hangul_flush(&mut self, inv: &mut Invalidations) {
         if let Some(c) = self.hangul.flush() {
-            self.set_preedit("", inv);
+            // 본문에 **먼저** 넣고 preedit을 비운다 — 조합 시작이 선택을 지우며 연 되돌리기 묶음(`EditState::set_preedit` · 10-10)에
+            //   확정 글자가 함께 들어가 ⌘Z 한 번에 선택분이 돌아온다. 한 호출 안이라 화면 순서는 같다.
             self.on_event_core(&InputEvent::Char { c, now_ms: 0 }, inv);
+            self.set_preedit("", inv);
         }
     }
 
@@ -4562,11 +4564,11 @@ impl TextBox {
             InputEvent::Char { c, now_ms } if crate::hangul::is_jamo(c) && self.base.focused => {
                 let out = self.hangul.feed(c);
                 if !out.is_empty() {
-                    // 확정 글자가 나왔다 — preedit을 먼저 비우고(표시 순서) 본문에 넣는다.
-                    self.set_preedit("", inv);
+                    // 확정 글자가 나왔다 — 본문에 먼저 넣고 preedit을 비운다(되돌리기 묶음 규칙 = `hangul_flush`와 같다 · 10-10).
                     for ch in out.chars() {
                         self.on_event_core(&InputEvent::Char { c: ch, now_ms }, inv);
                     }
+                    self.set_preedit("", inv);
                 }
                 self.hangul_sync_preedit(inv);
                 true
@@ -5898,6 +5900,47 @@ mod tests {
         t.set_preedit("", &mut inv);
         t.on_event(&ch('나'), &mut inv); // 확정 문자 합류(호스트 라우팅 모사)
         assert_eq!(t.text(), "나", "선택이 조합으로 대체됐다");
+    }
+
+    /// ★ nexa-sql 10-10 118차 mac: 막 연 문서(되돌리기 스택 비어 있음)에서 낱말을 선택하고 한글 첫 자음(조합 시작)을 치면 선택분이
+    /// 지워지는데, ⌘Z로 돌아오지 않았다 — 조합 시작의 선택 삭제가 기록되지 않아서. 지금 = 선택 삭제 + 확정 글자 = **한 단계**.
+    #[test]
+    fn undo_restores_selection_replaced_by_composition() {
+        // ① 시스템 IME 모양(set_preedit → 비움 → 확정 글자): 스택이 빈 채로 시작.
+        let (mut t, mut inv) = tb();
+        t.on_event(&click(5, 15), &mut inv);
+        t.set_text("PRC_RUN_ALL");
+        t.on_event(&InputEvent::SelectAll, &mut inv);
+        t.set_preedit("ㅋ", &mut inv);
+        assert_eq!(t.text(), "", "조합 시작 = 선택 삭제");
+        t.on_event(&ch('ㅋ'), &mut inv);
+        t.set_preedit("", &mut inv);
+        assert_eq!(t.text(), "ㅋ");
+        t.on_event(&InputEvent::Undo, &mut inv);
+        assert_eq!(t.text(), "PRC_RUN_ALL", "⌘Z 한 번 = 선택분 복원(확정 글자와 한 단계)");
+        t.on_event(&InputEvent::Redo, &mut inv);
+        assert_eq!(t.text(), "ㅋ", "다시 실행도 한 단계");
+
+        // ② 앱 조합기(자모 → preedit) + 조합 중 ⌘Z(= 먼저 확정 뒤 되돌리기).
+        let (mut t, mut inv) = tb();
+        set_hangul_app_compose(true);
+        t.on_event(&click(5, 15), &mut inv);
+        t.set_text("PRC_RUN_ALL");
+        t.on_event(&InputEvent::SelectAll, &mut inv);
+        t.on_event(&ch('ㅋ'), &mut inv);
+        assert_eq!(t.text(), "", "자음 하나 = 조합 중(선택은 지워짐)");
+        assert_eq!(t.edit.preedit(), "ㅋ");
+        t.on_event(&InputEvent::Undo, &mut inv);
+        assert_eq!(t.text(), "PRC_RUN_ALL", "조합 중 ⌘Z = 확정 뒤 한 단계 되돌리기 → 선택분 복원");
+        assert!(t.edit.preedit().is_empty());
+        // ③ 조합을 Backspace로 비워 취소해도 선택분은 되돌릴 수 있다(묶음 = 삭제만).
+        t.on_event(&InputEvent::SelectAll, &mut inv);
+        t.on_event(&ch('ㅋ'), &mut inv);
+        t.on_event(&ch('\u{8}'), &mut inv);
+        assert_eq!((t.text().as_str(), t.edit.preedit()), ("", ""));
+        t.on_event(&InputEvent::Undo, &mut inv);
+        assert_eq!(t.text(), "PRC_RUN_ALL");
+        set_hangul_app_compose(false);
     }
 
     #[test]
