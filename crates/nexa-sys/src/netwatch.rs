@@ -226,7 +226,9 @@ mod imp {
 
     fn cf_str(s: &'static std::ffi::CStr) -> CfRef {
         // SAFETY: NUL로 끝나는 정적 C 문자열.
-        unsafe { CFStringCreateWithCString(core::ptr::null(), s.as_ptr(), K_CF_STRING_ENCODING_UTF8) }
+        unsafe {
+            CFStringCreateWithCString(core::ptr::null(), s.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+        }
     }
 
     /// 문자열 배열(`CFArray<CFString>`) — 만든 뒤 원소 참조는 배열이 쥔다(우리 +1은 놓는다).
@@ -271,7 +273,8 @@ mod imp {
                 drop(Box::from_raw(ctx));
                 return;
             }
-            let keys = cf_str_array(&[c"State:/Network/Global/IPv4", c"State:/Network/Global/IPv6"]);
+            let keys =
+                cf_str_array(&[c"State:/Network/Global/IPv4", c"State:/Network/Global/IPv6"]);
             let patterns = cf_str_array(&[
                 c"State:/Network/Interface/.*/Link",
                 c"State:/Network/Interface/.*/IPv4",

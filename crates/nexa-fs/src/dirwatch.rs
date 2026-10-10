@@ -55,10 +55,10 @@ pub struct DirWatch {
     stop_events: Vec<backend::RootStop>,
 }
 
-#[cfg(windows)]
-use win as backend;
 #[cfg(target_os = "macos")]
 use mac as backend;
+#[cfg(windows)]
+use win as backend;
 
 impl std::fmt::Debug for DirWatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -633,7 +633,9 @@ mod mac {
             return core::ptr::null();
         };
         // SAFETY: NUL로 끝나는 C 문자열(위에서 만듦).
-        unsafe { CFStringCreateWithCString(core::ptr::null(), c.as_ptr(), K_CF_STRING_ENCODING_UTF8) }
+        unsafe {
+            CFStringCreateWithCString(core::ptr::null(), c.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+        }
     }
 
     /// 스레드 본체: 스트림 만들기 → 시작 → 런루프 참조 알림 → `CFRunLoopRun`(멈춤까지) → 정리.
@@ -802,8 +804,19 @@ mod tests {
             Some(PathBuf::from("/tmp/proj/src")),
             "그대로의 루트로도"
         );
-        assert_eq!(map_dir(root, canon, Path::new("/private/tmp/proj/target/debug"), &ex), None);
-        assert_eq!(map_dir(root, canon, Path::new("/private/tmp/other"), &ex), None);
+        assert_eq!(
+            map_dir(
+                root,
+                canon,
+                Path::new("/private/tmp/proj/target/debug"),
+                &ex
+            ),
+            None
+        );
+        assert_eq!(
+            map_dir(root, canon, Path::new("/private/tmp/other"), &ex),
+            None
+        );
         assert_eq!(
             map_dir(root, canon, Path::new("/private/tmp/proj"), &ex),
             Some(PathBuf::from("/tmp/proj")),

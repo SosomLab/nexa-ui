@@ -5917,7 +5917,11 @@ mod tests {
         t.set_preedit("", &mut inv);
         assert_eq!(t.text(), "ㅋ");
         t.on_event(&InputEvent::Undo, &mut inv);
-        assert_eq!(t.text(), "PRC_RUN_ALL", "⌘Z 한 번 = 선택분 복원(확정 글자와 한 단계)");
+        assert_eq!(
+            t.text(),
+            "PRC_RUN_ALL",
+            "⌘Z 한 번 = 선택분 복원(확정 글자와 한 단계)"
+        );
         t.on_event(&InputEvent::Redo, &mut inv);
         assert_eq!(t.text(), "ㅋ", "다시 실행도 한 단계");
 
@@ -5931,7 +5935,11 @@ mod tests {
         assert_eq!(t.text(), "", "자음 하나 = 조합 중(선택은 지워짐)");
         assert_eq!(t.edit.preedit(), "ㅋ");
         t.on_event(&InputEvent::Undo, &mut inv);
-        assert_eq!(t.text(), "PRC_RUN_ALL", "조합 중 ⌘Z = 확정 뒤 한 단계 되돌리기 → 선택분 복원");
+        assert_eq!(
+            t.text(),
+            "PRC_RUN_ALL",
+            "조합 중 ⌘Z = 확정 뒤 한 단계 되돌리기 → 선택분 복원"
+        );
         assert!(t.edit.preedit().is_empty());
         // ③ 조합을 Backspace로 비워 취소해도 선택분은 되돌릴 수 있다(묶음 = 삭제만).
         t.on_event(&InputEvent::SelectAll, &mut inv);
