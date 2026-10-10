@@ -80,9 +80,14 @@ mod other {
             None
         }
 
-        /// 도달하지 않는다.
         /// 늘 0(표면이 없다).
         pub fn trim_idle(&mut self) -> usize {
+            0
+        }
+
+        /// 늘 0(표면이 없다 · nexa-sql 118차 `surface_count` — 비-macOS 빌드가 쓴다 · 10-10 CI E0599).
+        #[must_use]
+        pub fn pool_len(&self) -> usize {
             0
         }
         /// 늘 `false`.
