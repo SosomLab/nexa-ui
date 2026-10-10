@@ -517,6 +517,12 @@ impl ScrollBars {
         Self::h_thumb(vp, content_w, off_x, scale, sc(THICK, scale))
     }
 
+    /// 세로 썸 rect(호스트 자체 시험용 · nexa-sql `grid.vdrag` = 10-10 넘침 크래시 회귀) — 필요 없으면 `None`. 두께는 THICK 기준.
+    #[must_use]
+    pub fn v_thumb_for_test(vp: Rect, content_h: i32, off_y: i32, scale: f32) -> Option<Rect> {
+        Self::v_thumb(vp, content_h, off_y, scale, sc(THICK, scale))
+    }
+
     fn v_needed(vp: Rect, content_h: i32) -> bool {
         content_h > vp.h
     }
@@ -535,7 +541,7 @@ impl ScrollBars {
             .min(track);
         let scrollable = (content_h - vp.h).max(1);
         let travel = (track - thumb).max(0);
-        let ty = vp.y + off_y.clamp(0, scrollable) * travel / scrollable;
+        let ty = vp.y + Self::mul_div(off_y.clamp(0, scrollable), travel, scrollable);
         let x = vp.right() - width - sc(MARGIN, scale);
         Some(Rect::new(x, ty, width, thumb))
     }
@@ -551,9 +557,17 @@ impl ScrollBars {
             .min(track);
         let scrollable = (content_w - vp.w).max(1);
         let travel = (track - thumb).max(0);
-        let tx = vp.x + off_x.clamp(0, scrollable) * travel / scrollable;
+        let tx = vp.x + Self::mul_div(off_x.clamp(0, scrollable), travel, scrollable);
         let y = vp.bottom() - height - sc(MARGIN, scale);
         Some(Rect::new(tx, y, thumb, height))
+    }
+
+    /// `a × b ÷ d`를 **i64**로 셈해 i32로(d ≤ 0 = 1). ★ 10-10 nexa-sql 118차 mac: 결과 그리드 내용 높이가 수천만 px(수십만 행 ×
+    /// 행 높이)일 때 썸 드래그의 `(y - grab - vp.y) * scrollable`이 i32를 넘쳐 Debug = 패닉(비-unwind 경계에서 abort) ·
+    /// Release = 감겨서 엉뚱한 위치였다. 썸 위치·트랙 클릭·드래그 여섯 곳이 전부 이 도우미를 쓴다.
+    fn mul_div(a: i32, b: i32, d: i32) -> i32 {
+        let v = i64::from(a) * i64::from(b) / i64::from(d.max(1));
+        v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
     }
 
     fn clamp(off_x: i32, off_y: i32, vp: Rect, content_w: i32, content_h: i32) -> (i32, i32) {
@@ -624,7 +638,7 @@ impl ScrollBars {
                         if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
                             let travel = (vp.h - t.h).max(1);
                             let scrollable = (content_h - vp.h).max(0);
-                            oy = (y - t.h / 2 - vp.y) * scrollable / travel;
+                            oy = Self::mul_div(y - t.h / 2 - vp.y, scrollable, travel);
                             self.drag = Some((Axis::V, t.h / 2));
                             self.wake(Axis::V);
                             let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
@@ -638,7 +652,7 @@ impl ScrollBars {
                         if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
                             let travel = (vp.w - t.w).max(1);
                             let scrollable = (content_w - vp.w).max(0);
-                            ox = (x - t.w / 2 - vp.x) * scrollable / travel;
+                            ox = Self::mul_div(x - t.w / 2 - vp.x, scrollable, travel);
                             self.drag = Some((Axis::H, t.w / 2));
                             self.wake(Axis::H);
                             let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
@@ -657,14 +671,14 @@ impl ScrollBars {
                             if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
                                 let travel = (vp.h - t.h).max(1);
                                 let scrollable = (content_h - vp.h).max(0);
-                                oy = (y - grab - vp.y) * scrollable / travel;
+                                oy = Self::mul_div(y - grab - vp.y, scrollable, travel);
                             }
                         }
                         Axis::H => {
                             if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
                                 let travel = (vp.w - t.w).max(1);
                                 let scrollable = (content_w - vp.w).max(0);
-                                ox = (x - grab - vp.x) * scrollable / travel;
+                                ox = Self::mul_div(x - grab - vp.x, scrollable, travel);
                             }
                         }
                     }
@@ -1282,5 +1296,32 @@ mod tests {
         assert_eq!((b.w, b.h), (a.w * 2, a.h * 2), "1x {a:?} · 2x {b:?}");
         // 배율 1.5: 글꼴 18(물리) + 여백 round(4.5) = 5 × 2.
         assert_eq!(c.h, 28, "1.5x {c:?}");
+    }
+
+    /// ★ 10-10 nexa-sql 118차 mac 크래시 회귀: 내용 높이 6천만 px(≈ 250만 행 × 24)에서 썸을 끌어도 넘치지 않고(i64 중간 계산)
+    /// 오프셋은 끝까지 비례해 간다 · 트랙 클릭도 같다 · 가로도 같다.
+    #[test]
+    fn huge_content_thumb_drag_does_not_overflow() {
+        let mut b = ScrollBars::new();
+        let vp = Rect::new(0, 0, 400, 1000);
+        let (cw, ch) = (60_000_000, 60_000_000);
+        // 휠로 두 축을 깨운다.
+        let _ = b.on_event(&wheel(10), vp, cw, ch, 0, 0, 1.0);
+        let _ = b.on_event(&InputEvent::HWheel { delta: 10 }, vp, cw, ch, 0, 0, 1.0);
+        let thick = sc(THICK, 1.0);
+        // 세로: 썸(맨 위)을 잡고 트랙 끝까지 끈다 → 오프셋 = 스크롤 가능 끝.
+        let t = ScrollBars::v_thumb(vp, ch, 0, 1.0, thick).expect("썸");
+        let (_, oy, consumed) = b.on_event(&down(t.x + 1, t.y + 1), vp, cw, ch, 0, 0, 1.0);
+        assert!(consumed);
+        let (_, oy, _) = b.on_event(&mv(t.x + 1, vp.bottom() + 5_000), vp, cw, ch, 0, oy, 1.0);
+        assert_eq!(oy, ch - vp.h, "끝까지(감김 없이)");
+        let _ = b.on_event(&up(), vp, cw, ch, 0, oy, 1.0);
+        // 끝 오프셋의 썸 위치도 넘치지 않고 트랙 끝에 붙는다.
+        let t_end = ScrollBars::v_thumb(vp, ch, oy, 1.0, thick).expect("썸");
+        assert_eq!(t_end.bottom(), vp.bottom());
+        // 가로 트랙 가운데 클릭 = 절반 근처(넘침 없이 비례).
+        let (ox, _, consumed) = b.on_event(&down(vp.w / 2, vp.bottom() - 1), vp, cw, ch, 0, 0, 1.0);
+        assert!(consumed);
+        assert!(ox > 0 && ox < cw - vp.w, "{ox}");
     }
 }
