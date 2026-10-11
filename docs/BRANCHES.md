@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/scrollbars-is-dragging | 2026-10-12 | 2026-10-12 → main(삭제) | 1 | 202차(nexa-sql 120차 Linux · 협업 쌍): nexa-ctl `ScrollBars::is_dragging()` 공개 접근자(그리드 썸 드래그 잔존 수정의 근거 · 호출 0 · 기본 동작 불변) · 📚 CONSUMER-CHANGES 202 · STATUS · DEVLOG · journal 10-12 |
 | feat/linux-netwatch-dirwatch | 2026-10-11 | 2026-10-11 → main(삭제) | 1 | 200·201차(nexa-sql 119차 Linux · 협업 쌍 · T-321): nexa-sys `netwatch` Linux rtnetlink(멀티캐스트 묶음 · 전용 스레드 poll · 중지 파이프) · nexa-fs `dirwatch` Linux inotify(폴더마다 watch · 새 폴더 즉시 · 넘침/루트 소실/상한 폴백) · 시험 sys 9/fs 23 · clippy 0 |
 | feat/mac-netwatch-dirwatch-scroll | 2026-10-10 | 2026-10-10 → main(삭제) | 4 | 195~198차(nexa-sql 118차 mac · 협업 쌍): nexa-sys `netwatch` macOS(49e4c0e) · nexa-fs `dirwatch` macOS FSEvents(5aa5ac6) · nexa-ctl `scroll` 비례 곱 i64(b35522a) · nexa-ctl 조합 시작 선택 삭제 = 되돌리기 묶음(6e945ae) |
 | feat/bitmap-glyph | 2026-10-10 | 2026-10-10 → main(삭제 · 61e3073) | 1 | 192차 — nexa-gfx 비트맵 컬러 이모지(clip T-18f 이식 · 자체 PNG) · nexa-font Linux Noto Color Emoji 후보 |

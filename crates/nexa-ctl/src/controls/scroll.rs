@@ -511,6 +511,13 @@ impl ScrollBars {
         self.active[axis.idx()]
     }
 
+    /// 썸/트랙 드래그 중인가 — 호스트가 **놓임·이동을 다른 컨트롤보다 먼저** 스크롤바로 보내는 근거(nexa-sql 10-12: 그리드의
+    /// 조건 줄·푸터 도구줄이 자기 영역의 MouseUp을 먹어 드래그가 남았다 · 끌기는 어디서 놓든 끝나야 한다).
+    #[must_use]
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
     /// 가로 썸 rect(호스트 검증·테스트용) — 필요 없으면 `None`. 두께는 잡기 쉬운 THICK 기준.
     #[must_use]
     pub fn h_thumb_for_test(vp: Rect, content_w: i32, off_x: i32, scale: f32) -> Option<Rect> {

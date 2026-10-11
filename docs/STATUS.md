@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-12 (202차 · linux · nexa-sql 120차 ⑤)** — nexa-ctl `ScrollBars::is_dragging()`(추가 · 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-12.
 - **2026-10-11 (201차 · linux · nexa-sql 119차 T-321)** — nexa-fs `dirwatch` Linux inotify(동작 변경 · `supported()` Linux = true · `ENOSPC` = RootGone 폴백 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-10 §9.
 - **2026-10-11 (200차 · linux · nexa-sql 119차 T-321)** — nexa-sys `netwatch` Linux rtnetlink(동작 변경 · `start` Linux = Some · 스레드 1 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-10 §9.
 - **2026-10-10 (198차 · mac)** — 조합 시작의 선택 삭제 = 되돌리기 묶음(`set_preedit` `begin_group`+`record` · 수정 · 모든 `TextBox` 공통 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql 사용자 실기 ✓ · journal 10-10 §7.
