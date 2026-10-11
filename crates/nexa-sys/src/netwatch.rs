@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | Windows | iphlpapi `NotifyIpInterfaceChange`(AF_UNSPEC) + `NotifyRouteChange2` · 취소 `CancelMibChangeNotify2` · 수동 extern | 콜백은 시스템 스레드 |
 //! | macOS(195차 · 10-10) | SystemConfiguration 동적 저장소 `SCDynamicStoreSetNotificationKeys`(키 `State:/Network/Global/IPv4`·`IPv6` + 패턴 `State:/Network/Interface/.*/Link`·`/IPv4`) · 전용 스레드 `nexa-netwatch`의 CFRunLoop · 취소 = `CFRunLoopStop` | 콜백은 그 스레드 · 프레임워크 = SystemConfiguration(CLI도 이미 링크) |
-//! | Linux | 아직 없음 → `None`(호출자는 `probe.stale_secs`로 대신) | 후속(netlink RTMGRP_LINK) |
+//! | Linux(200차 · 10-11) | rtnetlink `AF_NETLINK`/`NETLINK_ROUTE` 소켓 + 멀티캐스트 `RTMGRP_LINK·IPV4/IPV6_IFADDR·IPV4/IPV6_ROUTE` · 전용 스레드 `nexa-netwatch`가 `poll`(소켓 + 중지 파이프) · 수동 extern | 메시지 내용은 보지 않음(어떤 변경이든 신호) · `ENOBUFS` = 큐 넘침도 신호 · 권한 불필요 |
 //!
 //! 규칙(크레이트 머리): 외부 crate 0 · 실패 = `None` · 프로세스 생성 0.
 
@@ -48,7 +48,8 @@ impl NetWatch {
     }
 }
 
-/// 콜백에 넘기는 문맥(깃발 + 깨우기) — 등록이 살아 있는 동안 힙에 고정(`Box::into_raw`) · 취소 뒤에 되찾아 떨어뜨린다.
+/// 콜백에 넘기는 문맥(깃발 + 깨우기) — 등록이 살아 있는 동안 힙에 고정(`Box::into_raw`) · 취소 뒤에 되찾아 떨어뜨린다(Linux는 스레드가 소유 · 불필요).
+#[cfg(not(target_os = "linux"))]
 type Ctx = (Arc<AtomicBool>, Box<dyn Fn() + Send + Sync>);
 
 #[cfg(windows)]
@@ -337,7 +338,192 @@ mod imp {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod imp {
+    //! Linux — rtnetlink(nexa-sql T-321 · 200차 · 10-11 Linux 전수). 소켓 하나를 링크·주소·라우트 멀티캐스트 묶음에 가입시키고 전용 스레드가
+    //! `poll`로 잔다(중지 = 파이프 한 바이트 · fd는 `File`로 감싸 std로 쓰고 닫는다). 메시지는 읽어 버리기만 한다(종류 불문 "의심"으로 충분 · 107 L0). 문맥(깃발 + 깨우기)은
+    //! 스레드가 **소유**하므로 Windows·macOS와 달리 원시 포인터가 없다. 외부 crate 0(소켓·poll·pipe2만 수동 extern · 읽기·쓰기·닫기는 std `File`).
+    use std::fs::File;
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+
+    #[repr(C)]
+    struct SockaddrNl {
+        nl_family: u16,
+        nl_pad: u16,
+        nl_pid: u32,
+        nl_groups: u32,
+    }
+
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    extern "C" {
+        fn socket(domain: i32, ty: i32, protocol: i32) -> i32;
+        fn bind(fd: i32, addr: *const SockaddrNl, len: u32) -> i32;
+        fn recv(fd: i32, buf: *mut u8, len: usize, flags: i32) -> isize;
+        fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
+        pub(super) fn pipe2(fds: *mut i32, flags: i32) -> i32;
+        fn close(fd: i32) -> i32;
+    }
+
+    const AF_NETLINK: i32 = 16;
+    const SOCK_RAW: i32 = 3;
+    const SOCK_CLOEXEC: i32 = 0o2000000;
+    const NETLINK_ROUTE: i32 = 0;
+    const RTMGRP_LINK: u32 = 0x1;
+    const RTMGRP_IPV4_IFADDR: u32 = 0x10;
+    const RTMGRP_IPV4_ROUTE: u32 = 0x40;
+    const RTMGRP_IPV6_IFADDR: u32 = 0x100;
+    const RTMGRP_IPV6_ROUTE: u32 = 0x400;
+    pub(super) const O_CLOEXEC: i32 = 0o2000000;
+    const POLLIN: i16 = 0x1;
+    const EINTR: i32 = 4;
+    const EAGAIN: i32 = 11;
+    const ENOBUFS: i32 = 105;
+
+    /// 감시 손잡이 = 중지 파이프의 쓰기 끝 + 스레드. 떨어뜨리면 한 바이트를 써서 깨우고 **기다린다**(스레드가 소켓을 닫는다 · 파이프는 std가 닫는다).
+    pub(super) struct Handle {
+        stop_wr: File,
+        join: Option<JoinHandle<()>>,
+    }
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            let _ = self.stop_wr.write_all(&[1u8]);
+            if let Some(j) = self.join.take() {
+                let _ = j.join();
+            }
+        }
+    }
+
+    fn errno() -> i32 {
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    }
+
+    /// 중지 파이프(읽기 끝 · 쓰기 끝) — fd를 `File`로 감싸 std가 쓰고 닫는다(`std::io::pipe`는 1.87 · 이 워크스페이스 MSRV 밖).
+    pub(super) fn pipe_pair() -> Option<(File, File)> {
+        let mut p = [0i32; 2];
+        // SAFETY: int[2] 버퍼 · 성공하면 두 fd의 소유권을 `File`이 받는다.
+        unsafe {
+            if pipe2(p.as_mut_ptr(), O_CLOEXEC) != 0 {
+                return None;
+            }
+            Some((File::from_raw_fd(p[0]), File::from_raw_fd(p[1])))
+        }
+    }
+
+    /// 스레드 본체: 소켓 또는 중지 파이프가 읽힐 때까지 잔다 · 소켓이 읽히면 비우고 깃발 → 깨우기 · 끝나면 소켓을 닫는다.
+    /// (시험은 `UnixDatagram::pair`의 한쪽 fd를 `nl` 자리에 넣어 같은 길을 돈다 — rtnetlink 유니캐스트는 비루트에 `EPERM`이라 실제 소켓으로는 흉내 낼 수 없다.)
+    pub(super) fn run(
+        nl: i32,
+        stop_rd: File,
+        flag: Arc<AtomicBool>,
+        wake: Box<dyn Fn() + Send + Sync>,
+    ) {
+        let mut buf = vec![0u8; 8192];
+        loop {
+            let mut fds = [
+                PollFd {
+                    fd: nl,
+                    events: POLLIN,
+                    revents: 0,
+                },
+                PollFd {
+                    fd: stop_rd.as_raw_fd(),
+                    events: POLLIN,
+                    revents: 0,
+                },
+            ];
+            // SAFETY: fd 둘 · 무한 대기 · revents는 커널이 채운다.
+            let n = unsafe { poll(fds.as_mut_ptr(), 2, -1) };
+            if n < 0 {
+                if errno() == EINTR {
+                    continue;
+                }
+                break;
+            }
+            if fds[1].revents != 0 {
+                break; // 중지(또는 쓰기 끝 닫힘).
+            }
+            if fds[0].revents == 0 {
+                continue;
+            }
+            // SAFETY: 살아 있는 소켓 · 버퍼 길이만큼.
+            let r = unsafe { recv(nl, buf.as_mut_ptr(), buf.len(), 0) };
+            if r < 0 {
+                match errno() {
+                    EINTR | EAGAIN => continue,
+                    // 커널 큐 넘침 = 신호를 놓쳤다 = 그 자체가 "뭔가 바뀜".
+                    ENOBUFS => {}
+                    _ => break,
+                }
+            }
+            flag.store(true, Ordering::Release);
+            wake();
+        }
+        // SAFETY: 이 스레드만 쓰는 소켓(파이프 읽기 끝은 `stop_rd`가 여기서 떨어지며 닫힌다).
+        unsafe {
+            close(nl);
+        }
+    }
+
+    pub(super) fn start(
+        flag: Arc<AtomicBool>,
+        wake: Box<dyn Fn() + Send + Sync>,
+    ) -> Option<Handle> {
+        // SAFETY: 문서의 서명 그대로 · 실패는 전부 `None`(만든 소켓은 닫는다).
+        let nl = unsafe {
+            let nl = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+            if nl < 0 {
+                return None;
+            }
+            let addr = SockaddrNl {
+                nl_family: AF_NETLINK as u16,
+                nl_pad: 0,
+                nl_pid: 0,
+                nl_groups: RTMGRP_LINK
+                    | RTMGRP_IPV4_IFADDR
+                    | RTMGRP_IPV4_ROUTE
+                    | RTMGRP_IPV6_IFADDR
+                    | RTMGRP_IPV6_ROUTE,
+            };
+            if bind(nl, &addr, std::mem::size_of::<SockaddrNl>() as u32) != 0 {
+                close(nl);
+                return None;
+            }
+            nl
+        };
+        let Some((stop_rd, stop_wr)) = pipe_pair() else {
+            // SAFETY: 방금 만든 소켓.
+            unsafe { close(nl) };
+            return None;
+        };
+        let spawned = std::thread::Builder::new()
+            .name("nexa-netwatch".into())
+            .spawn(move || run(nl, stop_rd, flag, wake));
+        match spawned {
+            Ok(join) => Some(Handle {
+                stop_wr,
+                join: Some(join),
+            }),
+            Err(_) => {
+                // SAFETY: 스레드가 안 떴다 = 소켓은 우리 것.
+                unsafe { close(nl) };
+                None
+            }
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod imp {
     use super::Ctx;
     use std::sync::atomic::AtomicBool;
@@ -345,7 +531,7 @@ mod imp {
 
     pub(super) struct Handle;
 
-    /// Linux = 아직 없음(netlink 후속) → `None`. 호출자는 `probe.stale_secs`(동작 직전 판정)로 대신한다.
+    /// 그 밖 OS = 없음 → `None`. 호출자는 `probe.stale_secs`(동작 직전 판정)로 대신한다.
     pub(super) fn start(
         _flag: Arc<AtomicBool>,
         _wake: Box<dyn Fn() + Send + Sync>,
@@ -379,5 +565,56 @@ mod tests {
         let w = NetWatch::start(Box::new(|| {})).expect("SCDynamicStore 등록");
         assert!(!w.take_changed());
         drop(w);
+    }
+
+    /// Linux: rtnetlink 소켓은 권한이 필요 없다 — 등록 → 첫 깃발 없음 → 떨어뜨리기 = 스레드 종료(join · 1초 안). `AF_NETLINK`를 막은
+    /// 샌드박스(일부 컨테이너)에서는 `None`이 계약이라 그때만 건너뛴다.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_registers_and_stops() {
+        let Some(w) = NetWatch::start(Box::new(|| {})) else {
+            eprintln!("AF_NETLINK 사용 불가(샌드박스) — 건너뜀");
+            return;
+        };
+        assert!(!w.take_changed(), "등록 직후 가짜 신호 없음");
+        let t0 = std::time::Instant::now();
+        drop(w);
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(1),
+            "Drop = 중지 파이프 + join"
+        );
+    }
+
+    /// Linux: 신호 경로 전체(poll → recv → 깃발 → wake · 중지 파이프 → 종료)를 `UnixDatagram::pair`로 몬다 — 감시 스레드 본체 `run`은
+    /// fd가 무엇이든 같은 길이라, rtnetlink 유니캐스트가 비루트에 막혀 있어도(`EPERM`) 흉내 신호를 넣을 수 있다.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_run_loop_signals_flag_and_stops() {
+        use std::io::Write;
+        use std::os::fd::IntoRawFd;
+        let flag = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let (fake_nl, feeder) = std::os::unix::net::UnixDatagram::pair().expect("pair");
+        let (stop_rd, mut stop_wr) = imp::pipe_pair().expect("pipe");
+        let f2 = Arc::clone(&flag);
+        let fake_fd = fake_nl.into_raw_fd(); // `run`이 끝에서 닫는다.
+        let th = std::thread::spawn(move || {
+            imp::run(
+                fake_fd,
+                stop_rd,
+                f2,
+                Box::new(move || {
+                    let _ = tx.send(());
+                }),
+            );
+        });
+        // 신호 흉내 = 한 데이터그램(내용 무관).
+        feeder.send(&[7u8; 4]).expect("send");
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .expect("깨우기 호출");
+        assert!(flag.swap(false, Ordering::AcqRel), "깃발이 섰다");
+        // 중지 = 파이프 한 바이트 → 스레드가 끝난다.
+        stop_wr.write_all(&[1u8]).expect("stop");
+        th.join().expect("스레드 종료");
     }
 }

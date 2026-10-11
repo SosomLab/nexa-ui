@@ -7,7 +7,9 @@
 //! - **macOS** = FSEvents(195차 · 10-10 · 루트당 스트림 1 · 폴더 단위 사건 · latency 0.2 s · `kFSEventStreamCreateFlagWatchRoot` · 전용 스레드의 CFRunLoop)
 //!   — FSEvents는 **실제 경로**(`/tmp` → `/private/tmp`)로 알리므로 루트의 정규화 경로로 상대 위치를 잡고 호스트가 준 루트 모양으로 돌려준다 ·
 //!   `MustScanSubDirs`/`UserDropped`/`KernelDropped` = [`DirEvent::Overflow`] · `RootChanged` = [`DirEvent::RootGone`].
-//! - **Linux(inotify)** = 후속 단계([`DirWatch::supported`] = false → 호스트는 유지 시간(TTL) 방식으로 폴백 · 상태줄 안내).
+//! - **Linux** = inotify(201차 · 10-11 · T-321 · **비재귀**라 루트 아래 폴더마다 watch(`IN_ONLYDIR` · 제외 폴더 건너뜀 · 새 폴더는 생기는 즉시 추가) · 루트당 스레드 +
+//!   중지 파이프 · 사건 = 이름·내용(`CLOSE_WRITE`)·속성 · `IN_Q_OVERFLOW` = [`DirEvent::Overflow`] · 루트 `DELETE_SELF/MOVE_SELF/UNMOUNT` = [`DirEvent::RootGone`] ·
+//!   watch 상한(`max_user_watches` · `ENOSPC`) = 그 루트 포기(`None` → [`DirEvent::RootGone`] → 호스트 TTL 폴백 · docs/105 D-263).
 //! - **묶음**: 코디네이터 스레드가 `debounce_ms`(기본 400) 동안 모아 [`DirEvent::Changed`] 한 번(폴더 집합 · 중복 없음).
 //! - **자원**(nexa-sql 39 §3): 스레드 = 루트 수 + 1 · 유휴 CPU 0(커널 대기) · 네트워크 0 · 외부 crate 0 · [`Drop`] = 중지 이벤트 → 스레드 종료.
 //! - 네트워크·이동식 드라이브 · 루트 삭제/이름 변경 = 읽기 실패 → [`DirEvent::RootGone`](호스트 = 폴백).
@@ -51,10 +53,12 @@ pub enum DirEvent {
 pub struct DirWatch {
     rx: Receiver<DirEvent>,
     stop: Arc<AtomicBool>,
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     stop_events: Vec<backend::RootStop>,
 }
 
+#[cfg(target_os = "linux")]
+use linux as backend;
 #[cfg(target_os = "macos")]
 use mac as backend;
 #[cfg(windows)]
@@ -72,7 +76,7 @@ impl DirWatch {
     /// 이 OS에 백엔드가 있는가(없으면 [`Self::spawn`]은 `None` · 호스트는 TTL 폴백).
     #[must_use]
     pub fn supported() -> bool {
-        cfg!(any(windows, target_os = "macos"))
+        cfg!(any(windows, target_os = "macos", target_os = "linux"))
     }
 
     /// 감시 시작(바로 돌아옴 · 사건은 [`Self::try_recv`]). 백엔드가 없거나 루트가 비면 `None`.
@@ -84,9 +88,9 @@ impl DirWatch {
         let stop = Arc::new(AtomicBool::new(false));
         let (raw_tx, raw_rx) = mpsc::channel::<Raw>();
         let (tx, rx) = mpsc::channel::<DirEvent>();
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         let mut stop_events = Vec::new();
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         for root in roots {
             match backend::start_root(root.clone(), opts.exclude_names.clone(), raw_tx.clone()) {
                 Some(ev) => stop_events.push(ev),
@@ -108,7 +112,7 @@ impl DirWatch {
         Some(DirWatch {
             rx,
             stop,
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             stop_events,
         })
     }
@@ -122,7 +126,7 @@ impl DirWatch {
 impl Drop for DirWatch {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         for ev in &self.stop_events {
             ev.signal();
         }
@@ -130,8 +134,11 @@ impl Drop for DirWatch {
 }
 
 /// 백엔드 → 코디네이터 날것.
-// Windows·macOS 백엔드만 있어 Linux에서는 변형이 만들어지지 않는다(`supported()` = false · inotify 후속) — OS별 허용(93 §P2 규칙).
-#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+// 백엔드가 없는 OS에서는 변형이 만들어지지 않는다(`supported()` = false) — OS별 허용(93 §P2 규칙).
+#[cfg_attr(
+    not(any(windows, target_os = "macos", target_os = "linux")),
+    allow(dead_code)
+)]
 enum Raw {
     Dir(PathBuf),
     Overflow(PathBuf),
@@ -734,6 +741,327 @@ mod mac {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux {
+    //! Linux — inotify(nexa-sql T-321 · 201차 · 10-11). inotify는 **비재귀**라 루트 아래 폴더마다 watch를 건다(제외 폴더는 건너뜀 · `IN_ONLYDIR`) ·
+    //! `IN_CREATE|IN_MOVED_TO`로 생긴 폴더는 즉시 watch 추가(그 전에 생긴 하위는 그 폴더의 `Raw::Dir`이 덮는다) · 사건의 "바뀐 폴더" =
+    //! **watch가 걸린 폴더 자체**(= 바뀐 항목의 부모 · 호스트 계약과 같다). 루트당 스레드 `nexa-dirwatch-root` + 중지 파이프 · 외부 crate 0(수동 extern).
+    //! `max_user_watches` 상한(`ENOSPC`) = 그 루트를 포기(`None`/`RootGone` → 호스트 TTL 폴백 · docs/105 D-263).
+    use super::Raw;
+    use std::collections::HashMap;
+    use std::ffi::CString;
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc::Sender;
+
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    extern "C" {
+        fn inotify_init1(flags: i32) -> i32;
+        fn inotify_add_watch(fd: i32, path: *const core::ffi::c_char, mask: u32) -> i32;
+        fn inotify_rm_watch(fd: i32, wd: i32) -> i32;
+        fn close(fd: i32) -> i32;
+        fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
+        fn pipe2(fds: *mut i32, flags: i32) -> i32;
+    }
+
+    const IN_CLOEXEC: i32 = 0o2000000;
+    const IN_NONBLOCK: i32 = 0o4000;
+    const O_CLOEXEC: i32 = 0o2000000;
+    const IN_ATTRIB: u32 = 0x4;
+    const IN_CLOSE_WRITE: u32 = 0x8;
+    const IN_MOVED_FROM: u32 = 0x40;
+    const IN_MOVED_TO: u32 = 0x80;
+    const IN_CREATE: u32 = 0x100;
+    const IN_DELETE: u32 = 0x200;
+    const IN_DELETE_SELF: u32 = 0x400;
+    const IN_MOVE_SELF: u32 = 0x800;
+    const IN_UNMOUNT: u32 = 0x2000;
+    const IN_Q_OVERFLOW: u32 = 0x4000;
+    const IN_IGNORED: u32 = 0x8000;
+    const IN_ONLYDIR: u32 = 0x0100_0000;
+    const IN_ISDIR: u32 = 0x4000_0000;
+    /// 이름·내용(쓰기 끝)·속성 — `IN_MODIFY`는 쓰기 조각마다 와서 큰 파일 저장이 큐를 넘치게 하므로 쓰지 않는다(Windows 필터 = 이름·크기·마지막 쓰기와 같은 뜻).
+    const WATCH_MASK: u32 = IN_CREATE
+        | IN_DELETE
+        | IN_MOVED_FROM
+        | IN_MOVED_TO
+        | IN_CLOSE_WRITE
+        | IN_ATTRIB
+        | IN_DELETE_SELF
+        | IN_MOVE_SELF
+        | IN_ONLYDIR;
+    const POLLIN: i16 = 0x1;
+    const EINTR: i32 = 4;
+    const ENOSPC: i32 = 28;
+    const BUF_LEN: usize = 64 * 1024;
+    /// `struct inotify_event` 머리(wd · mask · cookie · len) 크기.
+    const EV_HEAD: usize = 16;
+
+    /// 중지 파이프의 쓰기 끝(스레드마다 하나 · `Drop`에서 신호 · 떨어지면 std가 닫는다 = 읽기 끝의 `poll`도 깨어난다).
+    pub(super) struct RootStop(File);
+    impl RootStop {
+        pub(super) fn signal(&self) {
+            let _ = (&self.0).write_all(&[1u8]);
+        }
+    }
+
+    /// 중지 파이프 — fd를 `File`로 감싸 std가 쓰고 닫는다(`std::io::pipe`는 1.87 · 이 워크스페이스 MSRV 밖).
+    fn pipe_pair() -> Option<(File, File)> {
+        let mut p = [0i32; 2];
+        // SAFETY: int[2] 버퍼 · 성공하면 두 fd의 소유권을 `File`이 받는다.
+        unsafe {
+            if pipe2(p.as_mut_ptr(), O_CLOEXEC) != 0 {
+                return None;
+            }
+            Some((File::from_raw_fd(p[0]), File::from_raw_fd(p[1])))
+        }
+    }
+
+    fn errno() -> i32 {
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    }
+
+    /// 폴더 하나에 watch — 돌려주는 값 = wd(≥ 0) · `Err(errno)`.
+    fn add_watch(fd: i32, dir: &Path) -> Result<i32, i32> {
+        let c = CString::new(dir.as_os_str().as_bytes()).map_err(|_| 0)?;
+        // SAFETY: NUL 종료 경로 · 살아 있는 inotify fd.
+        let wd = unsafe { inotify_add_watch(fd, c.as_ptr(), WATCH_MASK) };
+        if wd < 0 {
+            Err(errno())
+        } else {
+            Ok(wd)
+        }
+    }
+
+    /// `dir`와 그 아래 폴더 전부에 watch(제외 이름 건너뜀 · 심링크 폴더는 따라가지 않음). `ENOSPC`(상한)만 오류 — 그 밖 실패(권한 등)는 그 폴더만 건너뛴다.
+    fn add_tree(
+        fd: i32,
+        root: &Path,
+        dir: &Path,
+        excludes: &[String],
+        wds: &mut HashMap<i32, PathBuf>,
+    ) -> Result<(), i32> {
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            match add_watch(fd, &d) {
+                Ok(wd) => {
+                    wds.insert(wd, d.clone());
+                }
+                Err(ENOSPC) => return Err(ENOSPC),
+                Err(_) => continue,
+            }
+            let Ok(rd) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let Ok(ft) = e.file_type() else { continue };
+                if !ft.is_dir() {
+                    continue;
+                }
+                let p = e.path();
+                let rel = p.strip_prefix(root).unwrap_or(&p);
+                if super::under_excluded(rel, excludes) {
+                    continue;
+                }
+                stack.push(p);
+            }
+        }
+        Ok(())
+    }
+
+    /// 루트 하나의 감시 스레드 시작 — inotify 만들기·루트 watch·상한(`ENOSPC`)·파이프·스레드 실패면 `None`(호스트 = `RootGone` 폴백).
+    pub(super) fn start_root(
+        root: PathBuf,
+        excludes: Vec<String>,
+        tx: Sender<Raw>,
+    ) -> Option<RootStop> {
+        // SAFETY: 문서의 서명 그대로 · 실패는 만든 fd를 닫고 `None`.
+        let fd = unsafe { inotify_init1(IN_NONBLOCK | IN_CLOEXEC) };
+        if fd < 0 {
+            return None;
+        }
+        let mut wds: HashMap<i32, PathBuf> = HashMap::new();
+        let root_wd = match add_watch(fd, &root) {
+            Ok(wd) => wd,
+            Err(_) => {
+                // SAFETY: 방금 만든 fd.
+                unsafe { close(fd) };
+                return None;
+            }
+        };
+        wds.insert(root_wd, root.clone());
+        // 하위 폴더 전수(루트는 이미 걸었으니 자식부터).
+        let mut subs = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&root) {
+            for e in rd.flatten() {
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    let p = e.path();
+                    let rel = p.strip_prefix(&root).unwrap_or(&p);
+                    if !super::under_excluded(rel, &excludes) {
+                        subs.push(p);
+                    }
+                }
+            }
+        }
+        for d in subs {
+            if add_tree(fd, &root, &d, &excludes, &mut wds).is_err() {
+                // watch 상한 = 이 루트는 포기(호스트 TTL 폴백) — inotify fd를 닫으면 watch도 전부 풀린다.
+                // SAFETY: 방금 만든 fd.
+                unsafe { close(fd) };
+                return None;
+            }
+        }
+        let Some((stop_rd, stop_wr)) = pipe_pair() else {
+            // SAFETY: 방금 만든 fd.
+            unsafe { close(fd) };
+            return None;
+        };
+        let spawned = std::thread::Builder::new()
+            .name("nexa-dirwatch-root".into())
+            .spawn(move || run_root(root, excludes, tx, fd, root_wd, wds, stop_rd));
+        if spawned.is_err() {
+            // SAFETY: 스레드가 안 떴다 = fd는 우리 것(파이프는 std가 닫는다).
+            unsafe { close(fd) };
+            return None;
+        }
+        Some(RootStop(stop_wr))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_root(
+        root: PathBuf,
+        excludes: Vec<String>,
+        tx: Sender<Raw>,
+        fd: i32,
+        root_wd: i32,
+        mut wds: HashMap<i32, PathBuf>,
+        stop_rd: File,
+    ) {
+        // SAFETY: `start_root`가 만든 inotify fd의 소유권을 이 스레드가 받는다 — `File`로 감싸 std로 읽고, 끝나면 std가 닫는다(watch도 전부 풀린다).
+        let mut ino = unsafe { File::from_raw_fd(fd) };
+        let mut buf = vec![0u8; BUF_LEN];
+        'outer: loop {
+            let mut fds = [
+                PollFd {
+                    fd,
+                    events: POLLIN,
+                    revents: 0,
+                },
+                PollFd {
+                    fd: stop_rd.as_raw_fd(),
+                    events: POLLIN,
+                    revents: 0,
+                },
+            ];
+            // SAFETY: fd 둘 · 무한 대기.
+            let n = unsafe { poll(fds.as_mut_ptr(), 2, -1) };
+            if n < 0 {
+                if errno() == EINTR {
+                    continue;
+                }
+                let _ = tx.send(Raw::RootGone(root.clone()));
+                break;
+            }
+            if fds[1].revents != 0 {
+                break; // 중지.
+            }
+            if fds[0].revents == 0 {
+                continue;
+            }
+            let got = match ino.read(&mut buf) {
+                Ok(n) => n,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue
+                }
+                Err(_) => {
+                    let _ = tx.send(Raw::RootGone(root.clone()));
+                    break;
+                }
+            };
+            let mut off = 0usize;
+            while off + EV_HEAD <= got {
+                let wd = i32::from_ne_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+                let mask =
+                    u32::from_ne_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
+                let len = u32::from_ne_bytes([
+                    buf[off + 12],
+                    buf[off + 13],
+                    buf[off + 14],
+                    buf[off + 15],
+                ]) as usize;
+                let name_end = (off + EV_HEAD + len).min(got);
+                let name_bytes = &buf[off + EV_HEAD..name_end];
+                let name_len = name_bytes
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(name_bytes.len());
+                let name = std::ffi::OsStr::from_bytes(&name_bytes[..name_len]);
+                off += EV_HEAD + len;
+                if mask & IN_Q_OVERFLOW != 0 {
+                    if tx.send(Raw::Overflow(root.clone())).is_err() {
+                        break 'outer;
+                    }
+                    continue;
+                }
+                if wd == root_wd && mask & (IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT) != 0 {
+                    let _ = tx.send(Raw::RootGone(root.clone()));
+                    break 'outer;
+                }
+                if mask & IN_IGNORED != 0 {
+                    wds.remove(&wd);
+                    continue;
+                }
+                let Some(dir) = wds.get(&wd).cloned() else {
+                    continue;
+                };
+                if mask & (IN_DELETE_SELF | IN_MOVE_SELF) != 0 {
+                    // 하위 폴더 자체가 지워지거나 옮겨짐 — 경로가 낡았다(부모의 DELETE/MOVED_FROM 사건이 호스트에 알린다).
+                    // SAFETY: 살아 있는 fd · 알고 있는 wd(이미 풀렸어도 실패만).
+                    unsafe { inotify_rm_watch(fd, wd) };
+                    wds.remove(&wd);
+                    continue;
+                }
+                let child = if name.is_empty() {
+                    dir.clone()
+                } else {
+                    dir.join(name)
+                };
+                let rel = child.strip_prefix(&root).unwrap_or(&child);
+                if super::under_excluded(rel, &excludes) {
+                    continue;
+                }
+                if mask & IN_ISDIR != 0 && mask & (IN_CREATE | IN_MOVED_TO) != 0 {
+                    // 새 폴더 = 즉시 watch(상한이면 이 루트는 폴백).
+                    if add_tree(fd, &root, &child, &excludes, &mut wds).is_err() {
+                        let _ = tx.send(Raw::RootGone(root.clone()));
+                        break 'outer;
+                    }
+                }
+                if tx.send(Raw::Dir(dir)).is_err() {
+                    break 'outer;
+                }
+            }
+        }
+        // `ino`(inotify fd · watch 전부 풀림)와 `stop_rd`는 여기서 떨어지며 std가 닫는다.
+        drop(ino);
+        drop(stop_rd);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,5 +1194,117 @@ mod tests {
         );
         drop(w);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux: 임시 폴더를 감시하다 파일을 만들면 그 부모 폴더가 묶음으로 온다 · 제외 폴더 아래 변경은 안 온다 · 떨어뜨리면 멈춘다(Windows·macOS와 같은 계약).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_watch_reports_parent_dir_and_skips_excluded() {
+        let dir = std::env::temp_dir().join(format!("nexa-dirwatch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).expect("mkdir");
+        std::fs::create_dir_all(dir.join("target")).expect("mkdir");
+        let w = DirWatch::spawn(
+            std::slice::from_ref(&dir),
+            DirWatchOpts {
+                exclude_names: vec!["target".into()],
+                debounce_ms: 100,
+            },
+        )
+        .expect("spawn");
+        std::thread::sleep(Duration::from_millis(150));
+        std::fs::write(dir.join("sub/a.txt"), "x").expect("write");
+        std::fs::write(dir.join("target/b.txt"), "y").expect("write");
+        let t0 = Instant::now();
+        let mut got: Vec<PathBuf> = Vec::new();
+        while t0.elapsed() < Duration::from_secs(3) {
+            if let Some(DirEvent::Changed(dirs)) = w.try_recv() {
+                got.extend(dirs);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(got.iter().any(|d| d.ends_with("sub")), "{got:?}");
+        assert!(
+            !got.iter().any(|d| d.ends_with("target")),
+            "제외 폴더 아래는 안 온다 {got:?}"
+        );
+        let t1 = Instant::now();
+        drop(w);
+        assert!(t1.elapsed() < Duration::from_secs(1), "Drop = 중지 파이프");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux(inotify 비재귀의 경주): 감시 중에 **새 폴더**를 만들고 그 안에 파일을 쓰면 새 폴더에도 watch가 걸려 그 폴더가 `Changed`로 온다.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_new_subdir_gets_watched() {
+        let dir = std::env::temp_dir().join(format!("nexa-dirwatch-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let w = DirWatch::spawn(
+            std::slice::from_ref(&dir),
+            DirWatchOpts {
+                exclude_names: vec![],
+                debounce_ms: 100,
+            },
+        )
+        .expect("spawn");
+        std::thread::sleep(Duration::from_millis(150));
+        std::fs::create_dir_all(dir.join("fresh")).expect("mkdir");
+        std::thread::sleep(Duration::from_millis(300)); // 새 폴더 watch 등록 뒤에 쓴다(등록 전 쓰기는 폴더 사건이 덮는다).
+        std::fs::write(dir.join("fresh/c.txt"), "z").expect("write");
+        let t0 = Instant::now();
+        let mut got: Vec<PathBuf> = Vec::new();
+        while t0.elapsed() < Duration::from_secs(3) && !got.iter().any(|d| d.ends_with("fresh")) {
+            if let Some(DirEvent::Changed(dirs)) = w.try_recv() {
+                got.extend(dirs);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            got.iter().any(|d| d.ends_with("fresh")),
+            "새 폴더가 감시된다 {got:?}"
+        );
+        drop(w);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux: 루트가 지워지면 `RootGone`(호스트 = TTL 폴백) · 잘못된 루트는 `spawn`이 `RootGone`을 대신 보낸다.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_root_removed_reports_root_gone() {
+        let dir = std::env::temp_dir().join(format!("nexa-dirwatch-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let w =
+            DirWatch::spawn(std::slice::from_ref(&dir), DirWatchOpts::default()).expect("spawn");
+        std::thread::sleep(Duration::from_millis(150));
+        std::fs::remove_dir_all(&dir).expect("rmdir");
+        let t0 = Instant::now();
+        let mut gone = false;
+        while t0.elapsed() < Duration::from_secs(3) {
+            if let Some(DirEvent::RootGone(r)) = w.try_recv() {
+                assert_eq!(r, dir);
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(gone, "루트 삭제 = RootGone");
+        drop(w);
+        let missing = std::env::temp_dir().join("nexa-dirwatch-never-exists-xyz");
+        let w2 = DirWatch::spawn(std::slice::from_ref(&missing), DirWatchOpts::default())
+            .expect("spawn");
+        let t0 = Instant::now();
+        let mut gone2 = false;
+        while t0.elapsed() < Duration::from_secs(2) {
+            if let Some(DirEvent::RootGone(_)) = w2.try_recv() {
+                gone2 = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(gone2, "없는 루트 = RootGone");
     }
 }

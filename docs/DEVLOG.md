@@ -2,6 +2,8 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-11 (201차 · linux · nexa-sql 119차 T-321)** — nexa-fs `dirwatch` Linux inotify(`IN_ONLYDIR` 폴더별 watch · 새 폴더 즉시 · `IN_Q_OVERFLOW`/루트 소실/`ENOSPC` 계약 · 시험 3) — journal 10-11 §2.
+- **2026-10-11 (200차 · linux · nexa-sql 119차 T-321)** — nexa-sys `netwatch` Linux rtnetlink(전용 스레드 `poll` + 중지 파이프 · 깃발+깨우기 · 시험 2) — journal 10-11 §1.
 - **2026-10-10 (198차 · mac · nexa-sql 118차 실기)** — nexa-ctl `EditState::set_preedit` 되돌리기 묶음 + `hangul_flush` 순서(선택 위 한글 조합 → ⌘Z 복원) · 시험 1 — journal 10-10 §7.
 - **2026-10-10 (197차 · mac · nexa-sql 118차 크래시)** — nexa-ctl `scroll` 비례 곱 i64(`mul_div`) · `v_thumb_for_test` · 회귀 시험 — journal 10-10 §6.
 - **2026-10-10 (196차 · mac · nexa-sql 118차)** — nexa-fs `dirwatch` macOS FSEvents(실제 경로 → 루트 모양 매핑 `map_dir`) — journal 10-10 §5.
