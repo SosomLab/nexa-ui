@@ -42,6 +42,10 @@ pub struct RadioGroup {
     /// 눌린 보기(선택은 **뗄 때** · 같은 보기 위 — 179차).
     pressed: Option<usize>,
     changed: bool,
+    /// ★ 가로 나열(203차 · nexa-sql 값 창 "NULL · 빈 문자열 · 값" 한 줄): `Some(항목별 폭 · 논리 px)` = 왼쪽부터 그 폭으로
+    ///   (라벨 길이대로 호스트가 잰다 · 같은 폭이면 간격이 불균일해 보인다 — 협업 관찰) · `None` = 세로(종전).
+    ///   가로일 때 높이 = 행 하나(`OPT_H`) · 키보드 = ←/→도 이동.
+    horizontal: Option<Vec<i32>>,
 }
 
 impl RadioGroup {
@@ -55,7 +59,41 @@ impl RadioGroup {
             selected,
             pressed: None,
             changed: false,
+            horizontal: None,
         }
+    }
+
+    /// 가로 나열로(모든 항목 같은 폭 = 논리 px) · `None` = 세로. 라벨 길이가 다르면 [`Self::set_horizontal_widths`].
+    pub fn set_horizontal(&mut self, opt_w: Option<i32>) {
+        self.horizontal = opt_w.map(|w| vec![w.max(1); self.options.len()]);
+    }
+
+    /// 가로 나열 · 항목별 폭(논리 px · 글리프+간격+라벨+여백을 호스트가 라벨마다 잰다). 길이가 모자라면 마지막 값을 되풀이.
+    pub fn set_horizontal_widths(&mut self, widths: &[i32]) {
+        let last = widths.last().copied().unwrap_or(1).max(1);
+        let v: Vec<i32> = (0..self.options.len())
+            .map(|i| widths.get(i).copied().unwrap_or(last).max(1))
+            .collect();
+        self.horizontal = Some(v);
+    }
+
+    /// 가로 나열인가.
+    #[must_use]
+    pub fn is_horizontal(&self) -> bool {
+        self.horizontal.is_some()
+    }
+
+    /// 가로 나열의 자연 폭(물리 px · 세로면 0).
+    #[must_use]
+    pub fn preferred_width(&self) -> i32 {
+        self.horizontal
+            .as_ref()
+            .map_or(0, |ws| ws.iter().map(|&w| self.s(w)).sum())
+    }
+
+    /// 가로 나열에서 항목 `i`의 왼쪽 x(물리) — 앞 항목 폭의 합.
+    fn cell_x(&self, ws: &[i32], i: usize) -> i32 {
+        self.base.bounds.x + ws.iter().take(i).map(|&w| self.s(w)).sum::<i32>()
     }
 
     /// 선택 인덱스.
@@ -89,7 +127,11 @@ impl RadioGroup {
     /// 그룹 자연 높이(논리 → 물리).
     #[must_use]
     pub fn preferred_height(&self) -> i32 {
-        self.s(OPT_H) * self.options.len() as i32
+        if self.horizontal.is_some() {
+            self.s(OPT_H)
+        } else {
+            self.s(OPT_H) * self.options.len() as i32
+        }
     }
 
     fn select(&mut self, i: usize, inv: &mut Invalidations) {
@@ -100,21 +142,41 @@ impl RadioGroup {
         }
     }
 
-    fn opt_at(&self, y: i32) -> Option<usize> {
-        let h = self.s(OPT_H).max(1);
-        if y < self.base.bounds.y {
+    fn opt_at(&self, x: i32, y: i32) -> Option<usize> {
+        let b = self.base.bounds;
+        if let Some(ws) = self.horizontal.as_ref() {
+            if x < b.x || y < b.y || y >= b.bottom() {
+                return None;
+            }
+            let mut left = b.x;
+            for (i, &w) in ws.iter().enumerate() {
+                let right = left + self.s(w).max(1);
+                if x < right {
+                    return (i < self.options.len()).then_some(i);
+                }
+                left = right;
+            }
             return None;
         }
-        let i = ((y - self.base.bounds.y) / h) as usize;
+        let h = self.s(OPT_H).max(1);
+        if y < b.y {
+            return None;
+        }
+        let i = ((y - b.y) / h) as usize;
         (i < self.options.len()).then_some(i)
     }
 
     fn glyph_rect(&self, i: usize) -> Rect {
         // 크기 배율(`ui.control_size`) 적용 — 옵션 행 높이는 그대로, 글리프만 커진다.
         let d = self.s(super::ctl_size(DOT));
+        let b = self.base.bounds;
+        if let Some(ws) = self.horizontal.as_ref() {
+            let y = b.y + (b.h - d) / 2;
+            return Rect::new(self.cell_x(ws, i), y, d, d);
+        }
         let h = self.s(OPT_H);
-        let y = self.base.bounds.y + h * i as i32 + (h - d) / 2;
-        Rect::new(self.base.bounds.x, y, d, d)
+        let y = b.y + h * i as i32 + (h - d) / 2;
+        Rect::new(b.x, y, d, d)
     }
 }
 
@@ -145,22 +207,21 @@ impl Widget for RadioGroup {
                     inv.push(self.base.bounds);
                     return;
                 }
-                let _ = x;
-                self.pressed = self.opt_at(y);
+                self.pressed = self.opt_at(x, y);
             }
-            InputEvent::MouseUp { y, .. } => {
+            InputEvent::MouseUp { x, y } => {
                 if let Some(i) = self.pressed.take() {
-                    if self.opt_at(y) == Some(i) {
+                    if self.opt_at(x, y) == Some(i) {
                         self.select(i, inv);
                     }
                 }
             }
             InputEvent::Key { key, .. } if self.base.focused => match key {
-                Key::Up => {
+                Key::Up | Key::Left => {
                     let i = self.selected.saturating_sub(1);
                     self.select(i, inv);
                 }
-                Key::Down => {
+                Key::Down | Key::Right => {
                     self.select(self.selected + 1, inv);
                 }
                 _ => {}
@@ -180,12 +241,12 @@ impl Widget for RadioGroup {
             let lx = g.right() + self.s(GAP);
             ctx.select_font(FontSlot::Base, false);
             let ty = ctx.text_center_y(g.y, g.h);
-            let lr = Rect::new(
-                lx,
-                self.base.bounds.y,
-                self.base.bounds.w,
-                self.base.bounds.h,
-            );
+            // 가로 나열 = 라벨 클립을 그 항목 칸 안으로(다음 항목 글리프를 덮지 않게).
+            let lw = match self.horizontal.as_ref() {
+                Some(ws) => (self.cell_x(ws, i + 1) - lx).max(0),
+                None => self.base.bounds.w,
+            };
+            let lr = Rect::new(lx, self.base.bounds.y, lw, self.base.bounds.h);
             ctx.select_font(FontSlot::Base, false);
             ctx.text(lx, ty, lr, &opt.label, theme.text);
         }
@@ -256,6 +317,35 @@ mod tests {
         assert_eq!(g.take_changed().as_deref(), Some("icon"));
         g.on_event(&key(Key::Down), &mut inv); // icon → list
         assert_eq!(g.take_changed().as_deref(), Some("list"));
+    }
+
+    /// ★ 가로 나열(203차): 항목 폭으로 x를 나눠 고른다 · 높이 = 행 하나 · ←/→도 이동.
+    #[test]
+    fn horizontal_picks_by_x_and_arrows_left_right() {
+        let opts = vec![
+            RadioOption::new("null", "NULL"),
+            RadioOption::new("empty", "Empty"),
+            RadioOption::new("value", "Value"),
+        ];
+        let mut g = RadioGroup::new(opts, 0);
+        g.set_horizontal(Some(80));
+        let mut inv = Invalidations::default();
+        g.set_bounds(Rect::new(10, 100, 300, 24), &mut inv);
+        assert_eq!(g.preferred_height(), 24, "가로 = 행 하나");
+        assert_eq!(g.preferred_width(), 240);
+        tap(&mut g, 10 + 80 * 2 + 5, 112, &mut inv);
+        assert_eq!(
+            g.take_changed().as_deref(),
+            Some("value"),
+            "셋째 칸 = x로 고른다"
+        );
+        tap(&mut g, 10 + 80 + 5, 140, &mut inv);
+        assert!(g.take_changed().is_none(), "세로로 벗어난 점 = 무시");
+        g.set_focused(true);
+        g.on_event(&key(Key::Left), &mut inv);
+        assert_eq!(g.take_changed().as_deref(), Some("empty"));
+        g.on_event(&key(Key::Right), &mut inv);
+        assert_eq!(g.take_changed().as_deref(), Some("value"));
     }
 
     #[test]

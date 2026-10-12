@@ -22,6 +22,8 @@ pub enum EditAction {
     /// 선택 셀 비움(Delete = NULL 또는 빈 문자열 · 호스트 정책).
     ClearCells,
     SetNull,
+    /// 선택 셀 = 빈 문자열(정책과 무관하게 '' · nexa-sql 10-12 "빈 문자열로").
+    SetEmpty,
     DuplicateRow,
     InsertRow,
     /// 행 삭제 표식 토글.
@@ -47,6 +49,13 @@ pub fn action_for_event(ev: &InputEvent, editing: bool) -> Option<EditAction> {
         return None;
     }
     match *ev {
+        // ★ Shift+Enter = 값 보기(nexa-sql 사용자 10-12 · DBeaver "값을 편집기에서 열기"·DataGrip "Edit Maximized"와 같은 키) —
+        //   LOB은 LOB 뷰어 · 일반 셀은 값 미리보기. 마우스 짝 = Shift+더블클릭(호스트 그리드).
+        InputEvent::Key {
+            key: Key::Enter,
+            shift: true,
+            ..
+        } => Some(EditAction::ViewValue),
         InputEvent::Key {
             key: Key::Enter, ..
         } => Some(EditAction::BeginEdit),
@@ -70,6 +79,7 @@ pub fn action_for_command(id: &str) -> Option<EditAction> {
     Some(match id {
         "grid.edit.begin" | "f2" => EditAction::BeginEdit,
         "grid.edit.set_null" => EditAction::SetNull,
+        "grid.edit.set_empty" => EditAction::SetEmpty,
         "grid.edit.clear" => EditAction::ClearCells,
         "grid.edit.dup_row" | "row.dup" => EditAction::DuplicateRow,
         "grid.edit.insert_row" | "row.add" => EditAction::InsertRow,
@@ -106,6 +116,17 @@ mod tests {
             Some(EditAction::BeginEdit)
         );
         assert_eq!(action_for_event(&key(Key::Enter), true), None);
+        // Shift+Enter = 값 보기(10-12) · 편집 중이면 편집기 몫(None).
+        let shift_enter = InputEvent::Key {
+            key: Key::Enter,
+            shift: true,
+            primary: false,
+        };
+        assert_eq!(
+            action_for_event(&shift_enter, false),
+            Some(EditAction::ViewValue)
+        );
+        assert_eq!(action_for_event(&shift_enter, true), None);
         assert_eq!(
             action_for_event(&key(Key::Delete), false),
             Some(EditAction::ClearCells)

@@ -785,8 +785,15 @@ impl TabBar {
     fn draw_badge(&self, ctx: &mut dyn DrawCtx, r: Rect, kind: TabBadge, theme: &Theme, st: State) {
         // 바탕은 늘 둥근 사각형(nexa-sql 09-18) · 연결됨 = "연결됨 색"(Switch 켜짐 초록)의 글자 **S**(공유)/**P**(전용) ·
         // 끊김/미연결 = 흐린 플러그 + 사선(그대로).
-        let radius = (r.w / 4).max(2);
         let on = kind != TabBadge::LinkOff;
+        // ★ 끊김/미연결 배지의 **그림**(플러그 + 사선)만 80 %(nexa-sql 사용자 10-12 "배경은 그대로 · 안의 아이콘만 80 %"):
+        //   바탕 둥근 사각형·히트 영역·탭 폭은 그대로, 도형만 가운데로 줄인다 — 글자 배지(S/P)보다 도형이 커 보이던 것을 맞춘다.
+        let glyph = {
+            let w = (r.w * 4 / 5).max(4);
+            let h = (r.h * 4 / 5).max(4);
+            Rect::new(r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h)
+        };
+        let radius = (r.w / 4).max(2);
         // 색(nexa-sql 09-19): **S 공유 = 초록**(연결됨 · 평상시 상태 · Switch 켜짐과 같은 뜻) · **P 전용 = 강조색(파랑)**(예외적·격리된
         // 연결 = "이 탭만 다르다"는 신호 · 탭 강조선과 같은 계열) · 끊김/미연결 = 흐림 · 끊김 확인은 호스트가 빨강으로 따로 알린다.
         let color = match kind {
@@ -807,6 +814,8 @@ impl TabBar {
             ctx.select_font(FontSlot::Base, false);
             return;
         }
+        // 아래 도형은 줄인 사각형 기준(바탕은 위에서 원래 `r`로 이미 그렸다).
+        let r = glyph;
         let w = (r.w as f32 / 11.0).max(1.2);
         let cx = r.x + r.w / 2;
         let bw = (r.w * 4 / 9).max(5);
