@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| docs/203-hash | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 203차 CONSUMER-CHANGES 행 해시 0a650d5 · ci 38283494362 ✓ |
 | feat/203-radio-horizontal | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 203차(nexa-sql 121차 win · 협업 쌍): nexa-ctl `RadioGroup` 가로 나열(항목별 폭 `set_horizontal_widths` · x로 고름 · ←/→) · 탭 LinkOff 배지 그림만 80 % · gridedit Shift+Enter = ViewValue · `EditAction::SetEmpty`/`grid.edit.set_empty` |
 | feat/scrollbars-is-dragging | 2026-10-12 | 2026-10-12 → main(삭제) | 1 | 202차(nexa-sql 120차 Linux · 협업 쌍): nexa-ctl `ScrollBars::is_dragging()` 공개 접근자(그리드 썸 드래그 잔존 수정의 근거 · 호출 0 · 기본 동작 불변) · 📚 CONSUMER-CHANGES 202 · STATUS · DEVLOG · journal 10-12 |
 | feat/linux-netwatch-dirwatch | 2026-10-11 | 2026-10-11 → main(삭제) | 1 | 200·201차(nexa-sql 119차 Linux · 협업 쌍 · T-321): nexa-sys `netwatch` Linux rtnetlink(멀티캐스트 묶음 · 전용 스레드 poll · 중지 파이프) · nexa-fs `dirwatch` Linux inotify(폴더마다 watch · 새 폴더 즉시 · 넘침/루트 소실/상한 폴백) · 시험 sys 9/fs 23 · clippy 0 |
