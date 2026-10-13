@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| docs/204-205-hash | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 204·205차 CONSUMER-CHANGES 행 해시 a21d6e6 |
 | feat/204-205-gutter-badge | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 204 편집기 거터 세로 정렬(줄 번호·니모닉 = `ty` · 상자 = 띠 높이) · 205 탭 배지 P = accent 고정·보통 굵기 · TextBox/Switch/ctxmenu 새 API(재라벨 setter · `set_menu_host` · `hover_overlay_alpha` · 아이콘 칸 상시 · `NEXA_TRACE_MENU`) · journal 10-13 §0~§3 |
 | docs/203-hash | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 203차 CONSUMER-CHANGES 행 해시 0a650d5 · ci 38283494362 ✓ |
 | feat/203-radio-horizontal | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 203차(nexa-sql 121차 win · 협업 쌍): nexa-ctl `RadioGroup` 가로 나열(항목별 폭 `set_horizontal_widths` · x로 고름 · ←/→) · 탭 LinkOff 배지 그림만 80 % · gridedit Shift+Enter = ViewValue · `EditAction::SetEmpty`/`grid.edit.set_empty` |
