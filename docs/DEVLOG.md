@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-14 (206차 · linux · nexa-sql 124차 T-344)** — nexa-font `map_font` 검사→mmap→push 잠금 한 구간 · 중독 잠금 `into_inner` · 병렬 회귀 시험 8스레드 Barrier · 11/0 — journal 10-14 §1.
 - **2026-10-12 (202차 · linux · nexa-sql 120차 ⑤)** — nexa-ctl `scroll` `is_dragging()` 접근자(호스트가 드래그 중 사건을 스크롤바에 먼저 주기 위해) — journal 10-12 §1.
 - **2026-10-11 (201차 · linux · nexa-sql 119차 T-321)** — nexa-fs `dirwatch` Linux inotify(`IN_ONLYDIR` 폴더별 watch · 새 폴더 즉시 · `IN_Q_OVERFLOW`/루트 소실/`ENOSPC` 계약 · 시험 3) — journal 10-11 §2.
 - **2026-10-11 (200차 · linux · nexa-sql 119차 T-321)** — nexa-sys `netwatch` Linux rtnetlink(전용 스레드 `poll` + 중지 파이프 · 깃발+깨우기 · 시험 2) — journal 10-11 §1.

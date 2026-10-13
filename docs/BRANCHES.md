@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| fix/206-font-map-race | 2026-10-14 | 2026-10-14 → main(삭제) | 1 | 206차 nexa-font `map_font` TOCTOU 수정(잠금 한 구간 · 병렬 회귀 시험) · CONSUMER-CHANGES 206 · STATUS · DEVLOG · journal 10-14 |
 | docs/122-ci | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 204·205차 커밋·CI 줄(a21d6e6 · aebba67 ci 38405206766 ✓ · 소비 nexa-sql b79db0e ci 38408130076 ✓) · journal 10-13 §3 · CONSUMER-CHANGES 상태 |
 | docs/204-205-hash | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 204·205차 CONSUMER-CHANGES 행 해시 a21d6e6 |
 | feat/204-205-gutter-badge | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 204 편집기 거터 세로 정렬(줄 번호·니모닉 = `ty` · 상자 = 띠 높이) · 205 탭 배지 P = accent 고정·보통 굵기 · TextBox/Switch/ctxmenu 새 API(재라벨 setter · `set_menu_host` · `hover_overlay_alpha` · 아이콘 칸 상시 · `NEXA_TRACE_MENU`) · journal 10-13 §0~§3 |

@@ -251,10 +251,12 @@ static MAPPED: std::sync::Mutex<Vec<(PathBuf, &'static [u8])>> = std::sync::Mute
 
 fn map_font(path: &Path) -> Option<&'static [u8]> {
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    if let Ok(m) = MAPPED.lock() {
-        if let Some((_, d)) = m.iter().find(|(p, _)| *p == key) {
-            return Some(d);
-        }
+    // ★ 검사 → mmap → 등록을 **잠금을 쥔 채** 한 구간으로(206차 · nexa-sql 123차 T-344): 종전엔 잠금을 풀고 매핑한 뒤 다시 잠가
+    //   push해, 같은 파일을 두 스레드가 동시에 처음 찾으면 둘 다 매핑·둘 다 등록됐다(작업 집합 중복 · 병렬 시험 흔들림). 글꼴
+    //   매핑은 기동 때 수 회라 직렬화 비용은 0에 가깝다. 잠금 중독(poison)은 표를 그대로 쓴다.
+    let mut m = MAPPED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, d)) = m.iter().find(|(p, _)| *p == key) {
+        return Some(d);
     }
     let file = File::open(path).ok()?;
     // SAFETY: 폰트 파일은 실행 중 변경되지 않는 읽기 전용 자산(OS 배포본·사용자 설치본).
@@ -264,9 +266,7 @@ fn map_font(path: &Path) -> Option<&'static [u8]> {
     }
     let leaked: &'static Mmap = Box::leak(Box::new(mmap));
     let data: &'static [u8] = &leaked[..];
-    if let Ok(mut m) = MAPPED.lock() {
-        m.push((key, data));
-    }
+    m.push((key, data));
     Some(data)
 }
 
@@ -748,6 +748,43 @@ mod tests {
     use super::*;
 
     /// 같은 글꼴 파일은 한 번만 매핑한다 — 두 번 찾아도 같은 버퍼(포인터 동일) · 매핑 수는 늘지 않는다.
+    #[test]
+    fn concurrent_first_map_of_same_file_maps_once() {
+        // T-344 회귀: 같은 파일을 여러 스레드가 **동시에 처음** 찾아도 매핑·등록은 한 번(검사→mmap→push가 한 잠금 구간).
+        let dir = std::env::temp_dir().join(format!("nexa-font-map-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("fake-font.bin");
+        std::fs::write(&path, vec![7u8; 4096]).expect("write");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let b = std::sync::Arc::clone(&barrier);
+                let p = path.clone();
+                std::thread::spawn(move || {
+                    b.wait();
+                    map_font(&p).map(|d| d.as_ptr() as usize)
+                })
+            })
+            .collect();
+        let ptrs: Vec<usize> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread").expect("mapped"))
+            .collect();
+        assert!(
+            ptrs.windows(2).all(|w| w[0] == w[1]),
+            "모든 스레드 = 같은 매핑 {ptrs:?}"
+        );
+        let key = std::fs::canonicalize(&path).unwrap_or(path);
+        let n = MAPPED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|(p, _)| *p == key)
+            .count();
+        assert_eq!(n, 1, "표에 한 번만");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn same_font_file_is_mapped_once() {
         let Some(a) = system_ui_font() else {
