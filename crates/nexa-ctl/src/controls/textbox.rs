@@ -459,6 +459,9 @@ pub struct TextBox {
     /// ★ 셀 편집 모드(nexa-sql 그리드 09-26): 둥근 틀·테두리 없이 셀 배경만 · 글자 시작 x = `bounds.x + pad`(그리드 셀 여백과 같게) ·
     ///   세로는 셀과 같은 잉크 중앙(`text_center_y`) — 편집에 들어가도 글자가 그 자리에 그대로 보인다.
     cell_pad: Option<i32>,
+    /// 우클릭 편집 메뉴가 펼쳐질 영역(호스트가 창 전체를 주면 `place_popup`이 위로 뒤집는다 · nexa-sql 10-13 결과 행수 상자).
+    /// `None` = 상자 아래 140px(종전 · 창 안쪽 상자용).
+    menu_host: Option<Rect>,
     /// 논리 줄(0부터)별 표시 색 — 북마크·오류·변경 등 호스트가 정한다.
     line_marks: Vec<(usize, Color)>,
     /// 거터 라벨(줄 → 짧은 글 · 예 북마크 니모닉 숫자) — 줄번호 왼쪽에 accent 상자로(nexa-sql docs/69 U-2 · 09-22).
@@ -819,8 +822,12 @@ pub enum EditCtxAction {
 }
 
 impl TextBox {
+    /// 플레이스홀더 글 바꾸기(언어 전환 뒤 재라벨 · nexa-sql 10-13).
+    pub fn set_placeholder(&mut self, placeholder: impl Into<String>) {
+        self.placeholder = placeholder.into();
+    }
+
     /// placeholder로 만든다(빈 값 시작).
-    #[must_use]
     pub fn new(placeholder: impl Into<String>) -> Self {
         Self {
             focus_ring: true,
@@ -880,6 +887,7 @@ impl TextBox {
             gutter_marks: false,
             text_inset: 0,
             cell_pad: None,
+            menu_host: None,
             line_marks: Vec::new(),
             gutter_labels: Vec::new(),
             minimap_marks: Vec::new(),
@@ -1794,6 +1802,17 @@ impl TextBox {
     }
 
     /// 링을 호스트가 그린다(상자는 생략) — 상자를 틀 안에 품는 필터 틀 같은 경우.
+    /// 지금 상자 배경에 얹는 hover 덧칠 알파(전경색 · `tokens::hover_alpha`) — 상자를 틀 안에 품는 호스트가 **틀 전체**에 같은
+    /// 덧칠을 해 토글 자리와 상자 배경이 갈라져 보이지 않게(nexa-sql 10-13 "포커스로 회색이 되면 옵션 쪽은 흰색").
+    #[must_use]
+    pub fn hover_overlay_alpha(&self) -> f32 {
+        if self.cell_pad.is_some() {
+            0.0
+        } else {
+            crate::tokens::hover_alpha(false, self.hover.value())
+        }
+    }
+
     pub fn set_busy_host_painted(&mut self, on: bool) {
         self.busy_host_paint = on;
     }
@@ -1859,6 +1878,12 @@ impl TextBox {
             self.pairs_dirty.set(true);
         }
         self.bracket_opts = opts;
+    }
+
+    /// 우클릭 편집 메뉴가 펼쳐질 영역 — 창 바닥·오른쪽 가장자리 근처의 상자는 **창 전체 Rect**를 주어야
+    /// 메뉴가 반대쪽(위)으로 뒤집힌다(61 §2-2 팝업 배치 규칙 · nexa-sql 10-13). `None` = 상자 아래 140px.
+    pub fn set_menu_host(&mut self, host: Option<Rect>) {
+        self.menu_host = host;
     }
 
     /// 우클릭 편집 메뉴에 덧붙일 항목(호스트 · 예: "괄호 이동 ▸" 서브메뉴 · 픽은 [`EditCtxAction::Custom`]).
@@ -4005,24 +4030,26 @@ impl TextBox {
                             }
                         }
                     }
-                    // 거터 라벨(니모닉 숫자 상자) — 북마크 영역 · 띠 오른쪽.
+                    // 거터 라벨(니모닉 숫자 상자) — 북마크 영역 · 띠 오른쪽. ★ 세로 범위 = 북마크 띠와 **같게**(y+1 · lh−2 · 종전 y+2 ·
+                    //   lh−4는 위아래 1px씩 달랐다) · 숫자는 상자 안 **세로 가운데**(`text_center_y` · nexa-sql 사용자 10-13).
                     if let Some((_, lab)) = self.gutter_labels.iter().find(|(l, _)| *l == n) {
                         let bw = self.s(12);
                         let bx = b.x + self.s(7);
-                        if let Some(r) =
-                            clipv(Rect::new(bx, y + self.s(2), bw, (lh - self.s(4)).max(2)))
-                        {
+                        let box_r = Rect::new(bx, y + 1, bw, (lh - 2).max(2));
+                        if let Some(r) = clipv(box_r) {
                             ctx.fill_round_rect(r, self.s(2), theme.accent);
                             let tw = ctx.text_width(lab);
-                            ctx.text(bx + (bw - tw) / 2, y, r, lab, theme.window_bg);
+                            let ly = ctx.text_center_y(box_r.y, box_r.h).max(box_r.y);
+                            ctx.text(bx + (bw - tw) / 2, ly, r, lab, theme.window_bg);
                         }
                     }
                     // 줄번호 글자 자체는 줄번호가 켜져 있을 때만(꺼도 위의 띠·니모닉 상자는 슬림 거터에 남는다).
                     if self.line_numbers {
                         let is_caret_line = li == caret_line || row_selected;
+                        // ★ 줄 번호도 본문 글자와 같은 세로 가운데(`ty` · 종전 행 맨 위 `y` = 본문과 어긋남 · nexa-sql 사용자 10-13).
                         ctx.text(
                             gx,
-                            y,
+                            ty,
                             Rect::new(b.x, vy0, self.s(10) + gw, vy1 - vy0),
                             &num,
                             if is_caret_line {
@@ -4808,12 +4835,15 @@ impl TextBox {
                     read_only: self.edit.is_read_only(),
                 };
                 // 팝업이 박스 밖(아래)으로 펼쳐질 공간 — 박스 사각형만 주면 안에 구겨진다.
-                let host = Rect::new(
-                    self.base.bounds.x,
-                    self.base.bounds.y,
-                    self.base.bounds.w.max(self.s(200)),
-                    self.base.bounds.h + self.s(140),
-                );
+                // 호스트가 창 전체를 지정했으면 그 안에서 배치(아래 공간이 없으면 위로 · 10-13).
+                let host = self.menu_host.unwrap_or_else(|| {
+                    Rect::new(
+                        self.base.bounds.x,
+                        self.base.bounds.y,
+                        self.base.bounds.w.max(self.s(200)),
+                        self.base.bounds.h + self.s(140),
+                    )
+                });
                 let extras = self.menu_extras.clone();
                 // ★ 셀 편집 모드: 메뉴가 **편집 중인 글(선택)을 가리지 않게** 셀 아래에 연다(UX 규칙 · nexa-sql 09-26).
                 let my = if self.cell_pad.is_some() {

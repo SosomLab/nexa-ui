@@ -43,8 +43,13 @@ pub struct Switch {
 }
 
 impl Switch {
-    /// 라벨과 초기 상태로 만든다(라벨 오른쪽이 기본 · 토글만은 [`LabelSide::None`]).
+    /// 라벨 글 바꾸기(언어 전환 뒤 재라벨 · nexa-sql 10-13).
+    pub fn set_label(&mut self, label: impl Into<String>) {
+        self.label = label.into();
+    }
+
     #[must_use]
+    /// 라벨과 초기 상태로 만든다(라벨 오른쪽이 기본 · 토글만은 [`LabelSide::None`]).
     pub fn new(label: impl Into<String>, on: bool) -> Self {
         Self {
             base: ControlBase::default(),

@@ -35,6 +35,21 @@ pub fn menu_icons_enabled() -> bool {
     MENU_ICONS.load(Ordering::Relaxed)
 }
 
+/// ★ 아이콘 칸을 **늘 예약**할지(nexa-sql 10-13 "모든 우클릭 메뉴에 이미지 영역"): 켜면 아이콘이 하나도 없는 메뉴도 같은 칸을 두어
+/// 메뉴마다 글 시작 x가 같다. 아이콘 그리기 자체는 [`menu_icons_enabled`]가 따로 정한다(향상 모드 = 칸만 두고 그리기 0).
+static ICON_COL_ALWAYS: AtomicBool = AtomicBool::new(false);
+
+/// 아이콘 칸 늘 예약 켜기/끄기(전역 · 앱이 기동 때 정한다).
+pub fn set_icon_col_always(on: bool) {
+    ICON_COL_ALWAYS.store(on, Ordering::Relaxed);
+}
+
+/// 아이콘 칸을 늘 예약하는가.
+#[must_use]
+pub fn icon_col_always() -> bool {
+    ICON_COL_ALWAYS.load(Ordering::Relaxed)
+}
+
 // 레이아웃 상수(논리 px).
 const PAD_H: i32 = 12;
 const PAD_V: i32 = 5;
@@ -956,7 +971,7 @@ impl ContextMenu {
     }
 
     fn has_icons(&self) -> bool {
-        if self.icon_col_forced {
+        if self.icon_col_forced || icon_col_always() {
             return true;
         }
         let any_mark = self
@@ -1636,6 +1651,14 @@ impl ContextMenu {
             self.at.set(Some(at));
         }
         let r = self.rect.get();
+        // 진단(`NEXA_TRACE_MENU` · nexa-sql 10-13 "그림과 판정이 어긋남"): 그리는 사각형 · 앵커 · 표면 · 영역.
+        if std::env::var_os("NEXA_TRACE_MENU").is_some() {
+            eprintln!(
+                "[ctxmenu paint] at={at:?} rect={r:?} surface={:?} area={area:?} n={}",
+                self.surface.get(),
+                self.items.len()
+            );
+        }
         // 바탕 + 테두리(그림자 대신 테두리로 층을 만든다 — 렌더러에 블러가 없다).
         ctx.fill_round_rect(r, self.s(RADIUS), theme.panel_bg);
         ctx.stroke_round_rect(r, self.s(RADIUS), theme.border, 1.0);

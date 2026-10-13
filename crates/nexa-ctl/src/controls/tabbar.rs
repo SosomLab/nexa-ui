@@ -796,9 +796,11 @@ impl TabBar {
         let radius = (r.w / 4).max(2);
         // 색(nexa-sql 09-19): **S 공유 = 초록**(연결됨 · 평상시 상태 · Switch 켜짐과 같은 뜻) · **P 전용 = 강조색(파랑)**(예외적·격리된
         // 연결 = "이 탭만 다르다"는 신호 · 탭 강조선과 같은 계열) · 끊김/미연결 = 흐림 · 끊김 확인은 호스트가 빨강으로 따로 알린다.
+        // ★ P = **늘 강조색**(nexa-sql 사용자 10-13 "탐색기 연결 행의 P 칩과 같은 두 색" — 종전 `tab_accent`는 탭 바 비활성이면
+        //   흐린 회색 · 탭별 선 색을 따라가 칩과 달라 보였다).
         let color = match kind {
             TabBadge::Shared => super::switch::ON_GREEN,
-            TabBadge::Link => self.tab_accent(theme),
+            TabBadge::Link => theme.accent,
             TabBadge::LinkOff | TabBadge::None => theme.text_dim,
         };
         ctx.fill_round_rect_alpha(r, radius, color, if on { 0.16 } else { 0.10 });
@@ -807,11 +809,11 @@ impl TabBar {
         }
         if on {
             let letter = if kind == TabBadge::Link { "P" } else { "S" };
-            ctx.select_font(FontSlot::Base, true);
+            // 글자 = 보통 굵기(nexa-sql 사용자 10-13 "Bold 해제").
+            ctx.select_font(FontSlot::Base, false);
             let tw = ctx.text_width(letter);
             let ty = ctx.text_center_y(r.y, r.h);
             ctx.text(r.x + (r.w - tw) / 2, ty, r, letter, color);
-            ctx.select_font(FontSlot::Base, false);
             return;
         }
         // 아래 도형은 줄인 사각형 기준(바탕은 위에서 원래 `r`로 이미 그렸다).
