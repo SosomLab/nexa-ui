@@ -51,7 +51,7 @@ pub use carousel::Carousel;
 pub use checkbox::Checkbox;
 pub use colorpanel::{rgba_from_hex, rgba_to_hex, ColorPanel};
 pub use colorpick::ColorPicker;
-pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
+pub use combo::{CheckCombo, Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
 pub use ctxmenu::{menu_icons_enabled, set_menu_icons, ContextMenu, CtxItem, MenuIcon};
 pub use editmenu::{set_edit_menu_decor, EditMenu, EditMenuAction, EditMenuCaps, EditMenuDecor};
 pub use flash::{Flash, FlashTone};

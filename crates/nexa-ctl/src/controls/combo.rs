@@ -14,8 +14,8 @@
 //! 시각: ⇕ = "값을 사용자 정의할 수 있다"(확장) · ∨ = "목록에서 고른다"(일반) — 사용자 정의.
 
 use super::{
-    draw_check_mark, draw_chevron_down, draw_updown_chevrons, image_fit_contain, Control,
-    ControlBase, ScrollBars, TextBox,
+    draw_check_mark, draw_checkbox_glyph, draw_chevron_down, draw_updown_chevrons,
+    image_fit_contain, Control, ControlBase, ScrollBars, TextBox,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::edit::EditState;
@@ -1146,6 +1146,429 @@ fn combo_event<C: ComboControl + ?Sized>(c: &mut C, ev: &InputEvent, inv: &mut I
             _ => {}
         },
         _ => {}
+    }
+}
+
+// ───────────────────────────── 체크 콤보(다중 선택) ─────────────────────────────
+
+// **체크 콤보** — 콤보 모양(∨)에 **체크박스 다중 선택** 목록(208차 · nexa-sql 10-16 "객체 찾기 창 서버 선택 = 다중 선택 체크박스 목록").
+//
+// [`Combo`](super::Combo)와 같은 모델([`ComboCore`])을 물려받되 **고르면 닫히는** 택일이 아니라 **토글하고 열린 채**다:
+//
+// | 조작 | 동작 |
+// |---|---|
+// | 박스 클릭 · Space/Enter(닫힘) | 열기 |
+// | 항목 클릭 · Space/Enter(hover 항목) | 체크 **토글** · 목록은 열린 채 |
+// | 맨 위 "(모두)" 행 | 전부 켬 ↔ 전부 끔(하나라도 꺼져 있으면 전부 켬) |
+// | 바깥 클릭 · Esc | 닫기 — 닫힐 때 집합이 바뀌었으면 [`take_changed`](ComboControl::take_changed) 1회 |
+//
+// 얼굴 글 = 전부 체크 → `all_label`("전체 서버") · 하나 → 그 항목 라벨 · 여럿 → `many_label`의 `{0}` = 개수 · 없음 → `none_label`.
+// 글은 전부 호스트가 준다(i18n은 호스트 몫 · UI 계층은 문자열을 모른다). 재사용 = 범위 고르기(서버·스키마·종류)처럼 "여럿 중 몇"을 받는 자리 전부.
+
+/// 항목 0 = "(모두)" 행의 값.
+pub const ALL_VALUE: &str = "__all__";
+
+#[derive(Debug)]
+pub struct CheckCombo {
+    base: ControlBase,
+    core: ComboCore,
+    /// 실제 항목(`core.items[1..]`)의 체크 상태.
+    checked: Vec<bool>,
+    /// 열릴 때의 체크 상태(닫힐 때 비교 → 바뀌었으면 보고).
+    opened_with: Vec<bool>,
+    all_label: String,
+    none_label: String,
+    /// `{0}` = 체크 개수.
+    many_label: String,
+}
+
+impl CheckCombo {
+    /// `items` = 실제 항목(앞에 "(모두)" 행을 붙인다) · `checked` = 항목별 초기 체크(길이가 다르면 전부 켬).
+    /// 라벨 셋 = "(모두)" 행 글 · 하나도 없을 때 얼굴 글 · 여럿일 때 얼굴 글(`{0}` = 개수).
+    #[must_use]
+    pub fn new(
+        items: Vec<ComboItem>,
+        checked: Option<Vec<bool>>,
+        all_label: impl Into<String>,
+        none_label: impl Into<String>,
+        many_label: impl Into<String>,
+    ) -> Self {
+        let n = items.len();
+        let checked = checked
+            .filter(|c| c.len() == n)
+            .unwrap_or_else(|| vec![true; n]);
+        let all_label = all_label.into();
+        let mut rows = Vec::with_capacity(n + 1);
+        rows.push(ComboItem::new(ALL_VALUE, all_label.clone()));
+        rows.extend(items);
+        Self {
+            base: ControlBase::default(),
+            core: ComboCore::new(rows, 0),
+            opened_with: checked.clone(),
+            checked,
+            all_label,
+            none_label: none_label.into(),
+            many_label: many_label.into(),
+        }
+    }
+
+    /// 항목을 바꾼다(체크 상태는 **값으로** 이어받는다 · 새 항목 = 켬).
+    pub fn set_items(&mut self, items: Vec<ComboItem>) {
+        let old: Vec<(String, bool)> = self.values_with_checked();
+        let checked: Vec<bool> = items
+            .iter()
+            .map(|it| {
+                old.iter()
+                    .find(|(v, _)| *v == it.value)
+                    .is_none_or(|(_, c)| *c)
+            })
+            .collect();
+        let mut rows = Vec::with_capacity(items.len() + 1);
+        rows.push(ComboItem::new(ALL_VALUE, self.all_label.clone()));
+        rows.extend(items);
+        self.core = ComboCore::new(rows, 0);
+        self.opened_with = checked.clone();
+        self.checked = checked;
+    }
+
+    fn values_with_checked(&self) -> Vec<(String, bool)> {
+        self.core
+            .items()
+            .iter()
+            .skip(1)
+            .zip(&self.checked)
+            .map(|(it, c)| (it.value.clone(), *c))
+            .collect()
+    }
+
+    /// 실제 항목 수.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.checked.len()
+    }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.checked.is_empty()
+    }
+    /// 전부 체크됐는가(항목이 없으면 true = "제한 없음").
+    #[must_use]
+    pub fn all_checked(&self) -> bool {
+        self.checked.iter().all(|c| *c)
+    }
+    /// 체크된 항목 값(목록 순서).
+    #[must_use]
+    pub fn checked_values(&self) -> Vec<String> {
+        self.values_with_checked()
+            .into_iter()
+            .filter_map(|(v, c)| c.then_some(v))
+            .collect()
+    }
+    /// 값으로 체크 지정(보고 없음 · 없는 값 = 무시).
+    pub fn set_checked(&mut self, value: &str, on: bool) {
+        if let Some(i) = self
+            .core
+            .items()
+            .iter()
+            .skip(1)
+            .position(|it| it.value == value)
+        {
+            self.checked[i] = on;
+        }
+    }
+    /// 전부 켬/끔(보고 없음).
+    pub fn set_all(&mut self, on: bool) {
+        self.checked.fill(on);
+    }
+
+    /// 얼굴 글(호스트가 준 라벨 셋으로).
+    #[must_use]
+    pub fn face_text(&self) -> String {
+        let n = self.checked.iter().filter(|c| **c).count();
+        if self.checked.is_empty() || n == self.checked.len() {
+            self.all_label.clone()
+        } else if n == 0 {
+            self.none_label.clone()
+        } else if n == 1 {
+            self.values_with_checked()
+                .iter()
+                .position(|(_, c)| *c)
+                .and_then(|i| self.core.items().get(i + 1))
+                .map_or_else(String::new, |it| it.label.clone())
+        } else {
+            self.many_label.replace("{0}", &n.to_string())
+        }
+    }
+
+    fn toggle(&mut self, i: usize, inv: &mut Invalidations) {
+        if i == 0 {
+            let on = !self.all_checked();
+            self.set_all(on);
+        } else if let Some(c) = self.checked.get_mut(i - 1) {
+            *c = !*c;
+        }
+        inv.push(self.popup_rect().union(&self.base.bounds));
+    }
+
+    /// 닫을 때 집합이 바뀌었으면 보고 깃발.
+    fn close_report(&mut self, inv: &mut Invalidations) {
+        if self.core.open {
+            if self.checked != self.opened_with {
+                self.core.changed = true;
+            }
+            self.close(inv);
+        }
+    }
+}
+
+impl Control for CheckCombo {
+    fn base(&self) -> &ControlBase {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut ControlBase {
+        &mut self.base
+    }
+}
+
+impl ComboControl for CheckCombo {
+    fn core(&self) -> &ComboCore {
+        &self.core
+    }
+    fn core_mut(&mut self) -> &mut ComboCore {
+        &mut self.core
+    }
+    /// 값 = 체크된 값들을 `;`로.
+    fn value(&self) -> String {
+        self.checked_values().join(";")
+    }
+    /// 항목 선택 = **토글** · 닫지 않는다.
+    fn choose_index(&mut self, i: usize, inv: &mut Invalidations) {
+        if i < self.core.items().len() {
+            self.toggle(i, inv);
+        }
+    }
+    fn toggle_open(&mut self, inv: &mut Invalidations) {
+        if self.core.open {
+            self.close_report(inv);
+            return;
+        }
+        self.opened_with = self.checked.clone();
+        let b = self.base.bounds;
+        self.core.open = true;
+        self.core.hover = 0;
+        self.core.item_fade.jump(Some(0));
+        inv.push(self.popup_rect().union(&b));
+    }
+    /// ✓ 표식은 쓰지 않는다(행마다 체크박스를 그린다).
+    fn checked_index(&self) -> Option<usize> {
+        None
+    }
+    /// 드롭다운 — 행마다 체크박스 글리프 + 라벨("(모두)" 행은 전부 켜졌을 때만 체크 · 아래 얇은 구분선).
+    fn paint_dropdown(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let pop = self.popup_rect();
+        ctx.fill_round_rect(pop, self.s(8), theme.chrome_bg);
+        ctx.stroke_round_rect(pop, self.s(8), theme.border, 1.0);
+        let rh = self.s(26);
+        let mut y = pop.y + self.s(4);
+        let all = self.all_checked();
+        for (i, it) in self.core.items().iter().enumerate() {
+            let row = Rect::new(pop.x + self.s(3), y, pop.w - self.s(6), rh);
+            let v = self.core.item_fade.value(i);
+            if v > 0.0 {
+                let (hc, ha) = hover_color(theme);
+                ctx.fill_round_rect_alpha(row, self.s(5), hc, ha * v);
+            }
+            let cs = self.s(14);
+            let bx = Rect::new(row.x + self.s(6), row.y + (rh - cs) / 2, cs, cs);
+            let on = if i == 0 {
+                all
+            } else {
+                self.checked.get(i - 1).copied().unwrap_or(false)
+            };
+            draw_checkbox_glyph(ctx, theme, bx, on, true);
+            ctx.select_font(FontSlot::Base, false);
+            let th = ctx.text_height();
+            let color = if i == 0 { theme.text_dim } else { theme.text };
+            ctx.text(
+                bx.right() + self.s(8),
+                row.y + (rh - th) / 2,
+                row,
+                &it.label,
+                color,
+            );
+            y += rh;
+            if i == 0 {
+                ctx.fill_rect(
+                    Rect::new(pop.x + self.s(8), y, pop.w - self.s(16), 1),
+                    theme.border,
+                );
+            }
+        }
+    }
+}
+
+impl Widget for CheckCombo {
+    fn bounds(&self) -> Rect {
+        self.base.bounds
+    }
+    fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
+        self.base.bounds = bounds;
+        inv.push(bounds);
+    }
+    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        match *ev {
+            InputEvent::MouseMove { x, y } => {
+                let over = self.base.bounds.contains(Point { x, y });
+                self.core.box_hover.set(over);
+                if self.core.open {
+                    let t = match self.popup_hit(x, y) {
+                        Some(PopupHit::Item(i)) => Some(i),
+                        _ => None,
+                    };
+                    self.core.item_fade.set(t);
+                }
+            }
+            InputEvent::MouseDown { x, y, .. } => {
+                let badge = self.help_badge_rect(self.base.bounds);
+                if self.handle_help_click(x, y, badge) {
+                    inv.push(self.base.bounds);
+                    return;
+                }
+                if self.core.open {
+                    match self.popup_hit(x, y) {
+                        Some(PopupHit::Item(i)) => self.toggle(i, inv),
+                        Some(PopupHit::Extra(_)) => {}
+                        None => self.close_report(inv),
+                    }
+                    return;
+                }
+                if self.base.bounds.contains(Point { x, y }) {
+                    self.set_focused(true);
+                    self.toggle_open(inv);
+                }
+            }
+            InputEvent::Key { key, .. } if self.is_focused() => match key {
+                Key::Escape => self.close_report(inv),
+                Key::Enter | Key::Space => {
+                    if self.core.open {
+                        let h = self.core.hover;
+                        self.toggle(h, inv);
+                    } else {
+                        self.toggle_open(inv);
+                    }
+                }
+                Key::Down => {
+                    if self.core.open {
+                        self.move_hover(1);
+                        inv.push(self.popup_rect());
+                    } else {
+                        self.toggle_open(inv);
+                    }
+                }
+                Key::Up if self.core.open => {
+                    self.move_hover(-1);
+                    inv.push(self.popup_rect());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let text = self.face_text();
+        self.paint_combo(ctx, theme, &text);
+    }
+}
+
+#[cfg(test)]
+mod checkcombo_tests {
+    use super::*;
+
+    fn mk() -> CheckCombo {
+        let items = vec![
+            ComboItem::new("a", "Alpha"),
+            ComboItem::new("b", "Beta"),
+            ComboItem::new("c", "Gamma"),
+        ];
+        let mut c = CheckCombo::new(items, None, "All servers", "No server", "{0} selected");
+        let mut inv = Invalidations::default();
+        c.set_bounds(Rect::new(0, 0, 160, 26), &mut inv);
+        c
+    }
+    fn click(x: i32, y: i32) -> InputEvent {
+        InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        }
+    }
+    fn row_y(c: &CheckCombo, i: usize) -> i32 {
+        let pop = c.popup_rect();
+        pop.y + 4 + 26 * i as i32 + 13
+    }
+
+    #[test]
+    fn toggle_keeps_popup_open_and_reports_on_close() {
+        let mut c = mk();
+        let mut inv = Invalidations::default();
+        assert_eq!(c.face_text(), "All servers");
+        c.on_event(&click(10, 10), &mut inv);
+        assert!(c.is_open());
+        // 항목 1(Alpha) 토글 → 열린 채 · 얼굴 = 2개.
+        c.on_event(&click(20, row_y(&c, 1)), &mut inv);
+        assert!(c.is_open(), "토글해도 닫히지 않는다");
+        assert_eq!(c.checked_values(), vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(c.face_text(), "2 selected");
+        assert!(c.take_changed().is_none(), "닫히기 전엔 보고 없음");
+        // 바깥 클릭 = 닫기 + 보고.
+        c.on_event(&click(400, 400), &mut inv);
+        assert!(!c.is_open());
+        assert_eq!(c.take_changed().as_deref(), Some("b;c"));
+        // 하나만 남기면 얼굴 = 그 라벨 · 전부 끄면 none 글.
+        c.set_checked("b", false);
+        assert_eq!(c.face_text(), "Gamma");
+        c.set_all(false);
+        assert_eq!(c.face_text(), "No server");
+    }
+
+    #[test]
+    fn all_row_toggles_everything() {
+        let mut c = mk();
+        let mut inv = Invalidations::default();
+        c.set_checked("a", false);
+        c.on_event(&click(10, 10), &mut inv);
+        // 하나라도 꺼져 있으면 "(모두)" = 전부 켬 → 다시 = 전부 끔.
+        c.on_event(&click(20, row_y(&c, 0)), &mut inv);
+        assert!(c.all_checked());
+        c.on_event(&click(20, row_y(&c, 0)), &mut inv);
+        assert!(c.checked_values().is_empty());
+        // Esc = 닫기 + 보고(바뀜).
+        c.on_event(
+            &InputEvent::Key {
+                key: Key::Escape,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(!c.is_open());
+        assert_eq!(c.take_changed().as_deref(), Some(""));
+    }
+
+    #[test]
+    fn set_items_keeps_checks_by_value() {
+        let mut c = mk();
+        c.set_checked("b", false);
+        c.set_items(vec![
+            ComboItem::new("b", "Beta"),
+            ComboItem::new("z", "Zed"),
+        ]);
+        assert_eq!(
+            c.checked_values(),
+            vec!["z".to_string()],
+            "b 꺼짐 유지 · 새 항목 켬"
+        );
+        assert_eq!(c.len(), 2);
     }
 }
 
