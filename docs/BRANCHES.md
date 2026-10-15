@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| fix/207-toolbar-danger-hover | 2026-10-16 | 2026-10-16 → main(삭제) | 1 | 툴바 `ToolTone::Danger` 항목은 hover/pressed에도 빨강 유지(종전 hover 하늘색이 덮어 무장이 "효과 없음"처럼 보임 · Glyph·Mask · 207차 · nexa-sql 10-16 운영 Commit 무장) |
 | fix/206-font-map-race | 2026-10-14 | 2026-10-14 → main(삭제) | 1 | 206차 nexa-font `map_font` TOCTOU 수정(잠금 한 구간 · 병렬 회귀 시험) · CONSUMER-CHANGES 206 · STATUS · DEVLOG · journal 10-14 |
 | docs/122-ci | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 204·205차 커밋·CI 줄(a21d6e6 · aebba67 ci 38405206766 ✓ · 소비 nexa-sql b79db0e ci 38408130076 ✓) · journal 10-13 §3 · CONSUMER-CHANGES 상태 |
 | docs/204-205-hash | 2026-10-13 | 2026-10-13 → main(삭제) | 1 | 204·205차 CONSUMER-CHANGES 행 해시 a21d6e6 |

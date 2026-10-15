@@ -69,7 +69,8 @@ pub enum ToolIcon {
 }
 
 /// 마스크 아이콘의 기본 색조(09-16 nexa-sql "연결이 하나라도 있으면 Connect 버튼을 밝은 녹색으로").
-/// hover/pressed는 색조와 무관하게 accent · 비활성은 흐림.
+/// hover/pressed는 색조와 무관하게 accent · 비활성은 흐림 — ★ 예외 `Danger`(207차 · nexa-sql 10-16): 경고 상태(운영 Commit 무장 등)는
+/// hover/pressed에도 **빨강을 유지**한다(hover 하늘색으로 바뀌면 "아무 효과 없음"처럼 보였다 · 눌림은 1px 내림만).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ToolTone {
     /// 테마 기준색(`Theme::text`).
@@ -967,7 +968,7 @@ impl Toolbar {
                         theme.text_dim
                     } else if let Some(c) = soft_on {
                         c
-                    } else if (is_hover || is_pressed) && !it.label {
+                    } else if (is_hover || is_pressed) && !it.label && it.tone != ToolTone::Danger {
                         theme.accent
                     } else {
                         match it.tone {
@@ -1026,7 +1027,7 @@ impl Toolbar {
                         theme.text_dim
                     } else if let Some(c) = soft_on {
                         c
-                    } else if is_hover || is_pressed {
+                    } else if (is_hover || is_pressed) && it.tone != ToolTone::Danger {
                         theme.accent
                     } else {
                         match it.tone {
