@@ -96,6 +96,17 @@ impl Switch {
     }
 
     /// 토글되었으면 새 상태를 꺼낸다(1회성).
+    /// ★ 라벨까지 꼭 맞는 폭(트랙 + 틈 + 라벨 글 폭 · 라벨 없음 = 트랙) — 호스트가 i18n 라벨 길이에 맞춰 오른쪽 끝에 **빈틈 없이**
+    ///   붙여 놓을 때(nexa-sql 메모리 창 "상세·최상위" · 사용자 10-16). 글꼴은 그릴 때와 같은 Base 보통.
+    pub fn wanted_width(&self, ctx: &mut dyn DrawCtx) -> i32 {
+        let w = self.track_w();
+        if self.side == LabelSide::None || self.label.is_empty() {
+            return w;
+        }
+        ctx.select_font(FontSlot::Base, false);
+        w + self.s(GAP) + ctx.text_width(&self.label)
+    }
+
     pub fn take_toggled(&mut self) -> Option<bool> {
         std::mem::take(&mut self.toggled).then_some(self.on)
     }
