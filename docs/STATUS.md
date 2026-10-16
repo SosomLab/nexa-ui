@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-16 (210차 · win · nexa-sql 128차 객체 찾기)** — nexa-ctl `CtxItem.danger`/`with_danger`(추가) · nexa-sys `last_message_age_ms()`(추가 · Windows만) — [CONSUMER-CHANGES](CONSUMER-CHANGES.md) · nexa-sql journal 10-16 §6 53·55.
 - **2026-10-16 (209차 · win · nexa-sql 128차 객체 찾기 미리보기 스위치)** — nexa-ctl `Switch` 끔 트랙 대비(글자색 22 % 막 · 동작 변경 = 그림 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-16 §6.
 - **2026-10-16 (208차 · win · nexa-sql 128차 T-358)** — nexa-ctl **`CheckCombo`**(체크박스 다중 선택 콤보 · 추가 · 기존 `Combo` 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-16 §5.
 - **2026-10-16 (207차 · win · nexa-sql 128차 운영 Commit 무장)** — 툴바 `ToolTone::Danger` 항목 hover/pressed에도 빨강 유지(수정 · Glyph·Mask — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-16 §1.
