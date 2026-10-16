@@ -74,6 +74,36 @@ pub fn cpu_count() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
+/// ★ 지금 처리 중인 OS 입력 메시지가 **큐에서 기다린 시간**(ms) — Windows `GetTickCount − GetMessageTime`(이 스레드가 마지막으로 꺼낸
+/// 메시지의 시각 · 창 프로시저 안에서 부르면 지금 그 메시지) · 그 밖 OS = `None`.
+/// 쓰는 곳: nexa-sql 객체 찾기 "클릭 vs 키 반응 차이" 계측(10-16) — 컨트롤이 받은 뒤가 아니라 **OS가 넘긴 시점**부터 재서,
+/// 이벤트 루프가 다른 일(그리기·수거)로 바빠 메시지를 늦게 꺼낸 시간을 드러낸다.
+#[cfg(all(feature = "gui", windows))]
+#[must_use]
+pub fn last_message_age_ms() -> Option<u32> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetMessageTime() -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTickCount() -> u32;
+    }
+    // SAFETY: 인자 없는 user32/kernel32 조회 — 호출 스레드의 메시지 큐 상태와 틱 수만 읽는다.
+    let (t, now) = unsafe { (GetMessageTime(), GetTickCount()) };
+    if t == 0 {
+        return None;
+    }
+    Some(now.wrapping_sub(t as u32))
+}
+
+/// 지원하지 않는 OS(macOS · Linux) = 신호 없음.
+#[cfg(all(feature = "gui", not(windows)))]
+#[must_use]
+pub fn last_message_age_ms() -> Option<u32> {
+    None
+}
+
 #[cfg(windows)]
 mod imp {
     //! Windows — kernel32 `GetSystemPowerStatus` · user32 `GetSystemMetrics` · `SystemParametersInfoW`(수동 extern · windows-sys 없음).

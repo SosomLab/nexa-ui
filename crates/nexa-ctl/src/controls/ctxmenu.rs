@@ -130,6 +130,9 @@ pub enum CtxItem {
         sub: Option<String>,
         /// 전체 일치 = 굵게 + 파랑(#0000FF · 완성 팝업 · 사용자 09-24).
         emph: bool,
+        /// ★ 경고 항목(굵게 + 테마 `danger` 색 · hover 행은 반전 글자색 그대로) — 되돌릴 수 없는 확정(“예, N개 탭의 변경을 버리고 닫기” ·
+        /// nexa-sql 10-16 사용자 "두 번째 질문은 경고 느낌의 강조"). `emph`와 함께 켜지면 이쪽이 이긴다.
+        danger: bool,
         /// 라벨 안 일치 구간(바이트 범위 · 강조색으로 · 부분 일치).
         marks: Vec<std::ops::Range<usize>>,
         /// 하위 메뉴(비면 없음).
@@ -158,6 +161,7 @@ impl CtxItem {
             shortcut: None,
             sub: None,
             emph: false,
+            danger: false,
             marks: Vec::new(),
             children: Vec::new(),
             checked: None,
@@ -176,6 +180,7 @@ impl CtxItem {
             shortcut: None,
             sub: None,
             emph: false,
+            danger: false,
             marks: Vec::new(),
             children: Vec::new(),
             checked: None,
@@ -201,6 +206,7 @@ impl CtxItem {
             shortcut: None,
             sub: None,
             emph: false,
+            danger: false,
             marks: Vec::new(),
             children,
             checked: None,
@@ -221,6 +227,14 @@ impl CtxItem {
     pub fn with_emphasis(mut self, on: bool) -> Self {
         if let Self::Item { emph, .. } = &mut self {
             *emph = on;
+        }
+        self
+    }
+    /// ★ 경고 강조(굵게 + `danger` 색) — 되돌릴 수 없는 확정 항목.
+    #[must_use]
+    pub fn with_danger(mut self, on: bool) -> Self {
+        if let Self::Item { danger, .. } = &mut self {
+            *danger = on;
         }
         self
     }
@@ -1711,6 +1725,7 @@ impl ContextMenu {
                     shortcut,
                     sub,
                     emph,
+                    danger,
                     marks,
                     children,
                     checked,
@@ -1798,6 +1813,15 @@ impl ContextMenu {
                     // 라벨 = 전체 일치면 굵게+파랑 · 부분 일치 구간은 강조색(hover 행은 본문색 그대로 · 09-24).
                     let blue = Color::from_rgb(0, 0, 255);
                     let draw_label = |ctx: &mut dyn DrawCtx, lx: i32, clip: Rect| -> i32 {
+                        // ★ 경고 항목 = 굵게 + 테마 danger(hover 행은 반전 글자색 · nexa-sql "모두 취소" 2단 확정 · 10-16).
+                        if *danger {
+                            ctx.select_font(FontSlot::Base, true);
+                            let c = if hot { fg } else { theme.danger };
+                            ctx.text(lx, ty, clip, label, c);
+                            let w = ctx.text_width(label);
+                            ctx.select_font(FontSlot::Base, false);
+                            return w;
+                        }
                         if *emph {
                             ctx.select_font(FontSlot::Base, true);
                             let c = if hot { fg } else { blue };
