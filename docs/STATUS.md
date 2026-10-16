@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-17 (212차 · mac · nexa-sql 130차 T-352)** — nexa-sys `open_files`(macOS Finder·`open -a` 파일 전달 · 추가 · 맥만 동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 소비 = nexa-sql `open_os_path` · journal 10-16 §6.
 - **2026-10-16 (211차 · win · nexa-sql 128차 메모리 창)** — nexa-ctl `Switch::wanted_width(ctx)`(추가 · 트랙 + 틈 + 라벨 글 폭) — [CONSUMER-CHANGES](CONSUMER-CHANGES.md) · nexa-sql journal 10-16 §6 64.
 - **2026-10-16 (210차 · win · nexa-sql 128차 객체 찾기)** — nexa-ctl `CtxItem.danger`/`with_danger`(추가) · nexa-sys `last_message_age_ms()`(추가 · Windows만) — [CONSUMER-CHANGES](CONSUMER-CHANGES.md) · nexa-sql journal 10-16 §6 53·55.
 - **2026-10-16 (209차 · win · nexa-sql 128차 객체 찾기 미리보기 스위치)** — nexa-ctl `Switch` 끔 트랙 대비(글자색 22 % 막 · 동작 변경 = 그림 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · nexa-sql journal 10-16 §6.

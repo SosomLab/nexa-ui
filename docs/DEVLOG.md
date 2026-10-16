@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-17 (212차 · mac)** — nexa-sys `open_files`(macOS 앱 델리게이트 `application:openFiles:` 덧붙임 · 경로 큐 · 그 밖 OS 0) — journal 10-16 §6.
 - **2026-10-16 (211차 · win)** — `Switch::wanted_width`(라벨 길이에 맞춘 폭 · i18n 라벨이 달라도 오른쪽 끝 정렬) — journal 10-16 §5.
 - **2026-10-16 (210차 · win)** — 메뉴 항목 위험 표시 `CtxItem.danger`(굵게 + danger 색) · OS 큐 대기 `nexa_sys::last_message_age_ms`(Windows `GetTickCount − GetMessageTime` · 그 밖 None) — journal 10-16 §4.
 - **2026-10-16 (209차 · win)** — `Switch` 끔 트랙 = 글자색 22 % 막(종전 `panel_bg_alt` + 테두리뿐 → `chrome_bg` 위에서 안 보임) — journal 10-16 §3.

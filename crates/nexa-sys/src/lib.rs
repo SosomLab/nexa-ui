@@ -23,6 +23,9 @@ pub mod layer_present;
 pub mod locale;
 /// ★ 네트워크 경로 변경 신호(L0 · nexa-sql T-313 ⑤ · Windows iphlpapi · 그 밖 OS = None).
 pub mod netwatch;
+/// ★ OS 파일 열기 사건(macOS Finder Apple Event `odoc` → 델리게이트 메서드 덧붙임 · 그 밖 OS = argv 경로라 `false`/빈 값 · nexa-sql T-352).
+#[cfg(feature = "gui")]
+pub mod open_files;
 
 /// 네 신호를 한 번에 읽은 스냅샷(호출자가 캐시한다).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
