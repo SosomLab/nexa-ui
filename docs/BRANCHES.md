@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| fix/209-switch-off-contrast | 2026-10-16 | 2026-10-16 → main(삭제) | 2 | `Switch` 끔 트랙 = 글자색 22 % 막(머리글 chrome_bg 위에서 안 보이던 것 · 209차 · nexa-sql 객체 찾기 "미리보기" 스위치) · 소비자 변경 209 · journal 10-16 §3 |
 | feat/208-check-combo | 2026-10-16 | 2026-10-16 → main(삭제) | 2 | ★ `CheckCombo` 체크박스 다중 선택 콤보(`ComboControl` 상속 · "(모두)" 행 · 토글 = 열린 채 · 닫힐 때 1회 보고 · 시험 3 · 208차 · nexa-sql T-358 객체 찾기 서버 선택) · 소비자 변경 207·208 · journal 10-16 |
 | fix/207-toolbar-danger-hover | 2026-10-16 | 2026-10-16 → main(삭제) | 1 | 툴바 `ToolTone::Danger` 항목은 hover/pressed에도 빨강 유지(종전 hover 하늘색이 덮어 무장이 "효과 없음"처럼 보임 · Glyph·Mask · 207차 · nexa-sql 10-16 운영 Commit 무장) |
 | fix/206-font-map-race | 2026-10-14 | 2026-10-14 → main(삭제) | 1 | 206차 nexa-font `map_font` TOCTOU 수정(잠금 한 구간 · 병렬 회귀 시험) · CONSUMER-CHANGES 206 · STATUS · DEVLOG · journal 10-14 |

@@ -183,12 +183,13 @@ impl Widget for Switch {
         let tr = self.track_rect();
         let radius = tr.h / 2;
         self.draw_focus_ring(ctx, theme, tr);
-        // 트랙 — 켜짐 = iOS 그린 · 꺼짐 = 중립 회색(테마 대체 패널색 + 1px 테두리 —
-        // 라이트 모드에서 흰 배경과 붙는 것 방지).
+        // 트랙 — 켜짐 = iOS 그린 · 꺼짐 = 중립 회색(테마 대체 패널색 + **글자색 22 % 막** + 1px 테두리 — 209차 · nexa-sql 10-16
+        // 협업 관찰 "꺼진 트랙이 머리글 배경(chrome_bg)과 붙어 거의 안 보임" → 어느 배경 위에서도 흰 손잡이와 대비가 남는다).
         if self.on {
             ctx.fill_round_rect(tr, radius, ON_GREEN);
         } else {
             ctx.fill_round_rect(tr, radius, theme.panel_bg_alt);
+            ctx.fill_round_rect_alpha(tr, radius, theme.text, 0.22);
             ctx.stroke_round_rect(tr, radius, theme.border, 1.0);
         }
         // 손잡이 — 흰 원. **위치가 상태를 말한다**(좌=꺼짐 · 우=켜짐).

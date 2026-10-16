@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-16 (209차 · win)** — `Switch` 끔 트랙 = 글자색 22 % 막(종전 `panel_bg_alt` + 테두리뿐 → `chrome_bg` 위에서 안 보임) — journal 10-16 §3.
 - **2026-10-16 (208차 · win · nexa-sql T-358)** — nexa-ctl `CheckCombo`(`ComboCore` 상속 · "(모두)" 행 · 토글 = 열린 채 · 닫힐 때 `take_changed` 1회 · 얼굴 글 4종 = 호스트 · 시험 3) — journal 10-16 §2.
 - **2026-10-16 (207차 · win)** — 툴바 `ToolTone::Danger` hover/pressed 빨강 유지(종전 hover 하늘색이 무장 색을 덮음) — journal 10-16 §1.
 - **2026-10-14 (206차 · linux · nexa-sql 124차 T-344)** — nexa-font `map_font` 검사→mmap→push 잠금 한 구간 · 중독 잠금 `into_inner` · 병렬 회귀 시험 8스레드 Barrier · 11/0 — journal 10-14 §1.
