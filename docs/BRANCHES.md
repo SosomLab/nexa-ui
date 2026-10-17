@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| fix/213-present-pool | 2026-10-17 | 2026-10-17 → main(삭제) | 1 | 213차 맥 iosurface 표면 선택(prev 회피 · 바쁘면 건너뜀 · 풀 4 · busy_reuse/forced 진단) · nexa-sql 130차 객체 찾기 깜빡임 |
 | feat/212-open-files | 2026-10-17 | 2026-10-17 → main(삭제) · c10be48 | 1 | 212차 nexa-sys `open_files`(macOS Finder·`open -a` 파일 전달 = 앱 델리게이트 `application:openFiles:` · 그 밖 OS 0) — nexa-sql 130차 T-352 |
 | fix/209-switch-off-contrast | 2026-10-16 | 2026-10-16 → main(삭제) | 2 | `Switch` 끔 트랙 = 글자색 22 % 막(머리글 chrome_bg 위에서 안 보이던 것 · 209차 · nexa-sql 객체 찾기 "미리보기" 스위치) · 소비자 변경 209 · journal 10-16 §3 |
 | feat/208-check-combo | 2026-10-16 | 2026-10-16 → main(삭제) | 2 | ★ `CheckCombo` 체크박스 다중 선택 콤보(`ComboControl` 상속 · "(모두)" 행 · 토글 = 열린 채 · 닫힐 때 1회 보고 · 시험 3 · 208차 · nexa-sql T-358 객체 찾기 서버 선택) · 소비자 변경 207·208 · journal 10-16 |

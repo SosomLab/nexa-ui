@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-17 (213차 · mac)** — `LayerPresenter` 장 선택 규칙(front·prev 회피 · 다 바쁘면 프레임 건너뜀 · 풀 4 · 진단 `busy_reuse`/`forced`) = nexa-sql 객체 찾기 깜빡임 — journal 10-16 §7.
 - **2026-10-17 (212차 · mac)** — nexa-sys `open_files`(macOS 앱 델리게이트 `application:openFiles:` 덧붙임 · 경로 큐 · 그 밖 OS 0) — journal 10-16 §6.
 - **2026-10-16 (211차 · win)** — `Switch::wanted_width`(라벨 길이에 맞춘 폭 · i18n 라벨이 달라도 오른쪽 끝 정렬) — journal 10-16 §5.
 - **2026-10-16 (210차 · win)** — 메뉴 항목 위험 표시 `CtxItem.danger`(굵게 + danger 색) · OS 큐 대기 `nexa_sys::last_message_age_ms`(Windows `GetTickCount − GetMessageTime` · 그 밖 None) — journal 10-16 §4.
