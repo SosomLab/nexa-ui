@@ -131,6 +131,11 @@ pub struct ComboCore {
     /// 마지막 paint가 본 그리기 표면의 높이 — 호스트가 `viewport_bottom`을 주지 않아도 목록이 창 아래로 잘리지 않게 하는
     /// 안전망(팝업 배치 규칙 · nexa-sql 사용자 09-21). 닫힌 상태의 paint에서도 배우므로 열리는 첫 프레임부터 맞다.
     surface_bottom: std::cell::Cell<Option<i32>>,
+    /// 마지막 paint가 본 표면 폭(215차) — 넓힌 팝업이 창 오른쪽을 넘지 않게 왼쪽으로 당기는 한계.
+    surface_right: std::cell::Cell<Option<i32>>,
+    /// 마지막 paint가 잰 **팝업 내용 폭**(215차 · nexa-dir3 10-18 "메뉴가 잘려 보임") = 가장 긴 행(✓ 슬롯 + 선행 아이콘 + 라벨 + 안팎 여백).
+    /// 팝업 폭 = `max(박스 폭, 이 값)` — 좁은 박스("…" 아이콘 꼴)에서도 항목이 잘리지 않는다. 닫힌 paint에서도 재므로 여는 첫 프레임부터 맞다.
+    content_w: std::cell::Cell<Option<i32>>,
 }
 
 impl ComboCore {
@@ -159,6 +164,8 @@ impl ComboCore {
             changed: false,
             viewport_bottom: None,
             surface_bottom: std::cell::Cell::new(None),
+            surface_right: std::cell::Cell::new(None),
+            content_w: std::cell::Cell::new(None),
         }
     }
 }
@@ -334,7 +341,15 @@ pub trait ComboControl: Control {
                 y = (limit - h).min(b.y - self.s(2) - h).max(0);
             }
         }
-        Rect::new(b.x, y, b.w, h)
+        // 폭 = 박스 폭과 내용 폭 가운데 큰 쪽(215차) · 표면 오른쪽을 넘으면 왼쪽으로 당긴다(0에서 멈춤).
+        let w = b.w.max(self.core().content_w.get().unwrap_or(0));
+        let mut x = b.x;
+        if let Some(right) = self.core().surface_right.get() {
+            if x + w > right {
+                x = (right - w).max(0);
+            }
+        }
+        Rect::new(x, y, w, h)
     }
     /// (x,y) → 드롭다운 히트(항목/확장).
     fn popup_hit(&self, x: i32, y: i32) -> Option<PopupHit> {
@@ -376,11 +391,35 @@ pub trait ComboControl: Control {
     }
 
     // ── 렌더 ──
+    /// 팝업이 항목을 잘리지 않고 담는 데 필요한 폭(215차) — 행 안팎 여백(3+6 · ✓ 11 · 6 · … · 6+3)은 [`Self::paint_dropdown`]의 배치와 같은 식.
+    fn measure_content_w(&self, ctx: &mut dyn DrawCtx) -> i32 {
+        ctx.select_font(FontSlot::Base, false);
+        let lead = |ctx: &mut dyn DrawCtx, it: &ComboItem| -> i32 {
+            if it.image.is_some() {
+                self.s(ICON_SZ) + self.s(3)
+            } else if let Some(g) = it.icon.as_deref() {
+                ctx.text_width(g) + self.s(3)
+            } else {
+                0
+            }
+        };
+        let mut w = 0;
+        for it in self.core().items.iter().chain(self.extra_rows().iter()) {
+            w = w.max(lead(ctx, it) + ctx.text_width(&it.label));
+        }
+        if w == 0 {
+            return 0;
+        }
+        w + self.s(3 + 6 + 11 + 6 + 6 + 3)
+    }
+
     /// 닫힌 박스 + 셰브론 + (열렸으면) 드롭다운을 그린다. 편집 텍스트는 구현체가 `box_text`로 제공.
     fn paint_combo(&self, ctx: &mut dyn DrawCtx, theme: &Theme, box_text: &str) {
-        if let Some((_, sh)) = ctx.surface_size() {
+        if let Some((sw, sh)) = ctx.surface_size() {
             self.core().surface_bottom.set(Some(sh));
+            self.core().surface_right.set(Some(sw));
         }
+        self.core().content_w.set(Some(self.measure_content_w(ctx)));
         let b = self.bounds();
         ctx.fill_round_rect(b, self.s(6), theme.field_bg);
         // ★ hover — 열려 있을 때는 얹지 않는다(드롭다운이 이미 시선을 가져갔다).
@@ -1575,6 +1614,45 @@ mod checkcombo_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 팝업 폭(215차): 긴 항목 = 박스보다 넓은 팝업(항목이 잘리지 않음) · 표면 오른쪽 안 · 짧은 항목 = 박스 폭 그대로 · 창 오른쪽 끝 박스 = 왼쪽으로 당김.
+    #[test]
+    fn popup_widens_to_longest_item_and_stays_inside_surface() {
+        use crate::controls::RecordCtx;
+        let th = Theme::default();
+        let mut inv = Invalidations::default();
+        let mut c = Combo::new(
+            vec![
+                ComboItem::new("", "…"),
+                ComboItem::new("save", "이름 변경 시퀀스 저장…"),
+                ComboItem::new("edit", "이름 변경 시퀀스 편집…"),
+            ],
+            0,
+        );
+        c.set_bounds(Rect::new(10, 500, 64, 26), &mut inv);
+        let mut dc = RecordCtx::with_surface(600, 560);
+        c.paint(&mut dc, &th);
+        let longest = dc.text_width("이름 변경 시퀀스 저장…");
+        c.toggle_open(&mut inv);
+        let pop = c.popup_rect();
+        assert!(
+            pop.w > 64 && pop.w >= longest + 35,
+            "{pop:?} longest={longest}"
+        );
+        assert_eq!(pop.x, 10, "자리가 있으면 박스 왼쪽에 맞춘다");
+        assert!(pop.right() <= 600 && pop.bottom() <= 560, "{pop:?}");
+        // 창 오른쪽 끝의 박스 = 왼쪽으로 당겨 표면 안에.
+        c.set_bounds(Rect::new(560, 500, 30, 26), &mut inv);
+        c.paint(&mut dc, &th);
+        let pop = c.popup_rect();
+        assert!(pop.right() <= 600 && pop.x < 560, "{pop:?}");
+        // 짧은 항목 = 박스 폭 그대로.
+        let mut short = Combo::new(items(), 0);
+        short.set_bounds(Rect::new(0, 0, 200, 26), &mut inv);
+        short.paint(&mut dc, &th);
+        short.toggle_open(&mut inv);
+        assert_eq!(short.popup_rect().w, 200);
+    }
 
     fn items() -> Vec<ComboItem> {
         vec![
