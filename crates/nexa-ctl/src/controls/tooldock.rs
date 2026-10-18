@@ -814,6 +814,24 @@ impl ToolDock {
     }
 
     /// 툴팁(팝업 층).
+    /// 어느 바든 툴팁이 보이거나 그룹 손잡이 이름 툴팁이 보이는가(`paint_tooltip`이 그리는 조건과 같다 · 217차) — 호스트의
+    /// 부분 다시 그리기가 이때는 전체로 바꾼다.
+    #[must_use]
+    pub fn tooltip_visible(&self) -> bool {
+        let bar = self
+            .order
+            .iter()
+            .any(|&i| !self.is_floating_idx(i) && self.bars[i].tooltip_visible());
+        let grip = self
+            .hover_grip
+            .filter(|_| self.drag.is_none())
+            .is_some_and(|i| {
+                self.groups.get(i).is_some_and(|g| !g.title.is_empty())
+                    && self.grips.get(i).is_some_and(|r| r.w > 0)
+            });
+        bar || grip
+    }
+
     pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         // 도크의 폭(= 창 폭) 안에 — 오른쪽 정렬 그룹의 툴팁도 창 안에서 왼쪽으로 밀린다.
         let clamp = (self.base.bounds.x, self.base.bounds.right());

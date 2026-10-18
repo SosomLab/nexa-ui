@@ -682,6 +682,14 @@ impl Toolbar {
 
     /// hover 항목의 툴팁을 그린다(08-23) — **팝업 레이어**에서 부른다(다른
     /// 크롬(필터 바 등)이 바 아래 띠를 덮으므로 paint 안에서 그리면 가려진다).
+    /// 툴팁이 보이는가(hover 항목에 툴팁 글이 있다 = `paint_tooltip`이 그린다 · 217차) — 툴팁은 슬롯 밖에 그려지므로 호스트의
+    /// 부분 다시 그리기(dir3 damage)가 이때는 전체로 바꾼다.
+    #[must_use]
+    pub fn tooltip_visible(&self) -> bool {
+        self.hover
+            .is_some_and(|i| self.items[i].visible && !self.items[i].tip.is_empty())
+    }
+
     pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         // 혼자 있는 바(플로팅 창)는 자기 폭보다 넓게 허용(창이 좁아도 툴팁은 보이게).
         let x1 = self
@@ -1116,6 +1124,38 @@ impl Toolbar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 217차: 툴팁 가시 판정 = hover 항목에 툴팁 글이 있을 때만(툴팁 없는 항목 · 떠남 = 거짓).
+    #[test]
+    fn tooltip_visible_follows_hover_and_tip() {
+        let mut t = Toolbar::new(vec![
+            ToolItem::new("a", ToolIcon::Glyph("a".into())).tip("tip a"),
+            ToolItem::new("b", ToolIcon::Glyph("b".into())),
+        ]);
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 200, 30), &mut inv);
+        assert!(!t.tooltip_visible());
+        let ra = t.item_rect("a").unwrap();
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: ra.x + 2,
+                y: ra.y + 2,
+            },
+            &mut inv,
+        );
+        assert!(t.tooltip_visible(), "툴팁 글 있는 항목 hover");
+        let rb = t.item_rect("b").unwrap();
+        t.on_event(
+            &InputEvent::MouseMove {
+                x: rb.x + 2,
+                y: rb.y + 2,
+            },
+            &mut inv,
+        );
+        assert!(!t.tooltip_visible(), "툴팁 없는 항목");
+        t.on_event(&InputEvent::MouseMove { x: -50, y: -50 }, &mut inv);
+        assert!(!t.tooltip_visible(), "떠남");
+    }
 
     #[test]
     fn set_tip_replaces_by_id_and_reports_change() {
