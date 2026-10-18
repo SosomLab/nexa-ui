@@ -1006,43 +1006,109 @@ pub mod image_cache {
     /// 사본이 있고 그 크기가 이 상자에 맞는 결과와 같거나(또는 원본이면) 그대로 돌려준다 · 더 큰 상자면 다시 디코드해 교체.
     pub fn get_fit(path: &str, max_w: u32, max_h: u32) -> Option<Rc<IconImage>> {
         let st = stamp(path);
+        let hit = CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            c.tick += 1;
+            let tick = c.tick;
+            let s = c.map.get_mut(path)?;
+            if s.stamp != st {
+                return None;
+            }
+            let ok = match &s.img {
+                None => true,
+                Some(img) => {
+                    let is_full = (img.w, img.h) == s.full;
+                    is_full || (img.w, img.h) == fit_size(s.full, max_w, max_h)
+                }
+            };
+            if ok {
+                s.used = tick;
+                Some(s.img.clone())
+            } else {
+                None
+            }
+        });
+        if let Some(img) = hit {
+            return img;
+        }
+        // 미스 = 지금 이 스레드에서 디코드(종전 그대로). 큰 그림은 호스트가 [`decode_fit`]를 워커에서 돌려 [`put`]으로 미리 넣는다(216차).
+        let d = decode_fit(path, max_w, max_h);
+        put(path, d)
+    }
+
+    /// 캐시에 `(max_w, max_h)` 상자에 맞는 사본이 **이미 있는가**(디코드 없음 · 216차 — 호스트가 워커 디코드를 걸지 판단).
+    #[must_use]
+    pub fn has_fit(path: &str, max_w: u32, max_h: u32) -> bool {
+        let st = stamp(path);
+        CACHE.with(|c| {
+            let c = c.borrow();
+            c.map.get(path).is_some_and(|s| {
+                s.stamp == st
+                    && match &s.img {
+                        None => true,
+                        Some(img) => {
+                            (img.w, img.h) == s.full
+                                || (img.w, img.h) == fit_size(s.full, max_w, max_h)
+                        }
+                    }
+            })
+        })
+    }
+
+    /// 어느 스레드에서나 돌릴 수 있는 디코드 결과(216차 · nexa-dir3 10-18 "마우스 선택이 느림" = 도크 사진 디코드가 UI 스레드를 막음).
+    /// `put`으로 UI 스레드 캐시에 넣는다. 파일 스탬프를 함께 들고 있어 그 사이 바뀐 파일은 다음 `get_fit`이 다시 디코드한다.
+    #[derive(Debug)]
+    pub struct Decoded {
+        stamp: Stamp,
+        img: Option<IconImage>,
+        full: (u32, u32),
+    }
+
+    impl Decoded {
+        /// 디코드 성공 여부(실패도 캐시에 "실패"로 남긴다 — 매 프레임 재시도 방지).
+        #[must_use]
+        pub fn is_ok(&self) -> bool {
+            self.img.is_some()
+        }
+        /// 원본 크기(실패 = (0, 0)).
+        #[must_use]
+        pub fn full(&self) -> (u32, u32) {
+            self.full
+        }
+    }
+
+    /// 파일을 읽어 `(max_w, max_h)` 상자에 맞춰 축소한 사본을 만든다(캐시 무접촉 · `Send`). 호스트 워커용.
+    #[must_use]
+    pub fn decode_fit(path: &str, max_w: u32, max_h: u32) -> Decoded {
+        let stamp = stamp(path);
+        let decoded = std::fs::read(path)
+            .ok()
+            .and_then(|b| nexa_gfx::image::decode(&b, MAX_PIXELS).ok());
+        let full = decoded.as_ref().map_or((0, 0), |i| (i.w, i.h));
+        let img = decoded.map(|i| {
+            let (fw, fh) = fit_size(full, max_w, max_h);
+            if (fw, fh) == full {
+                i
+            } else {
+                i.resized(fw, fh)
+            }
+        });
+        Decoded { stamp, img, full }
+    }
+
+    /// 디코드 결과를 캐시에 넣는다(UI 스레드 · LRU/예산 적용) — 돌려주는 값 = 보관된 그림.
+    pub fn put(path: &str, d: Decoded) -> Option<Rc<IconImage>> {
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
             c.tick += 1;
             let tick = c.tick;
-            if let Some(s) = c.map.get_mut(path) {
-                if s.stamp == st {
-                    let hit = match &s.img {
-                        None => true,
-                        Some(img) => {
-                            let is_full = (img.w, img.h) == s.full;
-                            is_full || (img.w, img.h) == fit_size(s.full, max_w, max_h)
-                        }
-                    };
-                    if hit {
-                        s.used = tick;
-                        return s.img.clone();
-                    }
-                }
-            }
-            let decoded = std::fs::read(path)
-                .ok()
-                .and_then(|b| nexa_gfx::image::decode(&b, MAX_PIXELS).ok());
-            let full = decoded.as_ref().map_or((0, 0), |i| (i.w, i.h));
-            let img = decoded.map(|i| {
-                let (fw, fh) = fit_size(full, max_w, max_h);
-                if (fw, fh) == full {
-                    Rc::new(i)
-                } else {
-                    Rc::new(i.resized(fw, fh))
-                }
-            });
+            let img = d.img.map(Rc::new);
             c.map.insert(
                 path.to_string(),
                 Slot {
-                    stamp: st,
+                    stamp: d.stamp,
                     img: img.clone(),
-                    full,
+                    full: d.full,
                     used: tick,
                 },
             );
@@ -1437,5 +1503,65 @@ mod clip_tests {
             ctx.fill_rect(full, red);
         }
         assert!(buf.iter().all(|p| *p != BG));
+    }
+}
+
+#[cfg(test)]
+mod image_cache_fit_tests {
+    use super::image_cache;
+
+    /// 216차: `decode_fit`(스레드 무관) → `put` → `has_fit`/`get_fit`가 디코드 없이 맞춘다 · 다른 상자 크기 = 미스 · 없는 파일 = 실패도 캐시.
+    #[test]
+    fn decode_fit_then_put_serves_get_fit_without_decoding() {
+        let dir = std::env::temp_dir().join(format!("nexa-ctl-imgfit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 40×20 32bpp top-down BMP(인코더 없이 바이트로).
+        let png: Vec<u8> = {
+            let (w, h) = (40u32, 20u32);
+            let row = (w * 4) as usize;
+            let size = 54 + row * h as usize;
+            let mut b = Vec::with_capacity(size);
+            b.extend_from_slice(b"BM");
+            b.extend_from_slice(&(size as u32).to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b.extend_from_slice(&54u32.to_le_bytes());
+            b.extend_from_slice(&40u32.to_le_bytes());
+            b.extend_from_slice(&(w as i32).to_le_bytes());
+            b.extend_from_slice(&(-(h as i32)).to_le_bytes());
+            b.extend_from_slice(&1u16.to_le_bytes());
+            b.extend_from_slice(&32u16.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b.extend_from_slice(&((row * h as usize) as u32).to_le_bytes());
+            b.extend_from_slice(&[0u8; 16]);
+            for _ in 0..(w * h) {
+                b.extend_from_slice(&[0x40, 0x80, 0xC0, 0xFF]);
+            }
+            b
+        };
+        let p = dir.join("a.bmp");
+        std::fs::write(&p, &png).unwrap();
+        let key = p.to_string_lossy().into_owned();
+        image_cache::clear();
+        assert!(!image_cache::has_fit(&key, 20, 20));
+        let d = std::thread::spawn({
+            let key = key.clone();
+            move || image_cache::decode_fit(&key, 20, 20)
+        })
+        .join()
+        .unwrap();
+        assert!(d.is_ok() && d.full() == (40, 20));
+        let img = image_cache::put(&key, d).expect("img");
+        assert_eq!((img.w, img.h), (20, 10), "상자에 맞춘 축소본");
+        assert!(image_cache::has_fit(&key, 20, 20));
+        assert!(
+            !image_cache::has_fit(&key, 40, 40),
+            "더 큰 상자 = 미스(다시 디코드)"
+        );
+        let again = image_cache::get_fit(&key, 20, 20).expect("hit");
+        assert!(std::rc::Rc::ptr_eq(&again, &img), "디코드 없이 같은 사본");
+        let nope = image_cache::decode_fit(&dir.join("none.bmp").to_string_lossy(), 10, 10);
+        assert!(!nope.is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
