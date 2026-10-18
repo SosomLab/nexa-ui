@@ -41,6 +41,30 @@ struct Toast {
 const MAX_TOASTS: usize = 5;
 const FADE_MS: u64 = 300;
 
+/// 토스트가 붙는 모서리(214차 · nexa-dir3 10-18 "전역 = 창 기준 · 패널 작업 = 그 패널 범위" — 호스트 설정 `ui.toast_position`). 아래 모서리는
+/// 위로, 위 모서리는 아래로 쌓인다(최신 카드가 모서리에 가장 가깝다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToastCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
+impl ToastCorner {
+    /// 설정 문자열(`top-left` · `top-right` · `bottom-left` · `bottom-right`) → 모서리(모르는 값 = 우하단).
+    #[must_use]
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "top-left" => ToastCorner::TopLeft,
+            "top-right" => ToastCorner::TopRight,
+            "bottom-left" => ToastCorner::BottomLeft,
+            _ => ToastCorner::BottomRight,
+        }
+    }
+}
+
 /// 수명 진척 `p`(0 = 방금 · 1 = 만료)에 따른 불투명도 배율 — 1.0에서 `fade_to`(0..1)까지 **제곱 이징**(초반은 거의 그대로, 뒤로 갈수록
 /// 빨리 투명해진다 = 읽을 시간은 지키고 "사라지는 느낌"은 뒤에 몰아 준다). `progress`가 꺼져 있으면 늘 1.0(종전 = 마지막 300ms만).
 /// 마지막 300ms의 0으로 가는 페이드는 이 값에 곱한다(`paint`).
@@ -142,6 +166,22 @@ impl Toasts {
         }
     }
 
+    /// 남아 있는 카드 수(214차 · 호스트 시험 · 영역별 토스트 배분 확인).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// 마지막 그리기에서 카드가 차지한 사각형들(214차 · 호스트가 겹침·영역 안 판정에 쓴다 · 그리기 전 = 빈 사각형).
+    pub fn rects(&self) -> impl Iterator<Item = Rect> + '_ {
+        self.items.iter().map(|t| t.rect)
+    }
+
     /// 클릭된 카드의 동작 id(1회성).
     pub fn take_action(&mut self) -> Option<String> {
         self.taken.take()
@@ -172,18 +212,49 @@ impl Toasts {
         false
     }
 
-    /// 우측 하단부터 위로 쌓아 그린다(`bottom` = 상태줄 위 y · `right` = 창 오른쪽).
+    /// 우측 하단부터 위로 쌓아 그린다(`bottom` = 상태줄 위 y · `right` = 창 오른쪽) = [`Self::paint_in`](창 전체 · 우하단).
     pub fn paint(&mut self, dc: &mut dyn DrawCtx, th: &Theme, right: i32, bottom: i32, s: f32) {
+        self.paint_in(
+            dc,
+            th,
+            Rect::new(0, 0, right, bottom),
+            ToastCorner::BottomRight,
+            s,
+        );
+    }
+
+    /// `area`의 `corner`에 붙여 쌓아 그린다(214차): 아래 모서리 = 위로 · 위 모서리 = 아래로 · 카드 폭은 영역 폭을 넘지 않는다(좁은 패널).
+    pub fn paint_in(
+        &mut self,
+        dc: &mut dyn DrawCtx,
+        th: &Theme,
+        area: Rect,
+        corner: ToastCorner,
+        s: f32,
+    ) {
         if self.items.is_empty() {
             return;
         }
         let px = |v: f32| (v * s).round() as i32;
-        let (w, pad, gap, bar) = (px(340.0), px(10.0), px(6.0), px(4.0));
+        let (pad, gap, bar) = (px(10.0), px(6.0), px(4.0));
+        let w = px(340.0).min((area.w - gap * 2).max(px(120.0)));
+        let (right, bottom) = (area.right(), area.bottom());
+        let (top_side, left_side) = match corner {
+            ToastCorner::TopLeft => (true, true),
+            ToastCorner::TopRight => (true, false),
+            ToastCorner::BottomLeft => (false, true),
+            ToastCorner::BottomRight => (false, false),
+        };
+        let x = if left_side {
+            area.x + gap
+        } else {
+            right - gap - w
+        };
 
         let lh = dc.text_height();
         let now = Instant::now();
         let ttl_ms = self.ttl.as_millis().max(1) as f32;
-        let mut y = bottom - gap;
+        let mut y = if top_side { area.y + gap } else { bottom - gap };
         for t in self.items.iter_mut().rev() {
             let age = now.duration_since(t.born);
             let left = self.ttl.saturating_sub(age).as_millis() as u64;
@@ -195,7 +266,11 @@ impl Toasts {
             let life = (age.as_millis() as f32 / ttl_ms).clamp(0.0, 1.0);
             let a = self.alpha * life_alpha(life, self.fade_to, self.progress) * fade;
             let h = pad * 2 + lh * 2 + px(2.0);
-            let r = Rect::new(right - gap - w, y - h, w, h);
+            let r = if top_side {
+                Rect::new(x, y, w, h)
+            } else {
+                Rect::new(x, y - h, w, h)
+            };
             t.rect = r;
             dc.fill_round_rect_alpha(r, px(6.0), th.panel_bg, a);
             dc.stroke_round_rect_alpha(r, px(6.0), th.border, 1.0, a);
@@ -228,7 +303,11 @@ impl Toasts {
             let clip = Rect::new(r.x, r.y, r.w - pad, r.h);
             dc.text(tx, r.y + pad, clip, &t.title, color);
             dc.text(tx, r.y + pad + lh + px(2.0), clip, &t.body, th.text);
-            y = r.y - gap;
+            y = if top_side {
+                r.bottom() + gap
+            } else {
+                r.y - gap
+            };
         }
     }
 }
@@ -236,6 +315,39 @@ impl Toasts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 모서리별 배치(214차): 우하단 = 영역 오른쪽·아래에 붙어 위로 쌓임 · 좌상단 = 왼쪽·위에 붙어 아래로 쌓임 · 카드는 영역 안 · 좁은 영역 = 폭 축소 ·
+    /// `len`/`rects`/`parse`.
+    #[test]
+    fn paint_in_places_cards_at_each_corner() {
+        use crate::controls::RecordCtx;
+        let th = Theme::default();
+        let mut t = Toasts::new();
+        t.push(ToastKind::Info, "a", "1");
+        t.push(ToastKind::Warn, "b", "2");
+        assert_eq!(t.len(), 2);
+        let area = Rect::new(100, 50, 600, 400);
+        let mut dc = RecordCtx::with_surface(800, 600);
+        t.paint_in(&mut dc, &th, area, ToastCorner::BottomRight, 1.0);
+        let r: Vec<Rect> = t.rects().collect();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[1].right(), area.right() - 6, "최신 카드 = 모서리");
+        assert_eq!(r[1].bottom(), area.bottom() - 6);
+        assert!(r[0].bottom() < r[1].y, "위로 쌓임");
+        t.paint_in(&mut dc, &th, area, ToastCorner::TopLeft, 1.0);
+        let r: Vec<Rect> = t.rects().collect();
+        assert_eq!((r[1].x, r[1].y), (area.x + 6, area.y + 6));
+        assert!(r[0].y > r[1].bottom(), "아래로 쌓임");
+        let narrow = Rect::new(0, 0, 200, 300);
+        t.paint_in(&mut dc, &th, narrow, ToastCorner::BottomLeft, 1.0);
+        assert!(
+            t.rects()
+                .all(|r| r.x >= narrow.x && r.right() <= narrow.right()),
+            "좁은 영역 = 폭 축소"
+        );
+        assert_eq!(ToastCorner::parse("top-right"), ToastCorner::TopRight);
+        assert_eq!(ToastCorner::parse("??"), ToastCorner::BottomRight);
+    }
 
     /// 수명 곡선: 시작 1.0 · 끝 `fade_to` · 단조 감소 · 초반은 완만(제곱 이징 — 절반 지점에서 4분의 1만 내려옴) · 꺼져 있으면 늘 1.0.
     #[test]
