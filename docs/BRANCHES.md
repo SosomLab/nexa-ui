@@ -4,7 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
-| (main 직접) | 2026-10-20 | 2026-10-20 → main · e756e66 | 1 | 218차 `EditState::move_carets` · 멀티라인 Home/End = 열 모드 유지(nexa-sql 131차 · 사용자 10-19) · nexa-ctl 시험 451/0 |
+| (main 직접) | 2026-10-20 | 2026-10-20 → main · **a1b60e4**(소스 · rebase = 다른 세션 ca2b0dd 위 · 종전 e756e66) + 문서 cf073b2 | 2 | 218차 `EditState::move_carets` · 멀티라인 Home/End = 열 모드 유지(nexa-sql 131차 · 사용자 10-19) · nexa-ctl 시험 451/0 |
 | fix/213-present-pool | 2026-10-17 | 2026-10-17 → main(삭제) · 26b3bd8 | 1 | 213차 맥 iosurface 표면 선택(prev 회피 · 바쁘면 건너뜀 · 풀 4 · busy_reuse/forced 진단) · nexa-sql 130차 객체 찾기 깜빡임 |
 | feat/212-open-files | 2026-10-17 | 2026-10-17 → main(삭제) · c10be48 | 1 | 212차 nexa-sys `open_files`(macOS Finder·`open -a` 파일 전달 = 앱 델리게이트 `application:openFiles:` · 그 밖 OS 0) — nexa-sql 130차 T-352 |
 | fix/209-switch-off-contrast | 2026-10-16 | 2026-10-16 → main(삭제) | 2 | `Switch` 끔 트랙 = 글자색 22 % 막(머리글 chrome_bg 위에서 안 보이던 것 · 209차 · nexa-sql 객체 찾기 "미리보기" 스위치) · 소비자 변경 209 · journal 10-16 §3 |
