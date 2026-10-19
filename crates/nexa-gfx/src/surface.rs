@@ -254,18 +254,20 @@ impl<'a> Surface<'a> {
         if x1 <= x0 || y1 <= y0 {
             return;
         }
-        // 전경은 고정이므로 한 번만 분해한다(픽셀마다 다시 쪼개지 않는다).
-        let (fr, fg_, fb) = color.rgb();
-        let (fr, fg_, fb) = (f32::from(fr) * a, f32::from(fg_) * a, f32::from(fb) * a);
-        let inv = 1.0 - a;
+        // 전경은 고정이므로 한 번만 분해한다(픽셀마다 다시 쪼개지 않는다). ★ 정수 고정소수(8비트 알파 ·
+        // 두 채널 동시 — R·B를 한 워드에서, G를 따로)로 — f32 채널 3개×픽셀이 **반투명 카드 한 장(≈240k px)에
+        // 2.7ms**(nexa-beep PERF-8 · 10-20 mac 실측 · 결과 차이는 반올림 ±1 이내).
+        let a8 = (a * 255.0 + 0.5) as u32; // 1..=254 (0·1은 위에서 걸렀다)
+        let inv8 = 255 - a8;
+        let fg_rb = (color.0 & 0x00FF_00FF) * a8;
+        let fg_g = (color.0 & 0x0000_FF00) * a8;
         for row in y0..y1 {
             let base = row * self.width;
-            for idx in base + x0..base + x1 {
-                let bg = Color(self.buf[idx]).rgb();
-                let r = (f32::from(bg.0) * inv + fr + 0.5) as u32;
-                let g = (f32::from(bg.1) * inv + fg_ + 0.5) as u32;
-                let b = (f32::from(bg.2) * inv + fb + 0.5) as u32;
-                self.buf[idx] = (r << 16) | (g << 8) | b;
+            for px in &mut self.buf[base + x0..base + x1] {
+                let bg = *px;
+                let rb = ((bg & 0x00FF_00FF) * inv8 + fg_rb + 0x0080_0080) >> 8;
+                let g = ((bg & 0x0000_FF00) * inv8 + fg_g + 0x0000_8000) >> 8;
+                *px = (rb & 0x00FF_00FF) | (g & 0x0000_FF00);
             }
         }
     }

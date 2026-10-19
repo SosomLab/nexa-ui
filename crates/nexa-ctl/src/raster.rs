@@ -239,15 +239,10 @@ fn solid_band(s: &mut Surface<'_>, rect: Rect, color: Color, alpha: f32) {
     if rect.w <= 0 || rect.h <= 0 {
         return;
     }
-    if alpha >= 1.0 {
-        s.fill_rect(rect.x, rect.y, rect.w as u32, rect.h as u32, color);
-        return;
-    }
-    for py in rect.y..rect.bottom() {
-        for px in rect.x..rect.right() {
-            s.blend_px(px, py, color, alpha);
-        }
-    }
+    // ★ 반투명도 행 단위 경로(nexa-gfx `fill_rect_alpha` — 전경 1회 분해·행 인덱스)로 — 픽셀마다
+    //   `blend_px`(경계 검사·클램프·채널 클로저)를 부르던 것이 **잠긴 설정 카드 한 장(≈240k px)에 10ms**
+    //   (nexa-beep PERF-8 · 10-20 mac 실측 · 프레임 29ms의 1/3). 불투명은 `fill_rect` 그대로.
+    s.fill_rect_alpha(rect.x, rect.y, rect.w as u32, rect.h as u32, color, alpha);
 }
 
 /// 유효 모서리 반경(정수 · 사각형 절반을 넘지 않게).
