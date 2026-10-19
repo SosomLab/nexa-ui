@@ -1532,6 +1532,39 @@ impl EditState {
         self.note_sel(before, extend);
     }
 
+    /// ★ 모든 캐럿을 **각자** 옮긴다(218차 · nexa-sql 사용자 10-19 "열 모드에서 Home/End = 열 모드 유지") — `set_caret`과 달리
+    ///   추가 캐럿을 접지 않는다. `to(buf, caret)`가 캐럿마다 목적지를 준다(줄 처음/끝 같은 **줄 안** 이동) · `extend`면 캐럿마다
+    ///   자기 앵커를 유지해 선택이 늘어난다(Shift+Home/End) · 아니면 선택을 풀고 캐럿만. 같은 자리로 모인 캐럿은 하나로.
+    pub fn move_carets(&mut self, extend: bool, to: impl Fn(&TextBuf, usize) -> usize) {
+        let before = self.snap();
+        self.last_op = None; // 캐럿 이동 = 타이핑 묶음 경계
+        let n = self.buf.len();
+        let buf = &self.buf;
+        let step = |a: Option<usize>, c: usize| -> (Option<usize>, usize) {
+            let nc = to(buf, c).min(n);
+            let na = if extend { Some(a.unwrap_or(c)) } else { None };
+            (na, nc)
+        };
+        let (na, nc) = step(self.anchor, self.caret);
+        let mut extra: Vec<(usize, usize)> = self
+            .extra
+            .iter()
+            .map(|&(a, c)| {
+                let (na, nc) = step((a != c).then_some(a), c);
+                (na.unwrap_or(nc), nc)
+            })
+            .collect();
+        self.anchor = na;
+        self.caret = nc;
+        // 같은 자리로 모인 캐럿(빈 줄 둘이 한 끝으로 등)은 하나로 — 주 캐럿과 같은 것 · 서로 같은 것.
+        let prim = (self.anchor.unwrap_or(self.caret), self.caret);
+        extra.retain(|r| *r != prim);
+        extra.sort_unstable();
+        extra.dedup();
+        self.extra = extra;
+        self.note_sel(before, extend);
+    }
+
     /// 범위를 직접 선택한다(더블클릭 단어 선택 등).
     pub fn set_selection(&mut self, from: usize, to: usize) {
         let before = self.snap();
@@ -2412,6 +2445,46 @@ mod undo_tests {
         e.set_text("fresh");
         assert!(!e.can_undo(), "프로그램 교체 = 히스토리 초기화");
         assert!(!e.can_redo());
+    }
+
+    /// ★ 218차: 열 모드(다중 캐럿)에서 줄 처음/끝 이동은 캐럿을 **접지 않고** 각자 자기 줄 안에서 움직인다 · Shift = 캐럿마다 선택.
+    #[test]
+    fn move_carets_keeps_every_caret_on_its_own_line() {
+        let mut e = EditState::with_text(
+            "ab cd
+ef gh
+ij",
+            false,
+        );
+        e.set_caret(1, false); // 1행 "a|b"
+        assert!(e.toggle_caret(7)); // 2행 "e|f"(Ctrl+클릭 = 캐럿 추가)
+        assert!(e.has_multi());
+        e.move_carets(false, |b, c| b.line_end_of(c));
+        assert_eq!(
+            e.carets(),
+            vec![5, 11],
+            "End = 두 캐럿이 각자 줄 끝 · 열 모드 유지"
+        );
+        assert!(e.has_multi());
+        e.move_carets(true, |b, c| b.line_start_of(c));
+        assert_eq!(
+            e.regions(),
+            vec![(0, 5), (6, 11)],
+            "Shift+Home = 캐럿마다 줄 전체 선택"
+        );
+        e.move_carets(false, |b, c| b.line_end_of(c));
+        assert_eq!(
+            e.regions(),
+            vec![(5, 5), (11, 11)],
+            "Shift 없이 = 선택 풀고 캐럿만"
+        );
+        // 같은 자리로 모이면 하나.
+        let mut e = EditState::with_text("ab", false);
+        e.set_caret(0, false);
+        assert!(e.toggle_caret(1));
+        e.move_carets(false, |b, c| b.line_end_of(c));
+        assert_eq!(e.carets(), vec![2]);
+        assert!(!e.has_multi(), "한 자리로 모인 캐럿은 하나로 접힌다");
     }
 
     #[test]

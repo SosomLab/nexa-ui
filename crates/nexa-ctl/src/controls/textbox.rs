@@ -2650,6 +2650,23 @@ impl TextBox {
         }
     }
 
+    /// 스마트 Home(Sublime `bol`)의 목적지 — 캐럿이 있는 줄의 첫 글자(들여쓰기 뒤) · 이미 거기면(또는 줄이 공백뿐이고 열 0이면) 열 0.
+    /// 캐럿마다 부른다(218차 `move_carets`).
+    fn smart_home(buf: &TextBuf, caret: usize) -> usize {
+        let n_chars = buf.len();
+        let hard = buf.line_start_of(caret.min(n_chars));
+        let soft = hard
+            + buf
+                .iter_from(hard)
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .count();
+        if caret == soft || soft >= n_chars && caret == hard {
+            hard
+        } else {
+            soft
+        }
+    }
+
     /// 멀티라인 클릭 → 캐럿 인덱스(페인트가 남긴 줄 배치에서 가장 가까운 경계).
     fn ml_caret_at(&self, x: i32, y: i32) -> usize {
         let lay = self.line_lay.borrow();
@@ -5292,22 +5309,8 @@ impl TextBox {
                     Key::Home => {
                         if self.multiline {
                             // ★ 스마트 Home(Sublime `bol`): 첫 글자(들여쓰기 뒤)로 · 이미 거기면 열 0.
-                            let hard = self.ml_line_edge(false);
-                            let n_chars = self.edit.len();
-                            let soft = hard
-                                + self
-                                    .edit
-                                    .buf()
-                                    .iter_from(hard)
-                                    .take_while(|c| *c == ' ' || *c == '\t')
-                                    .count();
-                            let cur = self.edit.caret();
-                            let to = if cur == soft || soft >= n_chars && cur == hard {
-                                hard
-                            } else {
-                                soft
-                            };
-                            self.edit.set_caret(to, shift);
+                            //   218차: 열 모드(다중 캐럿)면 캐럿마다 자기 줄에서(`move_carets` · 접지 않음 · nexa-sql 사용자 10-19).
+                            self.edit.move_carets(shift, Self::smart_home);
                         } else {
                             self.edit.key(EditKey::Home, shift);
                         }
@@ -5315,7 +5318,7 @@ impl TextBox {
                     }
                     Key::End => {
                         if self.multiline {
-                            self.edit.set_caret(self.ml_line_edge(true), shift);
+                            self.edit.move_carets(shift, |b, c| b.line_end_of(c));
                         } else {
                             self.edit.key(EditKey::End, shift);
                         }
