@@ -4,7 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
-| (main 직접) | 2026-10-20 | 2026-10-20 → main · **ff2633b** | 1 | 219차 nexa-font TTC 얼굴 = 표시 이름으로 선택(`collection_index_by_name`) · Ubuntu NotoSansCJK 인덱스 2 = SC 결함 · nexa-sql 133차 Linux T-375 · push·ci = 소비 커밋과 함께 |
+| (main 직접) | 2026-10-20 | 2026-10-20 → main · **ff2633b** | 1 | 219차 nexa-font TTC 얼굴 = 표시 이름으로 선택(`collection_index_by_name`) · Ubuntu NotoSansCJK 인덱스 2 = SC 결함 · nexa-sql 133차 Linux T-375 · 문서 d2edf69 · push ✓ · ci 39455579131 ✓ 3-OS |
 | (main 직접) | 2026-10-20 | 2026-10-20 → main · **a1b60e4**(소스 · rebase = 다른 세션 ca2b0dd 위 · 종전 e756e66) + 문서 cf073b2 | 2 | 218차 `EditState::move_carets` · 멀티라인 Home/End = 열 모드 유지(nexa-sql 131차 · 사용자 10-19) · nexa-ctl 시험 451/0 |
 | fix/213-present-pool | 2026-10-17 | 2026-10-17 → main(삭제) · 26b3bd8 | 1 | 213차 맥 iosurface 표면 선택(prev 회피 · 바쁘면 건너뜀 · 풀 4 · busy_reuse/forced 진단) · nexa-sql 130차 객체 찾기 깜빡임 |
 | feat/212-open-files | 2026-10-17 | 2026-10-17 → main(삭제) · c10be48 | 1 | 212차 nexa-sys `open_files`(macOS Finder·`open -a` 파일 전달 = 앱 델리게이트 `application:openFiles:` · 그 밖 OS 0) — nexa-sql 130차 T-352 |
