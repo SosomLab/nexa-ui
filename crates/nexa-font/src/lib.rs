@@ -296,11 +296,20 @@ fn first_existing(cands: &'static [(&'static str, u32, &'static str)]) -> Option
         let p = Path::new(path);
         if p.exists() {
             if let Some(data) = map_font(p) {
+                let index = collection_index_by_name(data, index, name);
                 return Some(Found { data, index, name });
             }
         }
     }
     None
+}
+
+/// ★ 컬렉션(TTC) 얼굴은 **표시 이름으로** 고른다(219차 · nexa-sql 133차 Linux T-375): 후보 표의 고정 인덱스는 배포판·판본마다
+///   어긋난다 — Ubuntu `NotoSansCJK-Regular.ttc`는 0 = JP · 1 = KR · **2 = SC**인데 표는 2를 "Noto Sans CJK KR"로 적어 중국어
+///   간체 얼굴을 한글 UI 본으로 썼다(한글 자형은 같아 눈에 안 띄고 한자·일부 문장부호만 중국식). 이름이 든 얼굴이 있으면 그
+///   인덱스 · 없으면(이름 표가 다르거나 단일 글꼴) 표의 인덱스 그대로 = 종전 동작.
+fn collection_index_by_name(data: &'static [u8], index: u32, name: &str) -> u32 {
+    nexa_gfx::collection_face_index(data, name).unwrap_or(index)
 }
 
 /// 폴더 아래 폰트 파일(하위 폴더 포함 · 깊이 [`SCAN_DEPTH`]) — 리눅스는 `/usr/share/fonts/<종류>/<패밀리>/`처럼 두 단 아래에 있다(09-16).
@@ -977,11 +986,42 @@ mod tests {
     }
 
     /// 시스템 UI 본의 `name` 테이블 패밀리 이름이 읽힌다(OS 래스터라이저 이름 후보 · 영문 이름 포함).
+    /// 후보 표의 TTC 얼굴 = 표시 이름과 같은 패밀리(T-375): 이 기기에 그 파일이 있을 때만 검사한다(없으면 건너뜀).
+    #[test]
+    fn ui_candidate_collection_faces_match_their_names() {
+        for &(path, index, name) in UI_CANDIDATES {
+            let p = Path::new(path);
+            if !p.exists() {
+                continue;
+            }
+            let Some(data) = map_font(p) else { continue };
+            let picked = collection_index_by_name(data, index, name);
+            if let Some(by_name) = nexa_gfx::collection_face_index(data, name) {
+                assert_eq!(
+                    picked, by_name,
+                    "{path}: `{name}` 얼굴은 이름으로 고른 인덱스여야 한다"
+                );
+                let all = sfnt_names::face_family_names(&mut std::io::Cursor::new(data));
+                let fams = all.get(picked as usize).cloned().unwrap_or_default();
+                assert!(
+                    fams.iter().any(|f| f.eq_ignore_ascii_case(name)),
+                    "{path}#{picked}: 패밀리 {fams:?}에 `{name}`이 있어야 한다"
+                );
+            }
+        }
+    }
+
     #[test]
     fn face_family_names_include_table_names() {
         let u = ui_font(None).expect("UI 본");
         let names = u.font.face_family_names(0);
-        assert!(names.len() >= 2, "체인 이름 + name 테이블 이름: {names:?}");
+        // ★ 종전 단정 `len() >= 2`(체인 이름 + 표 이름)는 Linux에서 **결함 덕에** 통과했다 — 체인 "Noto Sans CJK KR" ≠ 표 "Noto Sans CJK SC"
+        //   (T-375 · 인덱스 2 = SC). 이름으로 얼굴을 고르면 둘이 같아 하나로 합쳐진다 → 체인 이름이 들어 있고 영문 이름이 있으면 된다.
+        assert!(
+            names.iter().any(|n| n == &u.chain[0]),
+            "체인 첫 이름이 들어 있어야: {names:?} vs {:?}",
+            u.chain
+        );
         assert!(
             names.iter().any(|n| n.is_ascii()),
             "영문 이름이 있어야: {names:?}"
