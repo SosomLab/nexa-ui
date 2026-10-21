@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/220-line-spacing | 2026-10-21 | 2026-10-21 → main(삭제) · **8f81401** | 1 | 220차 편집기 줄 높이 = 글꼴을 따름(`MIN_LINE_H` 20 → 8) + `LineSpacing`/`line_h_for`/`TextBox::set_line_spacing`(nexa-sql 134차 win D-315 · docs/118) · nexa-ctl 452/0 · push = 인증 수단 없어 대기(10-21 · SSH 키·설정·gh 로그인 없음) |
 | (main 직접) | 2026-10-20 | 2026-10-20 → main · **ff2633b** | 1 | 219차 nexa-font TTC 얼굴 = 표시 이름으로 선택(`collection_index_by_name`) · Ubuntu NotoSansCJK 인덱스 2 = SC 결함 · nexa-sql 133차 Linux T-375 · 문서 d2edf69 · push ✓ · ci 39455579131 ✓ 3-OS |
 | (main 직접) | 2026-10-20 | 2026-10-20 → main · **a1b60e4**(소스 · rebase = 다른 세션 ca2b0dd 위 · 종전 e756e66) + 문서 cf073b2 | 2 | 218차 `EditState::move_carets` · 멀티라인 Home/End = 열 모드 유지(nexa-sql 131차 · 사용자 10-19) · nexa-ctl 시험 451/0 |
 | fix/213-present-pool | 2026-10-17 | 2026-10-17 → main(삭제) · 26b3bd8 | 1 | 213차 맥 iosurface 표면 선택(prev 회피 · 바쁘면 건너뜀 · 풀 4 · busy_reuse/forced 진단) · nexa-sql 130차 객체 찾기 깜빡임 |
