@@ -47,6 +47,7 @@ pub mod view_mode;
 pub mod widget;
 
 pub use controls::textbox::{click_policy, set_click_policy, word_underscore, ClickAction};
+pub use controls::textbox::{line_h_for, LineSpacing, MIN_LINE_H};
 pub use controls::{allocate_widths, SegItem, SegProgress, SegStatus, SEG_PALETTE};
 pub use controls::{busy_style, set_busy_style, BusyRing, BusyState, BusyStyle};
 pub use controls::{default_click_guard_ms, set_default_click_guard_ms};

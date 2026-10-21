@@ -410,6 +410,9 @@ pub struct TextBox {
     /// 멀티라인 위 여백(논리 px · 기본 8 · 아래 여백은 4 고정) — 한 줄 상자를 세로 가운데에 맞추려는 호스트가 줄인다
     /// (nexa-sql 조건 바 10-07 = 4 → 28px 상자에 20px 행이 가운데).
     ml_pad_y: i32,
+    /// ★ 줄 간격 방식 + 호스트가 알려 준 글꼴 크기(논리 px · 배수 계산용 · 220차).
+    line_spacing: LineSpacing,
+    font_px: f32,
     /// 멀티라인 줄 높이 **실측**(마지막 그리기 · 물리 px) = `max(20×배율, 글꼴 상자 + 4)` — 글꼴이 커지면 줄도 커진다
     /// (종전 상수 20×배율 = 큰 글꼴에서 글자가 줄보다 커짐 · nexa-sql 10-07 글꼴 크기 조절). 그리기 전엔 0(= 20×배율).
     ml_lh: std::cell::Cell<i32>,
@@ -578,6 +581,44 @@ pub struct TextBox {
 /// 미니맵 기본 폭(논리 px).
 /// 09-17 nexa-sql 사용자 "미니맵 크기를 지금의 2배로" → 80 → 160.
 pub const MINIMAP_DEFAULT_WIDTH: i32 = 160;
+
+/// 멀티라인 줄 높이 바닥(논리 px · 배율 전). ★ 220차(10-21 · nexa-sql 134차 사용자 "글꼴을 줄여도 줄 간격이 그대로"): 종전 20은 글꼴 상자
+/// 16px(≈ 12pt) 아래에서 간격을 고정했다 → 처음 12로 내렸으나 8 px 글꼴에서 12가 다시 걸려(8 × 1.2 = 10 < 12 · 사용자 "8 px 줄 간격이 글자
+/// 높이만큼") **8**(VS Code `lineHeight` 최솟값과 같음)로 — 이제 바닥은 안전망일 뿐 보통 글꼴 범위(8~40 px)에선 비율이 그대로다. 줄 번호·캐럿·
+/// 히트 테스트·북마크 니모닉 상자(세로 = lh−2)·미니맵 창 비율은 전부 같은 `lh`를 쓰므로 함께 맞춰진다. 방식 = [`LineSpacing`] · 계산 =
+/// [`line_h_for`].
+pub const MIN_LINE_H: i32 = 8;
+
+/// ★ 멀티라인 줄 간격 방식(220차 · nexa-sql 134차 10-21 사용자 "16 px 기준 글꼴 크기별 비율 · Word/PPT·Sublime·VS Code·IntelliJ 방식 조사" ·
+/// nexa-sql docs/118). 값은 **논리 px**(배율 전).
+/// - `Auto` = 종전(글꼴 상자 + 4 · 바닥 [`MIN_LINE_H`]) — 설정을 안 받는 상자(조건 바 등)의 기본.
+/// - `Multiple(k)` = **글꼴 px × k**(IntelliJ "Line height" · Word/PPT "배수" · VS Code `lineHeight` < 8). 16 px × 1.2 = 19.
+/// - `Exact(px)` = 고정(Word "고정" · PPT "정확히" · VS Code ≥ 8 px).
+/// - `AtLeast(px)` = 최소(Word "최소") — 글꼴 상자가 더 크면 상자.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum LineSpacing {
+    #[default]
+    Auto,
+    Multiple(f32),
+    Exact(i32),
+    AtLeast(i32),
+}
+
+/// 멀티라인 줄 높이(물리 px) — `text_h` = 그리기 컨텍스트의 글꼴 상자(물리 px) · `font_px` = 호스트가 알려 준 글꼴 크기(논리 px · 모르면 0 =
+/// `Auto`로 처리) · `scale` = 배율. 바닥 = `MIN_LINE_H`×배율(어느 방식이든 그 아래로는 안 내려간다 · 글리프 겹침 방지). 순수 함수.
+#[must_use]
+pub fn line_h_for(spacing: LineSpacing, text_h: i32, font_px: f32, scale: f32) -> i32 {
+    let s = |v: f32| (v * scale).round() as i32;
+    let floor = s(MIN_LINE_H as f32);
+    let natural = text_h + s(4.0);
+    let lh = match spacing {
+        LineSpacing::Multiple(k) if font_px > 0.0 && k > 0.0 => s(font_px * k),
+        LineSpacing::Exact(px) if px > 0 => s(px as f32),
+        LineSpacing::AtLeast(px) if px > 0 => s(px as f32).max(text_h),
+        _ => natural,
+    };
+    lh.max(floor)
+}
 /// 미니맵이 한 번에 래스터하는 행 상한 — 띠에 보이는 행만 그리므로 창 높이가 정하지만, 거대한 창에서도 시간이
 /// 튀지 않게 상한을 둔다(넘는 행은 빈 칸).
 pub const MINIMAP_MAX_LINES: usize = 4000;
@@ -858,6 +899,8 @@ impl TextBox {
             max_chars: 0,
             multiline: false,
             ml_pad_y: 8,
+            line_spacing: LineSpacing::Auto,
+            font_px: 0.0,
             ml_lh: std::cell::Cell::new(0),
             masked: false,
             wrap: false,
@@ -2227,6 +2270,14 @@ impl TextBox {
         self.masked
     }
 
+    /// ★ 줄 간격 방식(220차 · nexa-sql `editor.line_height_mode`/`editor.line_height`) + 글꼴 크기(논리 px · 배수 계산용 · 호스트가 글꼴을
+    /// 바꿀 때마다 다시 준다). 상자별 속성 — 편집기 탭은 설정 · 조건 바 등은 `Auto` 그대로.
+    pub fn set_line_spacing(&mut self, spacing: LineSpacing, font_px: f32) {
+        self.line_spacing = spacing;
+        self.font_px = font_px.max(0.0);
+        *self.minimap_cache.borrow_mut() = None;
+    }
+
     /// 멀티라인 위 여백(논리 px · 기본 8). 보이는 줄 수 = `(높이 − 위 여백 − 4) / 줄 높이`.
     pub fn set_ml_pad_y(&mut self, px: i32) {
         self.ml_pad_y = px.clamp(0, 32);
@@ -2692,10 +2743,10 @@ impl TextBox {
     }
 
     /// 멀티라인 한 줄 높이(물리 px · 배율 반영) — 컨테이너가 "N줄 높이" 최소 크기를 셈할 때(nexa-sql 객체 상세 스플리터 09-26).
-    /// 마지막 그리기의 실측(`max(20×배율, 글꼴 상자 + 4)`) · 아직 안 그렸으면 20×배율.
+    /// 마지막 그리기의 실측([`line_h_for`] · 방식 = [`LineSpacing`]) · 아직 안 그렸으면 `MIN_LINE_H`×배율(220차 · 종전 20).
     #[must_use]
     pub fn line_h(&self) -> i32 {
-        self.ml_lh.get().max(self.s(20))
+        self.ml_lh.get().max(self.s(MIN_LINE_H))
     }
 
     /// 메뉴에서 고른 클립보드 행동(1회성) — 호스트가 ⌘C/X/V와 같은 경로로 잇는다.
@@ -3584,8 +3635,9 @@ impl TextBox {
         }
         ctx.select_font(FontSlot::Base, false);
         let th = ctx.text_height();
-        // 줄 높이 = 글꼴을 따라간다(상자 + 4 · 최소 20×배율) · 히트 테스트·호스트 `line_h()`와 같은 값.
-        let lh = self.s(20).max(th + self.s(4));
+        // 줄 높이 = 줄 간격 방식(`LineSpacing` · 기본 Auto = 상자 + 4 · 바닥 `MIN_LINE_H`×배율 · 220차) · 히트 테스트·호스트 `line_h()`와
+        // 같은 값.
+        let lh = line_h_for(self.line_spacing, th, self.font_px, self.base.scale);
         self.ml_lh.set(lh);
         // ★ 본문은 버퍼에서 **보이는 줄만** 꺼낸다(T-142) — 종전에는 프레임마다 모든 줄의 (시작, 글) 목록을 만들었고(70만 줄 ≈ 13 ms),
         //   편집할 때마다 본문 전체를 문자열로 다시 모았다(65 MB ≈ 150 ms).
@@ -7035,6 +7087,59 @@ mod minimap_tests {
             shift: false,
             primary: false,
         }
+    }
+
+    /// ★ 220차(10-21): 줄 간격 방식 — Auto = 상자 + 4 · 배수 = 글꼴 px × k(16 px × 1.2 = 19) · 고정 · 최소(상자가 크면 상자) · 바닥 8×배율 ·
+    /// 글꼴을 모르면(0) 배수도 Auto · 배율 2.
+    #[test]
+    fn line_height_modes() {
+        use super::{line_h_for, LineSpacing as L};
+        assert_eq!(line_h_for(L::Auto, 20, 16.0, 1.0), 24, "종전 값");
+        assert_eq!(line_h_for(L::Auto, 3, 8.0, 1.0), 8, "바닥");
+        assert_eq!(
+            line_h_for(L::Multiple(1.2), 20, 16.0, 1.0),
+            19,
+            "16 px × 1.2"
+        );
+        assert_eq!(
+            line_h_for(L::Multiple(1.2), 10, 8.0, 1.0),
+            10,
+            "8 px × 1.2 = 10(바닥 8 위)"
+        );
+        assert_eq!(
+            line_h_for(L::Multiple(1.2), 30, 24.0, 1.0),
+            29,
+            "24 px × 1.2"
+        );
+        assert_eq!(line_h_for(L::Multiple(1.5), 20, 16.0, 1.0), 24);
+        assert_eq!(
+            line_h_for(L::Multiple(1.2), 20, 0.0, 1.0),
+            24,
+            "글꼴 모름 = Auto"
+        );
+        assert_eq!(
+            line_h_for(L::Multiple(0.0), 20, 16.0, 1.0),
+            24,
+            "0배 = Auto"
+        );
+        assert_eq!(line_h_for(L::Exact(30), 20, 16.0, 1.0), 30);
+        assert_eq!(
+            line_h_for(L::Exact(5), 20, 16.0, 1.0),
+            8,
+            "고정도 바닥 아래로는 안 감"
+        );
+        assert_eq!(
+            line_h_for(L::AtLeast(14), 20, 16.0, 1.0),
+            20,
+            "최소 < 상자 = 상자"
+        );
+        assert_eq!(
+            line_h_for(L::AtLeast(26), 20, 16.0, 1.0),
+            26,
+            "최소 > 상자 = 최소"
+        );
+        assert_eq!(line_h_for(L::Multiple(1.2), 40, 16.0, 2.0), 38, "배율 2");
+        assert_eq!(line_h_for(L::Exact(19), 40, 16.0, 2.0), 38);
     }
 
     /// ① 켜면 본문 가용 폭이 미니맵 폭 + 여백만큼 줄고, 띠는 스크롤바 안쪽(오른쪽 13px 앞)에 놓인다.
