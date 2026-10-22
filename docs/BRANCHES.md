@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| (main 직접) | 2026-10-22 | 2026-10-22 → main · **3cdfca2**(nexa-dlg) + 7a493ce(nexa-fs) + 9588521(nexa-ctl) | 3 | 221차 파일 창 편집(nexa-sql 135차 win · 사용자 10-22) — nexa-fs `trash`(3-OS 휴지통 · Token/restore) · nexa-ctl `text_dx`/`text_pad` · nexa-dlg 이름 바꾸기(인라인·한 번 더 클릭·제자리·글자 정렬) · 삭제(휴지통·영구 2단) · Undo/Redo · `set_pinned` · 시험 nexa-fs 23 · nexa-dlg 8 · nexa-ctl 452 |
 | feat/220-line-spacing | 2026-10-21 | 2026-10-21 → main(삭제) · **8f81401** | 1 | 220차 편집기 줄 높이 = 글꼴을 따름(`MIN_LINE_H` 20 → 8) + `LineSpacing`/`line_h_for`/`TextBox::set_line_spacing`(nexa-sql 134차 win D-315 · docs/118) · nexa-ctl 452/0 · push = 인증 수단 없어 대기(10-21 · SSH 키·설정·gh 로그인 없음) |
 | (main 직접) | 2026-10-20 | 2026-10-20 → main · **ff2633b** | 1 | 219차 nexa-font TTC 얼굴 = 표시 이름으로 선택(`collection_index_by_name`) · Ubuntu NotoSansCJK 인덱스 2 = SC 결함 · nexa-sql 133차 Linux T-375 · 문서 d2edf69 · push ✓ · ci 39455579131 ✓ 3-OS |
 | (main 직접) | 2026-10-20 | 2026-10-20 → main · **a1b60e4**(소스 · rebase = 다른 세션 ca2b0dd 위 · 종전 e756e66) + 문서 cf073b2 | 2 | 218차 `EditState::move_carets` · 멀티라인 Home/End = 열 모드 유지(nexa-sql 131차 · 사용자 10-19) · nexa-ctl 시험 451/0 |

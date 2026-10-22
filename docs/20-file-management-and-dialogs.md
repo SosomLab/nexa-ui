@@ -148,7 +148,7 @@
 | 최근 파일 · 즐겨찾기 | `nexa-fs::places` + `nexa-conf` | 전부 |
 | 파일 작업 + 진행 + 취소 + 충돌 | `nexa-fs::ops` + `nexa-dlg::Progress` | dir2 · clip(첨부) |
 | 백업/복원 폴더·파일 선택(beep `PickerPurpose` 8종 = BackupDir·RestoreKey·ProfileImage·SettingsBackupDir…) · clip `sync.file_dir`(지금은 경로 타이핑) | `FilePicker{Folder·Open·Save}` | beep · clip · nexa-sql 라이선스 백업([nexa-sql 25 §11-3](../../nexa-sql/docs/25-license-tiers-and-server.md)) |
-| 휴지통 | `nexa-fs::ops::trash` | dir2 · 대화상자 `Del` |
+| 휴지통 | `nexa-fs::ops::trash` | dir2 · 대화상자 `Del` · ✅ 10-22(221차) 구현 = `nexa_fs::trash::send`(Windows `SHFileOperationW` FO_DELETE+FOF_ALLOWUNDO · macOS `~/.Trash` + osascript 폴백 · Linux XDG `.trashinfo` 먼저) · FilePicker Delete = 휴지통 · Shift+Delete = 영구 2단 |
 
 ---
 
@@ -204,5 +204,5 @@
 | **F-3** | 파일 컨트롤 6종 — PathBar · PlacesList · FileList(columns/rows 이식 = U-3 공유) · FileTree · NameBox · FilterCombo · `docs/ctl` 문서 | F-1 U-2 |
 | **F-4** | `nexa-dlg` — Dialog 프레임 · MessageBox · Prompt · **FilePicker{Open·OpenMany·Save·Folder}** · 크기/보기 기억 · i18n 어휘 | F-2 F-3 |
 | **F-5** | `nexa-fs::ops` + `Progress` — 복사/이동/이름변경/새 폴더/휴지통 · 충돌 · 취소 · 워커 | F-1 F-4 D-7 |
-| **F-6** | nexa-sql 배선 — 열기/저장/다른 이름으로/프로젝트 폴더/export 경로 · `DroppedFile` · 최근 파일 | F-4 |
+| **F-6** | nexa-sql 배선 — 열기/저장/다른 이름으로/프로젝트 폴더/export 경로 · `DroppedFile` · 최근 파일 · 시작 폴더 규칙 = 첫 열기는 프로젝트 파일 폴더/폴더 모드 폴더, 그 뒤 마지막 위치(모드가 바뀌면 다시 첫 열기 · nexa-sql 67 §6 · 10-22) · 사이드바 맨 위 = 모드 위치(`FilePicker::set_pinned`) | F-4 |
 | **F-7** | clip(첨부·내보내기) · beep(파일 전송 선택) · dir2(소비자 전환) 이관 제안 | F-5 · 각 저장소 결정 |
