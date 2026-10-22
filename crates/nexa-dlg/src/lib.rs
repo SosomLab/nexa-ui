@@ -56,6 +56,18 @@ impl FileFilter {
     }
 }
 
+/// ★ 파일 창 안에서 한 파일 작업(되돌리기 스택 · 사용자 10-22): 이름 바꾸기 · 새 폴더 · 휴지통(토큰으로 복원).
+/// 영구 삭제(Shift+Delete)는 되돌릴 수 없어 쌓지 않는다.
+#[derive(Clone, Debug)]
+enum FileOp {
+    Rename { from: PathBuf, to: PathBuf },
+    Mkdir { path: PathBuf },
+    Trash { token: nexa_fs::trash::Token },
+}
+
+/// 되돌리기 스택 상한(한 창 수명 안).
+const UNDO_MAX: usize = 50;
+
 /// 앱이 주입하는 문자열(전부 i18n 키의 번역 결과).
 #[derive(Clone, Debug, Default)]
 pub struct PickerLabels {
@@ -130,6 +142,22 @@ pub struct PickerLabels {
     pub menu_copy_name: String,
     /// 우클릭 메뉴 — 새로 고침.
     pub menu_refresh: String,
+    /// 우클릭 메뉴 — 이름 바꾸기(폴더·파일 · 인라인 편집 · 사용자 10-22).
+    pub menu_rename: String,
+    /// 오류 — 이름 바꾸기 실패.
+    pub err_rename: String,
+    /// 우클릭 메뉴 — 삭제(휴지통 · Delete 키 · 사용자 10-22).
+    pub menu_delete: String,
+    /// 오류 — 삭제 실패.
+    pub err_delete: String,
+    /// 안내 — 영구 삭제 2단(`{0}` = 이름 · Shift+Delete 한 번 더).
+    pub perm_delete_ask: String,
+    /// 우클릭 메뉴 — 실행 취소(파일 작업 · Ctrl+Z · 사용자 10-22).
+    pub menu_undo: String,
+    /// 우클릭 메뉴 — 다시 실행(Ctrl+Y · Ctrl+Shift+Z).
+    pub menu_redo: String,
+    /// 오류 — 되돌리기/다시 실행 실패.
+    pub err_undo: String,
     /// 다중 선택 안내(`{0}` = 파일 수 · `{1}` = 합계 크기).
     pub multi_selected: String,
 }
@@ -175,6 +203,8 @@ pub struct FilePicker {
     /// 우클릭 메뉴(열기 · 경로/이름 복사 · 새 폴더 · 새로 고침 · 숨김 표시).
     menu: ContextMenu,
     menu_row: Option<usize>,
+    /// ★ 인라인 이름 바꾸기(사용자 10-22): (행 · 원래 경로 · 편집 상자). Enter = 적용 · Esc = 취소 · 바깥 클릭 = 적용 시도.
+    rename: Option<(usize, PathBuf, TextBox)>,
     /// 결합 정렬 키(클릭 = 단일 3단 ▲→▼→해제 · Shift+클릭 = 키 추가/방향/제거 · 비면 이름 ▲ · 결과 그리드와 같은 규약).
     sort_keys: Vec<(SortKey, bool)>,
     /// 표시 순서(논리 컬럼 1=수정 · 2=크기 · 3=유형 · 이름은 항상 첫 열) — 헤더 드래그로 바꾼다.
@@ -186,6 +216,8 @@ pub struct FilePicker {
     show_hidden: bool,
     places: Vec<Place>,
     recent: Vec<PathBuf>,
+    /// ★ 고정 폴더(앱이 라벨과 함께 준다 · "최근 폴더" 그룹 맨 위 · 사용자 10-22 "현재 모드의 위치"): (라벨, 경로).
+    pinned: Vec<(String, PathBuf)>,
     // 컨트롤
     home_btn: Button,
     back_btn: Button,
@@ -242,6 +274,13 @@ pub struct FilePicker {
     now_ms: u64,
     last_row_click: Option<(usize, Instant)>,
     last_place_row: usize,
+    /// ★ 영구 삭제 2단 무장(Shift+Delete · 같은 항목을 5초 안에 한 번 더 · 사용자 10-22).
+    perm_delete_arm: Option<(PathBuf, Instant)>,
+    /// ★ 다음 `refresh_grid` 한 번은 재정렬하지 않는다(이름 바꾼 항목 제자리 유지 · 사용자 10-22 "위치 보정").
+    keep_order_once: bool,
+    /// ★ 파일 작업 되돌리기/다시 실행 스택(사용자 10-22 · Ctrl+Z / Ctrl+Y).
+    undo_stack: Vec<FileOp>,
+    redo_stack: Vec<FileOp>,
     action: PickerAction,
     /// 헤더 열 폭(논리 px) — 정렬 히트테스트 근거.
     col_w: [i32; 4],
@@ -339,6 +378,7 @@ impl FilePicker {
             entries: Vec::new(),
             menu: ContextMenu::new(),
             menu_row: None,
+            rename: None,
             sort_keys: Vec::new(),
             col_order: vec![2, 1, 3],
             hdr_drag: None,
@@ -346,6 +386,7 @@ impl FilePicker {
             show_hidden: false,
             places: nexa_fs::places(),
             recent: Vec::new(),
+            pinned: Vec::new(),
             home_btn: Button::glyph(glyph(GlyphKind::Home)),
             // Material 도형(사용자 SVG 09-16) — 글자 ←→↑는 글꼴마다 굵기·위치가 달랐다.
             back_btn: Button::glyph(glyph(GlyphKind::ArrowBack)),
@@ -389,6 +430,10 @@ impl FilePicker {
             now_ms: 0,
             last_row_click: None,
             last_place_row: usize::MAX,
+            perm_delete_arm: None,
+            keep_order_once: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             action: PickerAction::None,
             col_w: [320, 150, 90, 110],
             grid_rect: Rect::default(),
@@ -417,6 +462,12 @@ impl FilePicker {
     /// 최근 폴더(앱이 기억 · 사이드바 아래에 표시).
     pub fn set_recent(&mut self, recent: Vec<PathBuf>) {
         self.recent = recent.into_iter().filter(|p| p.is_dir()).take(8).collect();
+        self.rebuild_places();
+    }
+
+    /// ★ 고정 폴더(사용자 10-22): 라벨 그대로 "최근 폴더" 그룹 **맨 위**에 · 없는 폴더는 뺀다 · 최근이 비어도 그룹이 보인다.
+    pub fn set_pinned(&mut self, pinned: Vec<(String, PathBuf)>) {
+        self.pinned = pinned.into_iter().filter(|(_, p)| p.is_dir()).collect();
         self.rebuild_places();
     }
 
@@ -544,6 +595,7 @@ impl FilePicker {
             | self.cancel_btn.tick(now_ms)
             | self.path_box.tick(now_ms)
             | self.name_box.tick(now_ms)
+            | self.rename_tick(now_ms)
             | self.places_view.tick(now_ms)
             | self.grid.tick(now_ms)
             | self.filter_combo.tick_hover(now_ms)
@@ -574,6 +626,10 @@ impl FilePicker {
             || self.cancel_btn.is_animating()
             || self.path_box.is_animating()
             || self.name_box.is_animating()
+            || self
+                .rename
+                .as_ref()
+                .is_some_and(|(_, _, tb)| tb.is_animating())
             || self.filter_combo.hover_animating()
             || self
                 .extra
@@ -637,12 +693,18 @@ impl FilePicker {
             b.expanded = true;
             nodes.push(b);
         }
-        if !self.recent.is_empty() {
+        if !self.recent.is_empty() || !self.pinned.is_empty() {
             let folder = self.kind_icon(true, "");
+            // 고정(라벨 그대로) → 최근(홈 축약 경로).
             let kids: Vec<TreeNode> = self
-                .recent
+                .pinned
                 .iter()
-                .map(|p| self.folder_node(nexa_fs::path::display(p), p, folder.clone()))
+                .map(|(label, p)| self.folder_node(label.clone(), p, folder.clone()))
+                .chain(
+                    self.recent
+                        .iter()
+                        .map(|p| self.folder_node(nexa_fs::path::display(p), p, folder.clone())),
+                )
                 .collect();
             let mut b = TreeNode::branch(self.labels.place_recent.clone(), kids);
             b.expanded = true;
@@ -654,6 +716,7 @@ impl FilePicker {
         // 셰브론 유무는 백그라운드 프로브(장소 + 드라이브 + 최근 · 이미 아는 것은 제외).
         let mut paths: Vec<PathBuf> = self.places.iter().map(|p| p.path.clone()).collect();
         paths.extend(self.recent.iter().cloned());
+        paths.extend(self.pinned.iter().map(|(_, p)| p.clone()));
         paths.retain(|p| !self.probes.contains_key(p));
         if !paths.is_empty() {
             let opts = self.list_opts(true);
@@ -1377,7 +1440,9 @@ impl FilePicker {
     }
 
     fn refresh_grid(&mut self, select: usize) {
-        nexa_fs::sort_by(&mut self.entries, &self.sort_keys);
+        if !std::mem::take(&mut self.keep_order_once) {
+            nexa_fs::sort_by(&mut self.entries, &self.sort_keys);
+        }
         let exts = self.current_filter().exts.clone();
         let top: Vec<Entry> = self
             .entries
@@ -1833,11 +1898,303 @@ impl FilePicker {
         }
         match std::fs::create_dir(self.dir.join(&name)) {
             Ok(()) => {
+                self.push_op(FileOp::Mkdir {
+                    path: self.dir.join(&name),
+                });
                 self.reload();
                 self.select_after = Some(name);
                 self.message = None;
             }
             Err(e) => self.message = Some((format!("{} — {e}", self.labels.err_mkdir), true)),
+        }
+    }
+
+    /// ★ 인라인 이름 바꾸기 시작(사용자 10-22): 그 행의 이름 칸 자리에 편집 상자 · 파일은 확장자를 뺀 이름만 선택.
+    fn begin_rename(&mut self, row: usize) {
+        let Some((path, is_dir)) = self
+            .grid
+            .rows()
+            .get(row)
+            .and_then(|rr| Self::row_item(&rr.cells, &rr.label))
+        else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if name.is_empty() {
+            return;
+        }
+        let mut tb = TextBox::new(String::new()).with_text(&name);
+        tb.set_scale(self.base.scale);
+        tb.set_focused(true);
+        let mut inv = Invalidations::default();
+        let stem = if is_dir {
+            name.chars().count()
+        } else {
+            std::path::Path::new(&name)
+                .file_stem()
+                .map_or(name.chars().count(), |s| {
+                    s.to_string_lossy().chars().count()
+                })
+        };
+        tb.select_range(0, stem, &mut inv);
+        tb.set_bounds(self.rename_rect_for(row), &mut inv);
+        self.grid.set_focused(false);
+        self.message = None;
+        self.rename = Some((row, path, tb));
+    }
+
+    /// 편집 상자 자리 = 그 행의 이름 칸(셰브론·아이콘 뒤부터 이름 열 끝까지).
+    fn rename_rect(&self) -> Rect {
+        match &self.rename {
+            Some((row, _, _)) => self.rename_rect_for(*row),
+            None => Rect::default(),
+        }
+    }
+
+    /// 편집 상자 틱 + 자리 갱신(스크롤·크기 변화 추종) — 그리기는 `&self`라 여기서 맞춘다.
+    fn rename_tick(&mut self, now_ms: u64) -> bool {
+        if self.rename.is_none() {
+            return false;
+        }
+        let rect = self.rename_rect();
+        let mut inv = Invalidations::default();
+        match self.rename.as_mut() {
+            Some((_, _, tb)) => {
+                if tb.bounds() != rect {
+                    tb.set_bounds(rect, &mut inv);
+                }
+                tb.tick(now_ms)
+            }
+            None => false,
+        }
+    }
+
+    fn rename_rect_for(&self, row: usize) -> Rect {
+        let row = &row;
+        let vp = self.grid.rows_viewport();
+        let (_, ch) = self.grid.content_size();
+        let n = self.grid.rows().len().max(1);
+        let rh = (ch / n as i32).max(1);
+        let (sx, sy) = self.grid.scroll();
+        let depth = self.grid.rows().get(*row).map_or(0, |r| r.depth) as i32;
+        // ★ 글자 x = 그리드가 마지막으로 그린 **실측** 오프셋(셰브론·아이콘 실제 크기) - 상자 안쪽 여백 → 편집 중에도 글자가
+        //   같은 자리(사용자 10-22 "편집 모드에서 약간 오른쪽으로 이동"). 그린 적이 없으면 종전 추정값.
+        let dx = self
+            .grid
+            .text_dx()
+            .unwrap_or(self.s(4) + self.s(16) + self.s(22));
+        let pad = self
+            .rename
+            .as_ref()
+            .map_or(self.s(10), |(_, _, tb)| tb.text_pad());
+        let x = vp.x + dx + self.s(16) * depth - sx - pad;
+        let y = vp.y - sy + *row as i32 * rh;
+        let w = (vp.x + self.col_w[0] - x).max(self.s(60));
+        Rect::new(x, y, w, rh)
+    }
+
+    /// Enter·바깥 클릭 = 적용: 빈 이름·같은 이름 = 취소 · 경로 구분자/금지 글자 = `err_bad_name` · 이미 있음 = `err_exists` ·
+    /// 실패 = `err_rename` + OS 원문. 성공 = 다시 읽고 새 이름을 선택.
+    fn commit_rename(&mut self) {
+        let Some((_, old, tb)) = self.rename.take() else {
+            return;
+        };
+        let new = tb.text().trim().to_string();
+        let old_name = old
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if new.is_empty() || new == old_name {
+            return;
+        }
+        if new
+            .chars()
+            .any(|c| matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+            || new == "."
+            || new == ".."
+        {
+            self.message = Some((self.labels.err_bad_name.clone(), true));
+            return;
+        }
+        let Some(parent) = old.parent() else {
+            return;
+        };
+        let target = parent.join(&new);
+        // 대소문자만 다른 이름(Windows·macOS)은 같은 파일이라 `exists`가 참이어도 바꿀 수 있다.
+        if target.exists() && !new.eq_ignore_ascii_case(&old_name) {
+            self.message = Some((self.labels.err_exists.clone(), true));
+            return;
+        }
+        match std::fs::rename(&old, &target) {
+            Ok(()) => {
+                self.message = None;
+                self.push_op(FileOp::Rename {
+                    from: old.clone(),
+                    to: target.clone(),
+                });
+                // ★ 제자리 유지(사용자 10-22 "위치 보정"): 다시 읽어 재정렬하지 않고 그 항목만 고친다 — 재정렬은 다음
+                //   폴더 이동·새로 고침 때. 항목이 목록에 없으면(경주) 종전처럼 다시 읽는다.
+                let sel = self.grid.selected_row();
+                let hit = self.entries.iter_mut().find(|e| e.path == old);
+                match hit {
+                    Some(e) => {
+                        e.name = new.clone();
+                        e.path = target.clone();
+                        e.modified = std::fs::metadata(&target).and_then(|m| m.modified()).ok();
+                        self.keep_order_once = true;
+                        self.refresh_grid(sel);
+                        self.select_name(&new);
+                    }
+                    None => {
+                        self.reload();
+                        self.select_after = Some(new);
+                    }
+                }
+            }
+            Err(e) => self.message = Some((format!("{} — {e}", self.labels.err_rename), true)),
+        }
+    }
+
+    /// 새 파일 작업 = 되돌리기 스택에 쌓고 다시 실행 스택은 비운다(상한 [`UNDO_MAX`]).
+    fn push_op(&mut self, op: FileOp) {
+        self.undo_stack.push(op);
+        self.redo_stack.clear();
+        if self.undo_stack.len() > UNDO_MAX {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    fn leaf_name(p: &Path) -> Option<String> {
+        p.file_name().map(|n| n.to_string_lossy().into_owned())
+    }
+
+    /// ★ 실행 취소(Ctrl+Z · 사용자 10-22): 이름 바꾸기 = 되돌림 · 새 폴더 = 지움(비어 있을 때만) · 휴지통 = 원래 자리로 복원.
+    /// 실패 = `err_undo` + 원문(항목은 스택에 남긴다 · 복원 불가 토큰만 버린다) · 성공 = 다시 읽고 그 항목 선택.
+    fn undo(&mut self) {
+        let Some(op) = self.undo_stack.pop() else {
+            return;
+        };
+        let (res, select) = match &op {
+            FileOp::Rename { from, to } => (
+                std::fs::rename(to, from).map_err(|e| e.to_string()),
+                Self::leaf_name(from),
+            ),
+            FileOp::Mkdir { path } => (std::fs::remove_dir(path).map_err(|e| e.to_string()), None),
+            FileOp::Trash { token } => (
+                nexa_fs::trash::restore(token),
+                Self::leaf_name(token.original()),
+            ),
+        };
+        match res {
+            Ok(()) => {
+                self.redo_stack.push(op);
+                self.message = None;
+                self.reload();
+                self.select_after = select;
+            }
+            Err(e) => {
+                self.message = Some((format!("{} — {e}", self.labels.err_undo), true));
+                let keep = !matches!(&op, FileOp::Trash { token } if !token.restorable());
+                if keep {
+                    self.undo_stack.push(op);
+                }
+            }
+        }
+    }
+
+    /// ★ 다시 실행(Ctrl+Y · Ctrl+Shift+Z): 되돌린 작업을 다시 한다(휴지통은 다시 보내 새 토큰).
+    fn redo(&mut self) {
+        let Some(op) = self.redo_stack.pop() else {
+            return;
+        };
+        let (res, select, again) = match op {
+            FileOp::Rename { from, to } => (
+                std::fs::rename(&from, &to).map_err(|e| e.to_string()),
+                Self::leaf_name(&to),
+                FileOp::Rename { from, to },
+            ),
+            FileOp::Mkdir { path } => (
+                std::fs::create_dir(&path).map_err(|e| e.to_string()),
+                Self::leaf_name(&path),
+                FileOp::Mkdir { path },
+            ),
+            FileOp::Trash { token } => match nexa_fs::trash::send(token.original()) {
+                Ok(t) => (Ok(()), None, FileOp::Trash { token: t }),
+                Err(e) => (Err(e), None, FileOp::Trash { token }),
+            },
+        };
+        match res {
+            Ok(()) => {
+                self.undo_stack.push(again);
+                self.message = None;
+                self.reload();
+                self.select_after = select;
+            }
+            Err(e) => {
+                self.message = Some((format!("{} — {e}", self.labels.err_undo), true));
+                self.redo_stack.push(again);
+            }
+        }
+    }
+
+    /// ★ 삭제(사용자 10-22): 기본 = **휴지통**(확인 없음 · OS에서 되돌릴 수 있음 · `nexa_fs::trash`) ·
+    /// `permanent`(Shift+Delete) = 2단(같은 항목을 5초 안에 한 번 더) 영구 삭제(폴더는 통째로).
+    /// 실패 = `err_delete` + OS 원문 · 성공 = 다시 읽고 **그 아래 행**(없으면 위 행) 선택.
+    fn delete_row(&mut self, row: usize, permanent: bool) {
+        let Some((path, is_dir)) = self
+            .grid
+            .rows()
+            .get(row)
+            .and_then(|r| Self::row_item(&r.cells, &r.label))
+        else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if permanent {
+            let armed = self
+                .perm_delete_arm
+                .take()
+                .is_some_and(|(p, t)| p == path && t.elapsed() < std::time::Duration::from_secs(5));
+            if !armed {
+                self.message = Some((self.labels.perm_delete_ask.replace("{0}", &name), false));
+                self.perm_delete_arm = Some((path, Instant::now()));
+                return;
+            }
+        }
+        let next = {
+            let rows = self.grid.rows();
+            rows.get(row + 1)
+                .or_else(|| row.checked_sub(1).and_then(|i| rows.get(i)))
+                .filter(|r| r.depth == 0)
+                .map(|r| r.label.clone())
+        };
+        let res = if permanent {
+            if is_dir {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            }
+            .map(|()| None)
+            .map_err(|e| e.to_string())
+        } else {
+            nexa_fs::trash::send(&path).map(Some)
+        };
+        match res {
+            Ok(token) => {
+                if let Some(token) = token {
+                    self.push_op(FileOp::Trash { token });
+                }
+                self.message = None;
+                self.reload();
+                self.select_after = next;
+            }
+            Err(e) => self.message = Some((format!("{} — {e}", self.labels.err_delete), true)),
         }
     }
 
@@ -1893,6 +2250,8 @@ impl FilePicker {
                 CtxItem::item("copy_name", self.labels.menu_copy_name.clone())
                     .with_icon(Some(glyph(GlyphKind::Text))),
             );
+            items.push(CtxItem::item("rename", self.labels.menu_rename.clone()));
+            items.push(CtxItem::item("delete", self.labels.menu_delete.clone()));
             items.push(CtxItem::Separator);
         }
         items.push(
@@ -1903,6 +2262,18 @@ impl FilePicker {
             CtxItem::item("refresh", self.labels.menu_refresh.clone())
                 .with_icon(Some(glyph(GlyphKind::Refresh))),
         );
+        items.push(CtxItem::Separator);
+        // ★ 파일 작업 되돌리기/다시 실행(사용자 10-22 · Ctrl+Z / Ctrl+Y).
+        items.push(CtxItem::maybe(
+            "undo",
+            self.labels.menu_undo.clone(),
+            !self.undo_stack.is_empty(),
+        ));
+        items.push(CtxItem::maybe(
+            "redo",
+            self.labels.menu_redo.clone(),
+            !self.redo_stack.is_empty(),
+        ));
         items.push(CtxItem::Separator);
         items.push(
             CtxItem::item("hidden", self.labels.show_hidden.clone()).with_checked(self.show_hidden),
@@ -1940,7 +2311,19 @@ impl FilePicker {
                     self.action = PickerAction::CopyText(name);
                 }
             }
+            "rename" => {
+                if let Some(r) = self.menu_row {
+                    self.begin_rename(r);
+                }
+            }
+            "delete" => {
+                if let Some(r) = self.menu_row {
+                    self.delete_row(r, false);
+                }
+            }
             "new_folder" => self.make_new_folder(),
+            "undo" => self.undo(),
+            "redo" => self.redo(),
             "refresh" => self.reload(),
             "hidden" => {
                 self.show_hidden = !self.show_hidden;
@@ -2331,6 +2714,41 @@ impl Widget for FilePicker {
             x: self.cursor.0,
             y: self.cursor.1,
         };
+        // ★ 인라인 이름 바꾸기 중(사용자 10-22): 키·글자는 상자로 · Enter = 적용 · Esc = 취소 · 상자 밖 누름 = 적용 시도 뒤 그 사건은 계속.
+        if self.rename.is_some() {
+            let rect = self.rename_rect();
+            match *ev {
+                InputEvent::Key {
+                    key: Key::Enter, ..
+                } => {
+                    self.commit_rename();
+                    inv.push(self.base.bounds);
+                    return;
+                }
+                InputEvent::Key {
+                    key: Key::Escape, ..
+                } => {
+                    self.rename = None;
+                    inv.push(self.base.bounds);
+                    return;
+                }
+                InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y }
+                    if !rect.contains(Point { x, y }) =>
+                {
+                    self.commit_rename();
+                    inv.push(self.base.bounds);
+                }
+                _ => {
+                    if let Some((_, _, tb)) = self.rename.as_mut() {
+                        tb.set_bounds(rect, inv);
+                        tb.on_event(ev, inv);
+                    }
+                    if !matches!(*ev, InputEvent::MouseMove { .. }) {
+                        return;
+                    }
+                }
+            }
+        }
         // ★ 덮어쓰기 확인 카드가 열려 있으면 모달 — 두 버튼과 Enter/Esc만.
         if let Some(path) = self.overwrite_ask.clone() {
             match *ev {
@@ -2638,6 +3056,17 @@ impl Widget for FilePicker {
                     }
                 }
                 InputEvent::Char { c: '\u{8}', .. } => self.go_up(),
+                InputEvent::Undo => self.undo(),
+                InputEvent::Redo => self.redo(),
+                // ★ Delete = 휴지통 · Shift+Delete = 영구(2단)(사용자 10-22).
+                InputEvent::Key {
+                    key: Key::Delete,
+                    shift,
+                    ..
+                } => {
+                    let row = self.grid.selected_row();
+                    self.delete_row(row, shift);
+                }
                 InputEvent::MouseDown {
                     x,
                     y,
@@ -2645,6 +3074,8 @@ impl Widget for FilePicker {
                     primary,
                 } => {
                     let hit = self.grid.row_hit(x, y);
+                    // 누르기 전에 이미 선택돼 있던 행(한 번 더 클릭 = 이름 바꾸기 판정 · 사용자 10-22).
+                    let prev_sel = self.grid.has_selection().then(|| self.grid.selected_row());
                     self.grid.on_event(ev, inv);
                     self.lazy_load_grid();
                     if let Some((row, on_chev)) = hit {
@@ -2654,6 +3085,12 @@ impl Widget for FilePicker {
                         } else {
                             let now = Instant::now();
                             let dbl = matches!(self.last_row_click, Some((r, t)) if r == row && now.duration_since(t) <= DOUBLE_CLICK);
+                            // ★ 탐색기 관례(사용자 10-22): **이미 선택된 행**을 더블클릭 간격이 지난 뒤 한 번 더(보조키 없이) 누르면 이름 바꾸기.
+                            let slow_again = !dbl
+                                && !shift
+                                && !primary
+                                && prev_sel == Some(row)
+                                && matches!(self.last_row_click, Some((r, _)) if r == row);
                             self.last_row_click = Some((row, now));
                             if let Some((path, is_dir)) = self.selected_item() {
                                 // 폴더 고르기에서는 **클릭한 폴더**가 이름 상자에 들어간다(Windows의 "폴더:" 칸과 같다) — 확정 버튼은
@@ -2697,6 +3134,12 @@ impl Widget for FilePicker {
                             if dbl {
                                 self.last_row_click = None;
                                 self.activate_row(row);
+                            } else if slow_again {
+                                // 러버밴드·스윕은 시작하지 않는다(편집 상자가 그 자리를 쓴다).
+                                self.band = None;
+                                self.drag_sweep = None;
+                                self.last_row_click = None;
+                                self.begin_rename(row);
                             }
                         }
                     } else {
@@ -2770,6 +3213,14 @@ impl Widget for FilePicker {
                 }
             }
         }
+        // 어디에도 포커스가 없을 때(또는 장소 트리 포커스) Ctrl+Z/Ctrl+Y = 파일 작업 되돌리기/다시 실행(사용자 10-22).
+        if !self.any_focused() || self.places_view.is_focused() {
+            match *ev {
+                InputEvent::Undo => self.undo(),
+                InputEvent::Redo => self.redo(),
+                _ => {}
+            }
+        }
         // 어디에도 포커스가 없을 때 Enter = 확정(OS 대화상자 관례).
         if !self.any_focused()
             && matches!(
@@ -2817,6 +3268,9 @@ impl Widget for FilePicker {
         }
         self.places_view.paint(ctx, theme);
         self.grid.paint(ctx, theme);
+        if let Some((_, _, tb)) = &self.rename {
+            tb.paint(ctx, theme);
+        }
         if let Some((o, c, _)) = &self.band {
             let r = Rect::new(
                 o.x.min(c.x),
@@ -2891,6 +3345,9 @@ impl Widget for FilePicker {
         }
         self.menu.paint(ctx, theme);
         self.name_box.paint_popup(ctx, theme);
+        if let Some((_, _, tb)) = &self.rename {
+            tb.paint_popup(ctx, theme);
+        }
         // ★ 덮어쓰기 확인 카드(모달 · 맨 위) — 뒤를 살짝 어둡게 · 문구 + 파일 이름 + [취소] [덮어쓰기].
         if let Some(path) = &self.overwrite_ask {
             let sc = |v: f32| (v * self.base.scale).round() as i32;
@@ -2945,6 +3402,8 @@ mod tests {
             folder_name: "Folder:".into(),
             cancel: "Cancel".into(),
             new_folder: "New folder".into(),
+            menu_rename: "Rename".into(),
+            err_rename: "Cannot rename".into(),
             new_folder_name: "New folder".into(),
             kind_folder: "Folder".into(),
             kind_file: "File".into(),
@@ -2980,6 +3439,108 @@ mod tests {
         std::fs::write(d.join("a.sql"), b"select 1").unwrap_or(());
         std::fs::write(d.join("b.txt"), b"x").unwrap_or(());
         d
+    }
+
+    /// ★ 이름 바꾸기 제자리 유지(사용자 10-22 "위치 보정"): 바꾼 항목이 같은 행에 남고 선택된다 · 다시 읽으면(새로 고침) 재정렬.
+    #[test]
+    fn rename_keeps_row_position_until_reload() {
+        let d = temp_dir("rename-pos");
+        for n in ["a.sql", "b.sql", "c.sql"] {
+            std::fs::write(d.join(n), "x").expect("write");
+        }
+        let mut p = FilePicker::new(
+            PickerMode::Open,
+            Some(&d),
+            vec![FileFilter::new("All", &[])],
+            labels(),
+        );
+        settle(&mut p);
+        let names = |p: &FilePicker| -> Vec<String> {
+            p.grid.rows().iter().map(|r| r.label.clone()).collect()
+        };
+        let before = names(&p);
+        let row = before.iter().position(|n| n == "a.sql").expect("a.sql");
+        p.begin_rename(row);
+        if let Some((_, _, tb)) = p.rename.as_mut() {
+            tb.set_text("z.sql");
+        }
+        p.commit_rename();
+        let after = names(&p);
+        assert_eq!(after[row], "z.sql", "같은 행에 남는다: {after:?}");
+        assert_eq!(after.len(), before.len());
+        assert_eq!(p.grid.selected_row(), row, "바꾼 항목이 선택");
+        assert!(d.join("z.sql").is_file() && !d.join("a.sql").exists());
+        // ★ 되돌리기(사용자 10-22): 이름 바꾸기 undo → a.sql · redo → z.sql · 새 폴더 undo = 지움.
+        p.undo();
+        settle(&mut p);
+        assert!(
+            d.join("a.sql").is_file() && !d.join("z.sql").exists(),
+            "undo rename"
+        );
+        p.redo();
+        settle(&mut p);
+        assert!(
+            d.join("z.sql").is_file() && !d.join("a.sql").exists(),
+            "redo rename"
+        );
+        p.make_new_folder();
+        settle(&mut p);
+        let made = std::fs::read_dir(&d)
+            .expect("read")
+            .flatten()
+            .find(|e| e.path().is_dir())
+            .map(|e| e.path())
+            .expect("new folder");
+        p.undo();
+        settle(&mut p);
+        assert!(!made.exists(), "undo mkdir removes the empty folder");
+        assert!(
+            p.redo_stack.len() == 1 && p.undo_stack.len() == 1,
+            "stacks: rename kept · mkdir in redo"
+        );
+        // 영구 삭제 2단(다시 읽어 재정렬됐으니 행을 다시 찾는다): 첫 Shift+Delete = 안내만 · 5초 안 두 번째 = 삭제 · 다음 행 선택.
+        let row = names(&p).iter().position(|n| n == "z.sql").expect("z.sql");
+        p.delete_row(row, true);
+        assert!(d.join("z.sql").is_file(), "첫 번째는 안내만");
+        assert!(
+            p.message.as_ref().is_some_and(|(_, err)| !err),
+            "안내(오류 아님)"
+        );
+        p.delete_row(row, true);
+        assert!(!d.join("z.sql").exists(), "두 번째 = 영구 삭제");
+        settle(&mut p);
+        assert_eq!(names(&p).len(), before.len() - 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// ★ 고정 폴더(사용자 10-22): 라벨 그대로 · "최근 폴더" 그룹 맨 위 · 없는 폴더는 뺀다 · 최근이 비어도 보인다.
+    #[test]
+    fn pinned_folders_lead_the_recent_group() {
+        let d = temp_dir("pinned");
+        let mut p = FilePicker::new(
+            PickerMode::Open,
+            Some(&d),
+            vec![FileFilter::new("All", &[])],
+            labels(),
+        );
+        p.set_pinned(vec![
+            ("Project location - ~/x".to_string(), d.clone()),
+            ("missing".to_string(), d.join("nope")),
+        ]);
+        let rows = p.places_view.rows();
+        let i = rows
+            .iter()
+            .position(|r| r.label == "Project location - ~/x")
+            .expect("pinned row");
+        assert_eq!(
+            rows[i].cells.first().map(String::as_str),
+            Some(d.to_string_lossy().as_ref())
+        );
+        assert!(
+            rows.iter().all(|r| r.label != "missing"),
+            "없는 폴더는 뺀다"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
