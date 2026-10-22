@@ -558,6 +558,429 @@ pub mod naming {
     }
 }
 
+/// ★ 휴지통(사용자 10-22 · docs/20 §2 `ops.trash` · OS 차이는 이 층에만): Windows = `SHFileOperationW`(FO_DELETE + FOF_ALLOWUNDO ·
+/// shell32 인박스) · macOS = `~/.Trash`로 이동(다른 볼륨이면 Finder `osascript` 폴백) · Linux = XDG trash
+/// (`$XDG_DATA_HOME|~/.local/share` 아래 `Trash/{files,info}` · `.trashinfo` 먼저). 실패 = OS 원문 `Err(String)`.
+pub mod trash {
+    use std::path::{Path, PathBuf};
+
+    /// 휴지통에 들어간 항목의 자리(되돌리기용 · 불투명 · [`restore`]).
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Token {
+        original: PathBuf,
+        kind: Kind,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Kind {
+        /// 옮겨진 곳을 안다(Windows `$R…` · macOS `.Trash` · Linux XDG `files/`) + 메타 파일(Windows `$I…` · Linux `.trashinfo`).
+        Moved {
+            trashed: PathBuf,
+            meta: Option<PathBuf>,
+        },
+        /// 어디로 갔는지 모른다(복원 불가 · Finder 폴백 · 휴지통 기록을 못 찾음).
+        Unknown,
+    }
+
+    impl Token {
+        /// 원래 경로(절대).
+        #[must_use]
+        pub fn original(&self) -> &Path {
+            &self.original
+        }
+
+        /// 되돌릴 수 있는가.
+        #[must_use]
+        pub fn restorable(&self) -> bool {
+            matches!(self.kind, Kind::Moved { .. })
+        }
+    }
+
+    /// 파일 또는 폴더(통째로)를 휴지통으로 보낸다 → 되돌리기 토큰.
+    pub fn send(path: &Path) -> Result<Token, String> {
+        if std::fs::symlink_metadata(path).is_err() {
+            return Err("not found".to_string());
+        }
+        let abs = std::path::absolute(path).map_err(|e| e.to_string())?;
+        imp::send(&abs)
+    }
+
+    /// 휴지통에서 원래 자리로 되돌린다(원래 자리에 이미 무엇이 있으면 실패 · 메타 파일은 지운다).
+    pub fn restore(token: &Token) -> Result<(), String> {
+        let Kind::Moved { trashed, meta } = &token.kind else {
+            return Err("cannot restore: trash location unknown".to_string());
+        };
+        if std::fs::symlink_metadata(&token.original).is_ok() {
+            return Err("already exists".to_string());
+        }
+        if let Some(parent) = token.original.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::rename(trashed, &token.original).map_err(|e| e.to_string())?;
+        if let Some(m) = meta {
+            let _ = std::fs::remove_file(m);
+        }
+        Ok(())
+    }
+
+    /// XDG `.trashinfo`의 `Path=` 값 — 예약 문자만 `%XX`(구분자 `/`와 비예약 문자는 그대로).
+    #[must_use]
+    pub fn percent_encode(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for b in s.bytes() {
+            let keep = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/');
+            if keep {
+                out.push(b as char);
+            } else {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+        out
+    }
+
+    /// XDG `.trashinfo` 본문(`secs` = UTC epoch).
+    #[must_use]
+    pub fn trash_info(abs: &str, secs: i64) -> String {
+        let c = super::civil_from_unix(secs);
+        format!(
+            "[Trash Info]\nPath={}\nDeletionDate={:04}-{:02}-{:02}T{:02}:{:02}:{:02}\n",
+            percent_encode(abs),
+            c.year,
+            c.month,
+            c.day,
+            c.hour,
+            c.min,
+            c.sec
+        )
+    }
+
+    /// Windows 휴지통 `$I` 기록(버전 1 = Vista~8.1 · 2 = 10+) → (원래 경로, 삭제 시각 FILETIME). 모르는 형식 = None.
+    #[must_use]
+    pub fn parse_recycle_record(b: &[u8]) -> Option<(String, u64)> {
+        fn u64_at(b: &[u8], i: usize) -> Option<u64> {
+            b.get(i..i + 8)
+                .and_then(|s| s.try_into().ok())
+                .map(u64::from_le_bytes)
+        }
+        let version = u64_at(b, 0)?;
+        let time = u64_at(b, 16)?;
+        let (start, len) = match version {
+            1 => (24usize, 260usize),
+            2 => {
+                let n = b
+                    .get(24..28)
+                    .and_then(|s| s.try_into().ok())
+                    .map(u32::from_le_bytes)? as usize;
+                (28usize, n)
+            }
+            _ => return None,
+        };
+        let mut units = Vec::with_capacity(len.min(1024));
+        for i in 0..len {
+            let o = start + i * 2;
+            let u = u16::from_le_bytes([*b.get(o)?, *b.get(o + 1)?]);
+            if u == 0 {
+                break;
+            }
+            units.push(u);
+        }
+        Some((String::from_utf16_lossy(&units), time))
+    }
+
+    #[cfg(windows)]
+    mod imp {
+        use super::{Kind, Token};
+        use std::os::windows::ffi::OsStrExt;
+        use std::path::{Path, PathBuf};
+
+        /// `SHFILEOPSTRUCTW`(x64 자연 정렬 · 32비트 x86의 packed 배치는 지원 대상 아님).
+        #[repr(C)]
+        struct ShFileOpStructW {
+            hwnd: *mut core::ffi::c_void,
+            w_func: u32,
+            p_from: *const u16,
+            p_to: *const u16,
+            f_flags: u16,
+            f_any_operations_aborted: i32,
+            h_name_mappings: *mut core::ffi::c_void,
+            lpsz_progress_title: *const u16,
+        }
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SHFileOperationW(op: *mut ShFileOpStructW) -> i32;
+        }
+        const FO_DELETE: u32 = 3;
+        const FOF_SILENT: u16 = 0x0004;
+        const FOF_NOCONFIRMATION: u16 = 0x0010;
+        const FOF_ALLOWUNDO: u16 = 0x0040;
+        const FOF_NOERRORUI: u16 = 0x0400;
+
+        pub(super) fn send(abs: &Path) -> Result<Token, String> {
+            // 이중 널 종료 목록 · 뒤 구분자 제거(`C:\x\y\`는 셸이 거부).
+            let s = abs.as_os_str().to_string_lossy();
+            let s = s.trim_end_matches(['\\', '/']);
+            let mut list: Vec<u16> = std::ffi::OsStr::new(s).encode_wide().collect();
+            list.push(0);
+            list.push(0);
+            let mut op = ShFileOpStructW {
+                hwnd: std::ptr::null_mut(),
+                w_func: FO_DELETE,
+                p_from: list.as_ptr(),
+                p_to: std::ptr::null(),
+                f_flags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI,
+                f_any_operations_aborted: 0,
+                h_name_mappings: std::ptr::null_mut(),
+                lpsz_progress_title: std::ptr::null(),
+            };
+            // SAFETY: `list`는 호출 동안 살아 있고 이중 널로 끝난다 · 구조체는 x64 SHFILEOPSTRUCTW 배치와 같다.
+            let rc = unsafe { SHFileOperationW(&mut op) };
+            if rc != 0 {
+                return Err(format!("SHFileOperationW error {rc:#x}"));
+            }
+            if op.f_any_operations_aborted != 0 {
+                return Err("operation aborted".to_string());
+            }
+            // 휴지통 기록(`$I`)을 찾아 두면 되돌릴 수 있다(고정 NTFS 볼륨 · 다른 사용자 폴더는 접근 거부 = 건너뜀).
+            let kind = locate(abs)
+                .map(|(meta, trashed)| Kind::Moved {
+                    trashed,
+                    meta: Some(meta),
+                })
+                .unwrap_or(Kind::Unknown);
+            Ok(Token {
+                original: abs.to_path_buf(),
+                kind,
+            })
+        }
+
+        /// 드라이브 루트 `$Recycle.Bin\<SID>\$I…` 가운데 원래 경로가 같고(대소문자 무시) 가장 최근 것 → (`$I`, `$R`).
+        fn locate(abs: &Path) -> Option<(PathBuf, PathBuf)> {
+            let root = match abs.components().next()? {
+                std::path::Component::Prefix(p) => {
+                    PathBuf::from(format!("{}\\", p.as_os_str().to_string_lossy()))
+                }
+                _ => return None,
+            };
+            let want = abs
+                .to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .to_lowercase();
+            let bin = root.join("$Recycle.Bin");
+            let mut best: Option<(u64, PathBuf, PathBuf)> = None;
+            for sid in std::fs::read_dir(&bin).ok()?.flatten() {
+                let Ok(items) = std::fs::read_dir(sid.path()) else {
+                    continue;
+                };
+                for it in items.flatten() {
+                    let name = it.file_name().to_string_lossy().into_owned();
+                    if !name.starts_with("$I") {
+                        continue;
+                    }
+                    let Ok(bytes) = std::fs::read(it.path()) else {
+                        continue;
+                    };
+                    let Some((orig, time)) = super::parse_recycle_record(&bytes) else {
+                        continue;
+                    };
+                    if orig.trim_end_matches(['\\', '/']).to_lowercase() != want {
+                        continue;
+                    }
+                    let r = it.path().with_file_name(format!("$R{}", &name[2..]));
+                    if std::fs::symlink_metadata(&r).is_err() {
+                        continue;
+                    }
+                    if best.as_ref().is_none_or(|(t, _, _)| time > *t) {
+                        best = Some((time, it.path(), r));
+                    }
+                }
+            }
+            best.map(|(_, i, r)| (i, r))
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod imp {
+        use super::{Kind, Token};
+        use std::path::Path;
+
+        pub(super) fn send(abs: &Path) -> Result<Token, String> {
+            let home = super::super::home_dir().ok_or_else(|| "no home directory".to_string())?;
+            let trash = home.join(".Trash");
+            let name = abs
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .ok_or_else(|| "no file name".to_string())?;
+            let mut target = trash.join(&name);
+            let mut n = 2;
+            while std::fs::symlink_metadata(&target).is_ok() {
+                target = trash.join(format!("{name} ({n})"));
+                n += 1;
+            }
+            match std::fs::rename(abs, &target) {
+                Ok(()) => Ok(Token {
+                    original: abs.to_path_buf(),
+                    kind: Kind::Moved {
+                        trashed: target,
+                        meta: None,
+                    },
+                }),
+                Err(e) => {
+                    // 다른 볼륨(외장·네트워크) = Finder에 맡긴다(볼륨별 `.Trashes` · 위치를 모르니 되돌리기 불가).
+                    let quoted = abs
+                        .to_string_lossy()
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"");
+                    let script =
+                        format!("tell application \"Finder\" to delete POSIX file \"{quoted}\"");
+                    let out = std::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg(&script)
+                        .output()
+                        .map_err(|e2| format!("{e} · osascript: {e2}"))?;
+                    if out.status.success() {
+                        Ok(Token {
+                            original: abs.to_path_buf(),
+                            kind: Kind::Unknown,
+                        })
+                    } else {
+                        Err(format!(
+                            "{e} · {}",
+                            String::from_utf8_lossy(&out.stderr).trim()
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    mod imp {
+        use super::{Kind, Token};
+        use std::path::{Path, PathBuf};
+
+        pub(super) fn send(abs: &Path) -> Result<Token, String> {
+            let base = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .or_else(|| super::super::home_dir().map(|h| h.join(".local").join("share")))
+                .ok_or_else(|| "no home directory".to_string())?;
+            let files = base.join("Trash").join("files");
+            let info = base.join("Trash").join("info");
+            std::fs::create_dir_all(&files).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&info).map_err(|e| e.to_string())?;
+            let name = abs
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .ok_or_else(|| "no file name".to_string())?;
+            let mut stem = name.clone();
+            let mut n = 2;
+            while std::fs::symlink_metadata(files.join(&stem)).is_ok()
+                || info.join(format!("{stem}.trashinfo")).exists()
+            {
+                stem = format!("{name}.{n}");
+                n += 1;
+            }
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let info_path = info.join(format!("{stem}.trashinfo"));
+            std::fs::write(&info_path, super::trash_info(&abs.to_string_lossy(), secs))
+                .map_err(|e| e.to_string())?;
+            let trashed = files.join(&stem);
+            match std::fs::rename(abs, &trashed) {
+                Ok(()) => Ok(Token {
+                    original: abs.to_path_buf(),
+                    kind: Kind::Moved {
+                        trashed,
+                        meta: Some(info_path),
+                    },
+                }),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&info_path);
+                    Err(e.to_string())
+                }
+            }
+        }
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    mod imp {
+        use super::Token;
+        use std::path::Path;
+        pub(super) fn send(_abs: &Path) -> Result<Token, String> {
+            Err("trash is not supported on this platform".to_string())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{parse_recycle_record, percent_encode, trash_info};
+
+        #[test]
+        fn trashinfo_percent_encodes_reserved_and_keeps_separators() {
+            assert_eq!(percent_encode("/home/u/a b#1.sql"), "/home/u/a%20b%231.sql");
+            assert_eq!(percent_encode("/x/한.txt"), "/x/%ED%95%9C.txt");
+            let s = trash_info("/home/u/a b.sql", 1_700_000_000);
+            assert!(
+                s.starts_with(
+                    "[Trash Info]\nPath=/home/u/a%20b.sql\nDeletionDate=2023-11-14T22:13:20\n"
+                ),
+                "{s}"
+            );
+        }
+
+        /// Windows `$I` 기록 두 형식(1 = 고정 260자 · 2 = 길이 접두) · 깨진 입력 = None.
+        #[test]
+        fn recycle_record_v1_and_v2() {
+            let name: Vec<u16> = "C:\\x\\a.txt".encode_utf16().collect();
+            let mut v2 = Vec::new();
+            v2.extend_from_slice(&2u64.to_le_bytes());
+            v2.extend_from_slice(&5u64.to_le_bytes());
+            v2.extend_from_slice(&123u64.to_le_bytes());
+            v2.extend_from_slice(&((name.len() + 1) as u32).to_le_bytes());
+            for u in &name {
+                v2.extend_from_slice(&u.to_le_bytes());
+            }
+            v2.extend_from_slice(&0u16.to_le_bytes());
+            assert_eq!(
+                parse_recycle_record(&v2),
+                Some(("C:\\x\\a.txt".to_string(), 123))
+            );
+            let mut v1 = Vec::new();
+            v1.extend_from_slice(&1u64.to_le_bytes());
+            v1.extend_from_slice(&5u64.to_le_bytes());
+            v1.extend_from_slice(&7u64.to_le_bytes());
+            for u in &name {
+                v1.extend_from_slice(&u.to_le_bytes());
+            }
+            v1.resize(24 + 260 * 2, 0);
+            assert_eq!(
+                parse_recycle_record(&v1),
+                Some(("C:\\x\\a.txt".to_string(), 7))
+            );
+            assert_eq!(parse_recycle_record(&[0u8; 10]), None);
+        }
+
+        /// 실 휴지통 왕복(삭제 → 복원 → 원위치) — 실제 OS 휴지통을 건드리므로 수동 실행(`cargo test -p nexa-fs -- --ignored`).
+        #[test]
+        #[ignore = "실 휴지통 부수효과 — 수동 실행"]
+        fn trash_round_trip_restores_original() {
+            let dir = std::env::temp_dir().join(format!("nexa-fs-trash-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("mkdir");
+            let f = dir.join("restore-me.txt");
+            std::fs::write(&f, "x").expect("write");
+            let tok = super::send(&f).expect("send");
+            assert!(!f.exists(), "moved to trash");
+            assert!(tok.restorable(), "token should be restorable on this OS");
+            super::restore(&tok).expect("restore");
+            assert!(f.is_file(), "back in place");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
 /// 경로 표시·분해.
 pub mod path {
     use super::home_dir;
