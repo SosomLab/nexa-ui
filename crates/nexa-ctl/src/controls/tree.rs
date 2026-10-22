@@ -214,6 +214,9 @@ pub trait TreeControl: Control {
     fn set_scroll(&mut self, x: i32, y: i32);
     /// 오버레이 스크롤바 상태(구현 필수).
     fn bars_mut(&mut self) -> &mut ScrollBars;
+    /// ★ 마지막으로 그린 트리 셀의 글자 x 오프셋(셀 x 기준 · 들여쓰기 제외 · 셰브론 + 아이콘 뒤 · 물리 px) — 인라인 편집 상자를
+    /// 글자 자리에 맞추려는 호스트(nexa-dlg 이름 바꾸기 · 사용자 10-22 "편집 모드에서 오른쪽으로 밀림")가 쓴다. 기본 = 무시.
+    fn note_text_dx(&self, _dx: i32) {}
     /// ★ **커서가 올라간 행의 페이드 상태**(구현 필수 — 상태를 가지므로 기본 구현 불가).
     fn hover(&self) -> &HoverFade;
     /// 위와 같은 것의 가변 참조.
@@ -413,6 +416,7 @@ pub trait TreeControl: Control {
         ctx.select_font(FontSlot::Base, false);
         let ty = ctx.text_center_y(cell.y, cell.h);
         ctx.text(tx, ty, cell_vis, &row.label, theme.text);
+        self.note_text_dx(tx - cell.x - self.s(INDENT) * row.depth as i32);
     }
 }
 
@@ -693,6 +697,8 @@ pub struct TreeGrid {
     marked: std::collections::HashSet<Vec<usize>>,
     /// 다중 선택 모드: 캐럿 행은 채우지 않고 **테두리**만(선택 = `marked`) — 폴더가 "기본 선택"처럼 보이지 않게(사용자 09-22).
     caret_outline: bool,
+    /// ★ 마지막으로 그린 트리 셀의 글자 x 오프셋(들여쓰기 제외 · [`TreeControl::note_text_dx`]) — 그린 적 없으면 None.
+    text_dx: std::cell::Cell<Option<i32>>,
 }
 
 impl TreeGrid {
@@ -718,7 +724,14 @@ impl TreeGrid {
             fit_columns: false,
             marked: std::collections::HashSet::new(),
             caret_outline: false,
+            text_dx: std::cell::Cell::new(None),
         }
+    }
+
+    /// ★ 마지막으로 그린 트리 셀의 글자 x 오프셋(셀 x 기준 · 들여쓰기 제외 · 물리 px) — 인라인 편집 상자 정렬용.
+    #[must_use]
+    pub fn text_dx(&self) -> Option<i32> {
+        self.text_dx.get()
     }
 
     /// 다중 선택 모드(캐럿 = 테두리 · 채움은 `set_marked_paths`만).
@@ -786,6 +799,9 @@ impl TreeGrid {
 }
 
 impl TreeControl for TreeGrid {
+    fn note_text_dx(&self, dx: i32) {
+        self.text_dx.set(Some(dx));
+    }
     fn model(&self) -> &TreeModel {
         &self.model
     }

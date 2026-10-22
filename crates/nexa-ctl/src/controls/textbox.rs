@@ -1866,6 +1866,13 @@ impl TextBox {
 
     /// 첫 글자 앞 추가 여백(논리 px) — 텍스트 원점만 옮긴다(거터·히트 테스트는 같은 원점을 쓴다).
     /// 셀 편집 모드 켜기/끄기(물리 px 여백 · `None` = 보통 상자).
+    /// 글자 시작 x의 상자 왼쪽 기준 여백(물리 px · 셀 편집 모드면 그 값 · 보통 상자 = 10 논리 px) — 호스트가 인라인 편집 상자를
+    /// 목록 글자 자리에 맞출 때 그만큼 왼쪽으로 당긴다(nexa-dlg 이름 바꾸기 · 사용자 10-22).
+    #[must_use]
+    pub fn text_pad(&self) -> i32 {
+        self.cell_pad.unwrap_or_else(|| self.s(10))
+    }
+
     pub fn set_cell_pad(&mut self, px: Option<i32>) {
         self.cell_pad = px;
     }
@@ -5481,7 +5488,7 @@ impl Widget for TextBox {
             None => cy - ctx.text_height() / 2,
         };
         // 선행 이미지(있으면) — placeholder·텍스트·캐럿의 시작 x를 그 뒤로 민다.
-        let mut tx = b.x + self.cell_pad.unwrap_or_else(|| self.s(10));
+        let mut tx = b.x + self.text_pad();
         if let Some(img) = self.image.as_deref() {
             let boxr = Rect::new(tx, cy - s16 / 2, s16, s16);
             let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
