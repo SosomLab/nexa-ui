@@ -579,6 +579,8 @@ pub mod trash {
             meta: Option<PathBuf>,
         },
         /// 어디로 갔는지 모른다(복원 불가 · Finder 폴백 · 휴지통 기록을 못 찾음).
+        // Linux XDG 경로는 늘 옮긴 곳을 알아 이 변형을 만들지 않는다(Windows·macOS 전용 가지).
+        #[cfg_attr(all(unix, not(target_os = "macos")), allow(dead_code))]
         Unknown,
     }
 
