@@ -112,7 +112,7 @@
 
 | 개선 항목 | 동작 |
 |---|---|
-| **키보드 우선** | 타이핑 = NameBox로 자동 포커스 + 자동완성(현재 폴더 항목 · Tab 완성) · `Ctrl+L` 경로 편집 · `Alt+↑`/`Backspace` 상위 · `Enter` = 폴더면 진입/파일이면 확정 · `F2` 이름 변경 · `Del` 휴지통 · `Ctrl+N` 새 폴더 · `Ctrl+H` 숨김 토글 · `Esc` 취소 · 방향키/Home/End/PageUp·Down 목록 |
+| **키보드 우선** | 타이핑 = NameBox로 자동 포커스 + 자동완성(현재 폴더 항목 · Tab 완성) · `Ctrl+L` 경로 편집 · `Alt+↑`/`Backspace` 상위 · `Enter` = 폴더면 진입/파일이면 확정 · `F2` 이름 변경(F2 = 요청 시 · 지금은 우클릭·한 번 더 클릭) · `Del` 휴지통 · `Ctrl+N` 새 폴더 · `Ctrl+H` 숨김 토글 · `Esc` 취소 · 방향키/Home/End/PageUp·Down 목록 |
 | 경로 입력 | PathBar 편집 모드에 **절대 경로 · `~` · 상대(현재 기준) · UNC · 드라이브** 입력 → 존재하면 이동 · 파일이면 바로 확정 |
 | 정렬·보기 | 컬럼 헤더 클릭 정렬(자연 정렬 · 폴더 먼저) · 상세/목록/아이콘 보기 · 컬럼 폭·정렬·보기 모드를 **대화상자 종류별로 기억**(`nexa-conf`) |
 | 필터 | 확장자 필터(앱이 공급 · `All files` 항상) · 검색 상자 = 현재 폴더 즉시 필터(부분 일치 · 대소문자 무관) |
@@ -148,7 +148,7 @@
 | 최근 파일 · 즐겨찾기 | `nexa-fs::places` + `nexa-conf` | 전부 |
 | 파일 작업 + 진행 + 취소 + 충돌 | `nexa-fs::ops` + `nexa-dlg::Progress` | dir2 · clip(첨부) |
 | 백업/복원 폴더·파일 선택(beep `PickerPurpose` 8종 = BackupDir·RestoreKey·ProfileImage·SettingsBackupDir…) · clip `sync.file_dir`(지금은 경로 타이핑) | `FilePicker{Folder·Open·Save}` | beep · clip · nexa-sql 라이선스 백업([nexa-sql 25 §11-3](../../nexa-sql/docs/25-license-tiers-and-server.md)) |
-| 휴지통 | `nexa-fs::ops::trash` | dir2 · 대화상자 `Del` · ✅ 10-22(221차) 구현 = `nexa_fs::trash::send`(Windows `SHFileOperationW` FO_DELETE+FOF_ALLOWUNDO · macOS `~/.Trash` + osascript 폴백 · Linux XDG `.trashinfo` 먼저) · FilePicker Delete = 휴지통 · Shift+Delete = 영구 2단 |
+| 휴지통 | `nexa-fs::ops::trash` | dir2 · 대화상자 `Del` · ✅ 10-22(221차) 구현 = `nexa_fs::trash::send`(Windows `SHFileOperationW` FO_DELETE+FOF_ALLOWUNDO · macOS `~/.Trash` + osascript 폴백 · Linux XDG `.trashinfo` 먼저) · FilePicker Delete = 휴지통 · Shift+Delete = 영구 2단 · 복원(Undo) 제약 = Windows 고정 NTFS 볼륨만 · 네트워크/이동식 볼륨·macOS 다른 볼륨은 복원 불가(OS 제약 · 완료 처리 10-22) |
 
 ---
 
