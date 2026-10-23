@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-24 (222차 · mac)** — nexa-ctl 툴바 항목 2단 확인 무장 `ToolItem.armed`/`set_item_armed`(위험색 알약 + 흰 게이지 · `TimeoutButton` 모양 · nexa-sql 2단 통일 10-23) — journal 10-24 §1 · a385eb2.
 - **2026-10-22 (221차)** — 파일 창 편집(nexa-sql 135차 win) = nexa-fs `trash` 3-OS 휴지통 + 복원(7a493ce) · nexa-ctl `text_dx`/`text_pad`(9588521) · nexa-dlg 이름 바꾸기·삭제·Undo/Redo·`set_pinned`(3cdfca2) · CONSUMER-CHANGES 221. → [journal](journal/2026-10-22.md)
 - **2026-10-17 (213차 · mac)** — `LayerPresenter` 장 선택 규칙(front·prev 회피 · 다 바쁘면 프레임 건너뜀 · 풀 4 · 진단 `busy_reuse`/`forced`) = nexa-sql 객체 찾기 깜빡임 — journal 10-16 §7.
 - **2026-10-17 (212차 · mac)** — nexa-sys `open_files`(macOS 앱 델리게이트 `application:openFiles:` 덧붙임 · 경로 큐 · 그 밖 OS 0) — journal 10-16 §6.
