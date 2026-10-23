@@ -131,6 +131,9 @@ pub struct ToolItem {
     /// **토글 항목인가**(136차 · nexa-dir3): 켜고 끄는 버튼(또는 택일 묶음) — [`SoftStates::hover_fill_toggle_only`]일 때
     /// hover 배경은 이 항목에만 칠한다(누르면 끝나는 동작 버튼은 아이콘 색만 바뀐다).
     pub toggle: bool,
+    /// ★ **2단 확인 무장**(222차 · nexa-sql 10-23 "이중 확인 버튼 = 로그인 창 Delete처럼"): `Some(진척률 0..1)`이면 슬롯을 위험색으로
+    /// 채우고 아이콘은 흰색 · 진척률만큼 왼쪽부터 흰 게이지(`TimeoutButton` 무장 모양) · `None` = 보통. 시각은 호스트가 틱마다 준다.
+    pub armed: Option<f32>,
 }
 
 impl ToolItem {
@@ -152,6 +155,7 @@ impl ToolItem {
             label_w: std::cell::Cell::new(0),
             checked: false,
             toggle: false,
+            armed: None,
         }
     }
 
@@ -635,6 +639,34 @@ impl Toolbar {
             .collect()
     }
 
+    /// ★ 2단 확인 무장 표시(222차): `Some(진척률 0..1)` = 위험색 채움 + 흰 아이콘 + 게이지 · `None` = 원래대로. 바뀌었으면 무효화 + true
+    /// (진척률은 1 % 단위로 비교해 100 ms 틱이 매번 다시 그리지 않게). 미지 id = false.
+    pub fn set_item_armed(
+        &mut self,
+        id: &str,
+        ratio: Option<f32>,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let q = |r: Option<f32>| r.map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as i32);
+        if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
+            if q(it.armed) != q(ratio) {
+                it.armed = ratio.map(|v| v.clamp(0.0, 1.0));
+                inv.push(self.base.bounds);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 무장 진척률(없으면 None · 상태 동기 검증·덤프용).
+    #[must_use]
+    pub fn item_armed(&self, id: &str) -> Option<f32> {
+        self.items
+            .iter()
+            .find(|it| it.id == id)
+            .and_then(|it| it.armed)
+    }
+
     /// 배지 글자(`None` = 지운다) — 같으면 아무 일도 없다.
     pub fn set_item_badge(&mut self, id: &str, badge: Option<&str>, inv: &mut Invalidations) {
         if let Some(it) = self.items.iter_mut().find(|it| it.id == id) {
@@ -940,6 +972,37 @@ impl Toolbar {
                     0.38,
                 );
             }
+            // ★ 2단 확인 무장(222차) = `TimeoutButton` 경고 톤과 같은 모양: 위험색 알약 + 왼쪽부터 차오르는 흰 게이지(28 %) ·
+            //   hover/눌림 = 흰 막 한 겹 · 아이콘은 아래에서 흰색.
+            let armed = it.armed.filter(|_| it.enabled);
+            if let Some(ratio) = armed {
+                let inset = self.s(1);
+                let pill = Rect::new(
+                    slot.x + inset,
+                    slot.y + inset,
+                    slot.w - inset * 2,
+                    slot.h - inset * 2,
+                );
+                let r = self.s(3);
+                ctx.fill_round_rect(pill, r, theme.danger);
+                let gw = (pill.w as f32 * ratio.clamp(0.0, 1.0)).round() as i32;
+                if gw > 0 {
+                    ctx.fill_round_rect_alpha(
+                        Rect::new(pill.x, pill.y, gw.min(pill.w), pill.h),
+                        r,
+                        Color(0x00FF_FFFF),
+                        0.28,
+                    );
+                }
+                if is_pressed || is_hover {
+                    ctx.fill_round_rect_alpha(
+                        pill,
+                        r,
+                        Color(0x00FF_FFFF),
+                        if is_pressed { 0.22 } else { 0.10 },
+                    );
+                }
+            }
             // 눌림 식별 — 아이콘을 1px 내려 그린다.
             let dy = i32::from(is_pressed);
             // 드롭다운 항목은 오른쪽 DROP_W를 ▾에 내주고 아이콘은 왼쪽 정사각 슬롯에.
@@ -972,7 +1035,9 @@ impl Toolbar {
                     // 글리프 항목도 마스크 항목과 같은 색 규칙: 비활성 = 흐림 · hover/pressed = accent · 아니면 색조.
                     // (종전엔 늘 본문색이라 `.disabled()` 항목이 켜진 것처럼 보였다 — nexa-sql 결과 도구줄 + − ⧉ ✓ ✕ Σ · 09-19)
                     // ★ 글자 항목(`label`)은 hover에도 색조 그대로(nexa-sql 09-28 "마우스 오버시 푸른색으로 바꿀 필요 없음").
-                    let color = if !it.enabled {
+                    let color = if armed.is_some() {
+                        Color(0x00FF_FFFF)
+                    } else if !it.enabled {
                         theme.text_dim
                     } else if let Some(c) = soft_on {
                         c
@@ -1031,7 +1096,9 @@ impl Toolbar {
                 }
                 ToolIcon::Mask { w, h, alpha } => {
                     // SVG 유래 = 테마 기준색 · hover/pressed = 선색 변경(accent) · 비활성 = 흐림.
-                    let color = if !it.enabled {
+                    let color = if armed.is_some() {
+                        Color(0x00FF_FFFF)
+                    } else if !it.enabled {
                         theme.text_dim
                     } else if let Some(c) = soft_on {
                         c
@@ -1123,6 +1190,25 @@ impl Toolbar {
 
 #[cfg(test)]
 mod tests {
+    /// 222차 무장 상태: 설정 = 무효화 + true · 같은 값(1 % 단위) = false · 해제 = None · 미지 id = false.
+    #[test]
+    fn armed_item_round_trip() {
+        use super::*;
+        let mut tb = Toolbar::new(vec![ToolItem::new("commit", ToolIcon::Glyph("C".into()))]);
+        let mut inv = Invalidations::default();
+        assert_eq!(tb.item_armed("commit"), None);
+        assert!(tb.set_item_armed("commit", Some(0.2), &mut inv));
+        assert!(!tb.set_item_armed("commit", Some(0.204), &mut inv));
+        assert!(tb.set_item_armed("commit", Some(0.5), &mut inv));
+        assert_eq!(
+            tb.item_armed("commit").map(|v| (v * 100.0).round()),
+            Some(50.0)
+        );
+        assert!(tb.set_item_armed("commit", None, &mut inv));
+        assert_eq!(tb.item_armed("commit"), None);
+        assert!(!tb.set_item_armed("nope", Some(1.0), &mut inv));
+    }
+
     use super::*;
 
     /// 217차: 툴팁 가시 판정 = hover 항목에 툴팁 글이 있을 때만(툴팁 없는 항목 · 떠남 = 거짓).

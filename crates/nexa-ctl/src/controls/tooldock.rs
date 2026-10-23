@@ -569,6 +569,26 @@ impl ToolDock {
         }
     }
 
+    /// ★ 2단 확인 무장(222차 · [`Toolbar::set_item_armed`]) — 모든 그룹에서 같은 id · 하나라도 바뀌면 true.
+    pub fn set_item_armed(
+        &mut self,
+        id: &str,
+        ratio: Option<f32>,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let mut hit = false;
+        for b in &mut self.bars {
+            hit |= b.set_item_armed(id, ratio, inv);
+        }
+        hit
+    }
+
+    /// 무장 진척률(첫 일치 · 덤프용).
+    #[must_use]
+    pub fn item_armed(&self, id: &str) -> Option<f32> {
+        self.bars.iter().find_map(|b| b.item_armed(id))
+    }
+
     pub fn set_item_tip(&mut self, id: &str, tip: &str) {
         for b in &mut self.bars {
             b.set_item_tip(id, tip);
