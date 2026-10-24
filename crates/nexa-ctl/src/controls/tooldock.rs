@@ -1,6 +1,7 @@
 //! **툴바 그룹 도크**(09-17 nexa-sql 사용자 요청) — 목적별 그룹(아이콘·구분자 계층) · 그룹은 **도크 안에서 드래그로 순서 이동**
 //! (09-19: 이동 대상이 **고스트로 커서를 따라 보이고** · 도크는 **여러 행** · 어느 방향으로든 · 자리 표시 = 강조 틀 · **Esc = 취소**) ·
-//! **떼어 내면(도크 밖으로 멀리 끌면) 플로팅** · 배치는 [`DockLayout`] 문자열 하나로 저장/복원 · 초기화.
+//! **도크 밖으로 끌면 플로팅 미리보기 · 놓으면 떼어 냄 · 놓지 않고 다시 들어오면 순서 이동으로 복귀**(226차 · dir3 사용자 10-24 —
+//! 종전 = 밖으로 나가는 순간 떼어 냈다) · 배치는 [`DockLayout`] 문자열 하나로 저장/복원 · 초기화.
 //!
 //! 구조(재사용 규약):
 //! - 모델 = [`ToolGroup`]{id · 제목 · [`ToolItem`] 목록(구분자 포함) · 오른쪽 정렬}.
@@ -27,6 +28,8 @@ const GRIP_W: i32 = 10;
 const GROUP_GAP: i32 = 4;
 /// 도크(+ 새 행 영역) 밖으로 이만큼 더 끌면 떼어 낸다(논리 px).
 const TEAR_PX: i32 = 22;
+/// 플로팅 미리보기 틀의 두께(논리 px) — 고스트 바깥에 창 테두리처럼 그린다(226차).
+const PREVIEW_FRAME_PX: i32 = 3;
 /// 이만큼 움직여야 드래그가 시작된다(논리 px) — 그 전 MouseUp = 클릭.
 const DRAG_START_PX: i32 = 4;
 
@@ -161,6 +164,8 @@ struct Drag {
     cur: Point,
     /// 임계 이상 움직여 드래그가 시작됐다.
     moved: bool,
+    /// 도크(+ 새 행 영역) 밖에 있다 = **플로팅 미리보기**(놓으면 떼어 낸다 · 다시 들어오면 순서 이동으로 복귀 · 226차).
+    outside: bool,
     /// 시작 때 순서·행(Esc 복원).
     orig_order: Vec<usize>,
     orig_rows: Vec<usize>,
@@ -357,7 +362,7 @@ impl ToolDock {
             self.actions.push(DockAction::Resized);
         }
         inv.push(self.base.bounds);
-        inv.push(self.ghost_rect_of(&d.cur, d.off_x, d.off_y, d.gi));
+        inv.push(self.ghost_inv_rect_of(&d.cur, d.off_x, d.off_y, d.gi));
         d.moved
     }
 
@@ -709,6 +714,18 @@ impl ToolDock {
         Some(self.ghost_rect_of(&d.cur, d.off_x, d.off_y, d.gi))
     }
 
+    /// 고스트 무효화 사각형 — 플로팅 미리보기 틀(바깥 3px)까지.
+    fn ghost_inv_rect_of(&self, cur: &Point, off_x: i32, off_y: i32, gi: usize) -> Rect {
+        let g = self.ghost_rect_of(cur, off_x, off_y, gi);
+        let m = self.s(PREVIEW_FRAME_PX);
+        Rect::new(g.x - m, g.y - m, g.w + m * 2, g.h + m * 2)
+    }
+
+    fn ghost_inv_rect(&self) -> Option<Rect> {
+        let d = self.drag.as_ref().filter(|d| d.moved)?;
+        Some(self.ghost_inv_rect_of(&d.cur, d.off_x, d.off_y, d.gi))
+    }
+
     /// 커서 위치의 목표 행 — 도크 안 = 그 행 · 도크 바로 아래 한 행 폭 = **새 행** · 그 밖은 None(떼어 내기 후보).
     fn target_row(&self, y: i32) -> Option<usize> {
         let b = self.base.bounds;
@@ -825,8 +842,18 @@ impl ToolDock {
         };
         let Some(g) = self.ghost_rect() else { return };
         let r = self.bars[d.gi].bounds();
-        self.bars[d.gi].paint_offset(ctx, theme, g.x - r.x, g.y - r.y);
         let c = theme.accent;
+        if d.outside {
+            // 플로팅 미리보기 = 창처럼 보이는 틀(바탕 + 바깥 테두리) 위에 고스트.
+            let m = self.s(PREVIEW_FRAME_PX);
+            let f = Rect::new(g.x - m, g.y - m, g.w + m * 2, g.h + m * 2);
+            ctx.fill_rect(f, theme.chrome_bg);
+            ctx.fill_rect(Rect::new(f.x, f.y, f.w, 1), theme.border);
+            ctx.fill_rect(Rect::new(f.x, f.bottom() - 1, f.w, 1), theme.border);
+            ctx.fill_rect(Rect::new(f.x, f.y, 1, f.h), theme.border);
+            ctx.fill_rect(Rect::new(f.right() - 1, f.y, 1, f.h), theme.border);
+        }
+        self.bars[d.gi].paint_offset(ctx, theme, g.x - r.x, g.y - r.y);
         ctx.fill_rect(Rect::new(g.x, g.y, g.w, 1), c);
         ctx.fill_rect(Rect::new(g.x, g.bottom() - 1, g.w, 1), c);
         ctx.fill_rect(Rect::new(g.x, g.y, 1, g.h), c);
@@ -908,6 +935,7 @@ impl Widget for ToolDock {
                         off_y: y - r.y,
                         cur: p,
                         moved: false,
+                        outside: false,
                         orig_order: self.order.clone(),
                         orig_rows: self.row_of.clone(),
                     });
@@ -924,10 +952,17 @@ impl Widget for ToolDock {
             InputEvent::MouseUp { x, y } => {
                 if let Some(d) = self.drag.take() {
                     if d.moved {
+                        inv.push(self.ghost_inv_rect_of(&d.cur, d.off_x, d.off_y, d.gi));
+                        if d.outside {
+                            // 도크 밖에서 **놓음** = 떼어 내기(호스트가 창을 만든다 · 순서는 이미 시작 때로 돌아가 있다 · 226차).
+                            let id = self.groups[d.gi].id.clone();
+                            self.actions.push(DockAction::Float { id, x, y });
+                            inv.push(b);
+                            return;
+                        }
                         if d.order_changed(&self.order, &self.row_of) {
                             self.actions.push(DockAction::LayoutChanged);
                         }
-                        inv.push(self.ghost_rect_of(&d.cur, d.off_x, d.off_y, d.gi));
                     }
                     inv.push(b);
                     return;
@@ -945,7 +980,7 @@ impl Widget for ToolDock {
                 if let Some((gi, x0, y0)) = self.drag.as_ref().map(|d| (d.gi, d.x0, d.y0)) {
                     let p = Point { x, y };
                     let start = self.s(DRAG_START_PX);
-                    if let Some(old) = self.ghost_rect() {
+                    if let Some(old) = self.ghost_inv_rect() {
                         inv.push(old);
                     }
                     let started = if let Some(d) = self.drag.as_mut() {
@@ -963,26 +998,34 @@ impl Widget for ToolDock {
                     if !self.is_dragging() {
                         return;
                     }
-                    if self.target_row(y).is_none() {
-                        // 도크(+ 새 행 영역) 밖으로 멀리 끌어 냈다 — 떼어 내기(호스트가 창을 만든다). 순서는 시작 때로.
-                        if let Some(d) = self.drag.take() {
+                    // 도크(+ 새 행 영역) 밖 = **플로팅 미리보기**: 떼어 내기는 놓을 때(MouseUp) · 놓지 않고 다시 들어오면 순서 이동으로
+                    // 복귀(dir3 사용자 10-24 · 종전 = 나가는 순간 떼어 냈다). 밖에 있는 동안 도크는 시작 때 순서로 돌려 둔다.
+                    let outside = self.target_row(y).is_none();
+                    let was_outside = self.drag.as_ref().is_some_and(|d| d.outside);
+                    if outside != was_outside {
+                        if let Some(d) = self.drag.as_mut() {
+                            d.outside = outside;
+                        }
+                        if outside {
+                            let (orig_order, orig_rows) = self
+                                .drag
+                                .as_ref()
+                                .map(|d| (d.orig_order.clone(), d.orig_rows.clone()))
+                                .unwrap_or_default();
                             let rows_before = self.rows();
-                            self.order = d.orig_order;
-                            self.row_of = d.orig_rows;
+                            self.order = orig_order;
+                            self.row_of = orig_rows;
                             self.relayout();
                             if self.rows() != rows_before {
                                 self.actions.push(DockAction::Resized);
                             }
                         }
-                        let id = self.groups[gi].id.clone();
-                        self.actions.push(DockAction::Float { id, x, y });
-                        inv.push(b);
-                        return;
-                    }
-                    if self.reorder_to(gi, p) {
                         inv.push(b);
                     }
-                    if let Some(g) = self.ghost_rect() {
+                    if !outside && self.reorder_to(gi, p) {
+                        inv.push(b);
+                    }
+                    if let Some(g) = self.ghost_inv_rect() {
                         inv.push(g);
                     }
                     return;
@@ -1228,18 +1271,47 @@ mod tests {
             },
             &mut inv,
         );
+        // 226차: 밖 = 플로팅 **미리보기**(도크는 시작 때 순서 · Float는 아직 아님 · 드래그 계속).
         assert_eq!(
             d.take_actions(),
-            vec![
-                DockAction::Resized,
-                DockAction::Float {
-                    id: "run".into(),
-                    x: g_run.x + 2,
-                    y: g_run.y + row_h * 2 + 60
-                }
-            ]
+            vec![DockAction::Resized],
+            "밖 = 미리보기만"
         );
+        assert!(d.is_dragging());
         assert_eq!(d.rows(), 1);
+        assert!(!d.is_floating("run"));
+        assert!(d.drag.as_ref().is_some_and(|dr| dr.outside));
+        // 놓지 않고 도크 바로 아래(새 행)로 돌아오면 순서 이동으로 복귀.
+        d.on_event(
+            &InputEvent::MouseMove {
+                x: g_run.x + 2,
+                y: g_run.y + row_h + 5,
+            },
+            &mut inv,
+        );
+        assert_eq!(d.rows(), 2, "복귀 = 다시 새 행 미리보기");
+        assert_eq!(d.take_actions(), vec![DockAction::Resized]);
+        assert!(d.drag.as_ref().is_some_and(|dr| !dr.outside));
+        // 다시 밖으로 → **놓으면** 떼어 내기(좌표 = 놓은 자리) · 순서는 시작 때.
+        let (fx, fy) = (g_run.x + 2, g_run.y + row_h * 2 + 60);
+        d.on_event(&InputEvent::MouseMove { x: fx, y: fy }, &mut inv);
+        assert_eq!(d.take_actions(), vec![DockAction::Resized]);
+        d.on_event(&InputEvent::MouseUp { x: fx, y: fy }, &mut inv);
+        assert_eq!(
+            d.take_actions(),
+            vec![DockAction::Float {
+                id: "run".into(),
+                x: fx,
+                y: fy
+            }]
+        );
+        assert!(!d.is_dragging());
+        assert_eq!(d.rows(), 1);
+        assert_eq!(
+            d.layout().order,
+            vec!["run", "file", "view"],
+            "순서 = 시작 때"
+        );
         assert!(!d.is_floating("run"));
         d.float("run", 10, 20);
         assert!(d.is_floating("run"));
