@@ -219,6 +219,11 @@ impl PathBar {
         self.suggest.is_some()
     }
 
+    /// 열린 제안 팝업의 항목과 선택 인덱스(덤프 · 시험 · 호스트 표시용 · 224차 dir3 T-106) — 닫혀 있으면 `None`.
+    pub fn suggestions(&self) -> Option<(&[String], Option<usize>)> {
+        self.suggest.as_ref().map(|s| (s.items.as_slice(), s.sel))
+    }
+
     fn suggest_rect_for(&self, n: usize) -> Rect {
         let mut h = n as i32 * self.row_h;
         if self.overlay_bottom > 0 {
@@ -681,6 +686,25 @@ mod tests {
         assert_eq!((root[0].label.as_str(), root[0].full.as_str()), ("/", "/"));
         assert_eq!(path_separator("/home"), "/");
         assert_eq!(path_separator("C:\\Users"), "\\");
+    }
+
+    /// 제안 접근자(224차): 닫힘 = None · 열리면 항목 그대로 · ↓로 고른 인덱스 · 닫으면 다시 None.
+    #[test]
+    fn suggestions_accessor_reports_items_and_selection() {
+        let mut inv = Invalidations::default();
+        let mut pb = PathBar::new(r"C:\U", 20, 6);
+        pb.set_bounds(Rect::new(0, 0, 300, 20), &mut inv);
+        pb.set_overlay_bottom(400);
+        assert!(pb.suggestions().is_none());
+        pb.begin_edit(&mut inv);
+        pb.set_suggestions(vec![r"C:\U\Alpha".into(), r"C:\U\Beta".into()], &mut inv);
+        let (items, sel) = pb.suggestions().expect("open");
+        assert_eq!(items, [r"C:\U\Alpha", r"C:\U\Beta"]);
+        assert_eq!(sel, None);
+        assert!(pb.suggest_move(1, &mut inv));
+        assert_eq!(pb.suggestions().map(|(_, s)| s), Some(Some(0)));
+        pb.close_suggest(&mut inv);
+        assert!(pb.suggestions().is_none());
     }
 
     #[test]
