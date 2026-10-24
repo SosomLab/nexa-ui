@@ -349,6 +349,14 @@ impl ToolDock {
         self.drag.as_ref().is_some_and(|d| d.moved)
     }
 
+    /// 드래그 중 **자리 표시**(강조 틀) 사각형 — 끌리는 그룹의 도크 안 자리(227차 · dir3 10-24: 호스트가 툴바 아래 구분선을 이 폭만큼
+    /// 비워 틀의 아래 선이 덮이지 않게). 드래그 중이 아니면 `None`.
+    #[must_use]
+    pub fn placeholder_rect(&self) -> Option<Rect> {
+        let d = self.drag.as_ref().filter(|d| d.moved)?;
+        Some(self.bars[d.gi].bounds())
+    }
+
     /// Esc — 드래그를 취소하고 시작 때의 순서·행으로 되돌린다. 드래그 중이었으면 true(호스트가 키를 소비).
     pub fn cancel_drag(&mut self, inv: &mut Invalidations) -> bool {
         let Some(d) = self.drag.take() else {
@@ -1230,6 +1238,11 @@ mod tests {
         );
         assert!(d.is_dragging());
         assert_eq!(d.layout().order, vec!["run", "file", "view"], "미리보기");
+        assert_eq!(
+            d.placeholder_rect(),
+            Some(d.bars[0].bounds()),
+            "자리 표시 = 그 그룹의 도크 안 자리(227차)"
+        );
         let g = d.ghost_rect().expect("ghost");
         assert_eq!(g.w, d.bars[0].bounds().w);
         d.on_event(
@@ -1241,6 +1254,7 @@ mod tests {
         );
         assert_eq!(d.layout().order, vec!["run", "file", "view"]);
         assert!(d.bars[0].bounds().x > file_x);
+        assert_eq!(d.placeholder_rect(), None, "놓으면 자리 표시 없음");
         assert_eq!(d.take_actions(), vec![DockAction::LayoutChanged]);
         // 도크 바로 아래 한 행 = 새 행(2행이 된다 · Resized 보고) · 더 멀리 = 떼어 내기(순서는 시작 때로).
         let g_run = d.grips[1];
