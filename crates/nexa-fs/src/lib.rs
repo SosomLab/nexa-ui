@@ -618,7 +618,8 @@ pub mod trash {
         if let Some(parent) = token.original.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::rename(trashed, &token.original).map_err(|e| e.to_string())?;
+        // ★ 10-24(nexa-sql 138차 Linux · T-413): 되돌리기도 보내기와 같은 "옮기기" 규칙 — 유닉스는 다른 파일시스템이면 복사+삭제 폴백(EXDEV).
+        imp::move_back(trashed, &token.original)?;
         if let Some(m) = meta {
             let _ = std::fs::remove_file(m);
         }
@@ -691,6 +692,13 @@ pub mod trash {
 
     #[cfg(windows)]
     mod imp {
+        /// 되돌리기 = 같은 볼륨 rename(`$R…`은 원래 볼륨의 `$Recycle.Bin`에 있다).
+        pub(super) fn move_back(
+            from: &std::path::Path,
+            to: &std::path::Path,
+        ) -> Result<(), String> {
+            std::fs::rename(from, to).map_err(|e| e.to_string())
+        }
         use super::{Kind, Token};
         use std::os::windows::ffi::OsStrExt;
         use std::path::{Path, PathBuf};
@@ -802,6 +810,13 @@ pub mod trash {
 
     #[cfg(target_os = "macos")]
     mod imp {
+        /// 되돌리기 = rename(`~/.Trash`는 홈 볼륨 · 다른 볼륨은 Finder 폴백이라 토큰이 `Unknown`).
+        pub(super) fn move_back(
+            from: &std::path::Path,
+            to: &std::path::Path,
+        ) -> Result<(), String> {
+            std::fs::rename(from, to).map_err(|e| e.to_string())
+        }
         use super::{Kind, Token};
         use std::path::Path;
 
@@ -857,24 +872,96 @@ pub mod trash {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     mod imp {
+        //! Linux(XDG Trash 명세 1.0) — 홈 휴지통 `$XDG_DATA_HOME/Trash` 우선 · ★ 10-24(nexa-sql 138차 Linux V3 · T-413) **다른 파일시스템**이면
+        //! `rename`이 `EXDEV`(18)로 실패하므로 명세대로 ① 그 파일시스템 최상위 `<topdir>/.Trash-<uid>/{files,info}`(없으면 0700으로 만듦) → ② 거기도 안 되면
+        //! 홈 휴지통으로 **복사 + 삭제**(명세 "구현은 복사해도 된다"). 되돌리기(`move_back`)도 같은 규칙(EXDEV = 복사 + 삭제).
         use super::{Kind, Token};
+        use std::os::unix::fs::MetadataExt;
         use std::path::{Path, PathBuf};
 
-        pub(super) fn send(abs: &Path) -> Result<Token, String> {
-            let base = std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .filter(|p| p.is_absolute())
-                .or_else(|| super::super::home_dir().map(|h| h.join(".local").join("share")))
-                .ok_or_else(|| "no home directory".to_string())?;
-            let files = base.join("Trash").join("files");
-            let info = base.join("Trash").join("info");
+        extern "C" {
+            fn getuid() -> u32;
+        }
+
+        /// `rename`이 "다른 파일시스템"으로 거절했는가(EXDEV = 18 · Linux·BSD 공통).
+        pub(super) fn is_cross_device(e: &std::io::Error) -> bool {
+            e.raw_os_error() == Some(18)
+        }
+
+        /// 파일·폴더를 통째로 옮긴다 — rename → EXDEV면 복사 뒤 원본 삭제(복사 실패 = 반쯤 간 사본을 지운다 · 원본 보존).
+        pub(super) fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
+            match std::fs::rename(from, to) {
+                Ok(()) => Ok(()),
+                Err(e) if is_cross_device(&e) => {
+                    if let Err(ce) = copy_recursive(from, to) {
+                        let _ = remove_any(to);
+                        return Err(ce);
+                    }
+                    remove_any(from)
+                }
+                Err(e) => Err(e),
+            }
+        }
+
+        /// 폴더는 재귀 · 심볼릭 링크는 링크 자체를 복사(대상을 따라가지 않는다 · 휴지통 의미 보존).
+        fn copy_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+            let md = std::fs::symlink_metadata(from)?;
+            if md.file_type().is_symlink() {
+                let target = std::fs::read_link(from)?;
+                std::os::unix::fs::symlink(target, to)
+            } else if md.is_dir() {
+                std::fs::create_dir(to)?;
+                let _ = std::fs::set_permissions(to, md.permissions());
+                for ent in std::fs::read_dir(from)? {
+                    let ent = ent?;
+                    copy_recursive(&ent.path(), &to.join(ent.file_name()))?;
+                }
+                Ok(())
+            } else {
+                std::fs::copy(from, to).map(|_| ())
+            }
+        }
+
+        fn remove_any(p: &Path) -> std::io::Result<()> {
+            let md = std::fs::symlink_metadata(p)?;
+            if md.is_dir() && !md.file_type().is_symlink() {
+                std::fs::remove_dir_all(p)
+            } else {
+                std::fs::remove_file(p)
+            }
+        }
+
+        /// 경로가 놓인 파일시스템의 최상위(마운트 지점) — 부모로 올라가며 `st_dev`가 같은 가장 위.
+        pub(super) fn top_dir(abs: &Path) -> Option<PathBuf> {
+            let dev = std::fs::symlink_metadata(abs).ok()?.dev();
+            let mut cur = abs.parent()?.to_path_buf();
+            loop {
+                let Some(parent) = cur.parent() else {
+                    return Some(cur); // `/`
+                };
+                match std::fs::metadata(parent) {
+                    Ok(m) if m.dev() == dev => cur = parent.to_path_buf(),
+                    _ => return Some(cur),
+                }
+            }
+        }
+
+        /// 홈 휴지통(`$XDG_DATA_HOME/Trash`) 또는 다른 파일시스템의 `<topdir>/.Trash-<uid>` — `files/`·`info/`를 만들어 돌려준다.
+        fn ensure_trash(base: &Path, private: bool) -> Result<(PathBuf, PathBuf), String> {
+            let files = base.join("files");
+            let info = base.join("info");
             std::fs::create_dir_all(&files).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&info).map_err(|e| e.to_string())?;
-            let name = abs
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .ok_or_else(|| "no file name".to_string())?;
-            let mut stem = name.clone();
+            if private {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o700));
+            }
+            Ok((files, info))
+        }
+
+        /// 겹치지 않는 이름(`name` · `name.2` · …) — files/와 info/ 둘 다 비어야 한다.
+        fn free_stem(files: &Path, info: &Path, name: &str) -> String {
+            let mut stem = name.to_string();
             let mut n = 2;
             while std::fs::symlink_metadata(files.join(&stem)).is_ok()
                 || info.join(format!("{stem}.trashinfo")).exists()
@@ -882,26 +969,73 @@ pub mod trash {
                 stem = format!("{name}.{n}");
                 n += 1;
             }
+            stem
+        }
+
+        pub(super) fn move_back(from: &Path, to: &Path) -> Result<(), String> {
+            move_path(from, to).map_err(|e| e.to_string())
+        }
+
+        pub(super) fn send(abs: &Path) -> Result<Token, String> {
+            let home_base = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .or_else(|| super::super::home_dir().map(|h| h.join(".local").join("share")))
+                .ok_or_else(|| "no home directory".to_string())?
+                .join("Trash");
+            let name = abs
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .ok_or_else(|| "no file name".to_string())?;
             let secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let info_path = info.join(format!("{stem}.trashinfo"));
-            std::fs::write(&info_path, super::trash_info(&abs.to_string_lossy(), secs))
-                .map_err(|e| e.to_string())?;
-            let trashed = files.join(&stem);
-            match std::fs::rename(abs, &trashed) {
-                Ok(()) => Ok(Token {
-                    original: abs.to_path_buf(),
-                    kind: Kind::Moved {
-                        trashed,
-                        meta: Some(info_path),
-                    },
-                }),
-                Err(e) => {
-                    let _ = std::fs::remove_file(&info_path);
-                    Err(e.to_string())
+            // 시도 한 번 = info 쓰기 → 옮기기 · 실패하면 info를 지우고 다음 후보.
+            let attempt = |base: &Path,
+                           private: bool,
+                           mv: &dyn Fn(&Path, &Path) -> std::io::Result<()>|
+             -> Result<Result<Token, std::io::Error>, String> {
+                let (files, info) = ensure_trash(base, private)?;
+                let stem = free_stem(&files, &info, &name);
+                let info_path = info.join(format!("{stem}.trashinfo"));
+                std::fs::write(&info_path, super::trash_info(&abs.to_string_lossy(), secs))
+                    .map_err(|e| e.to_string())?;
+                let trashed = files.join(&stem);
+                Ok(match mv(abs, &trashed) {
+                    Ok(()) => Ok(Token {
+                        original: abs.to_path_buf(),
+                        kind: Kind::Moved {
+                            trashed,
+                            meta: Some(info_path),
+                        },
+                    }),
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&info_path);
+                        Err(e)
+                    }
+                })
+            };
+            // ① 홈 휴지통 · rename만.
+            let first = attempt(&home_base, false, &|a, b| std::fs::rename(a, b))?;
+            let e = match first {
+                Ok(tok) => return Ok(tok),
+                Err(e) if is_cross_device(&e) => e,
+                Err(e) => return Err(e.to_string()),
+            };
+            // ② 그 파일시스템의 `<topdir>/.Trash-<uid>`(명세 §Trash directories · 0700) · rename만.
+            if let Some(top) = top_dir(abs) {
+                // SAFETY: getuid는 늘 성공하는 단순 시스템 호출.
+                let uid = unsafe { getuid() };
+                let tbase = top.join(format!(".Trash-{uid}"));
+                if let Ok(Ok(tok)) = attempt(&tbase, true, &|a, b| std::fs::rename(a, b)) {
+                    return Ok(tok);
                 }
+            }
+            // ③ 홈 휴지통으로 복사 + 삭제(명세가 허용 · 큰 파일은 느릴 수 있다).
+            match attempt(&home_base, false, &move_path)? {
+                Ok(tok) => Ok(tok),
+                Err(e2) => Err(format!("{e} · copy fallback: {e2}")),
             }
         }
     }
@@ -910,6 +1044,9 @@ pub mod trash {
     mod imp {
         use super::Token;
         use std::path::Path;
+        pub(super) fn move_back(_from: &Path, _to: &Path) -> Result<(), String> {
+            Err("trash is not supported on this platform".to_string())
+        }
         pub(super) fn send(_abs: &Path) -> Result<Token, String> {
             Err("trash is not supported on this platform".to_string())
         }
@@ -964,7 +1101,45 @@ pub mod trash {
             assert_eq!(parse_recycle_record(&[0u8; 10]), None);
         }
 
+        /// EXDEV 판정은 OS 오류 번호 18만(다른 오류 = 폴백 안 함 · 원인이 가려지지 않게).
+        #[cfg(all(unix, not(target_os = "macos")))]
+        #[test]
+        fn cross_device_is_errno_18_only() {
+            use super::imp::is_cross_device;
+            assert!(is_cross_device(&std::io::Error::from_raw_os_error(18)));
+            assert!(!is_cross_device(&std::io::Error::from_raw_os_error(13)));
+            assert!(!is_cross_device(&std::io::Error::other("x")));
+        }
+
+        /// 폴더(하위 파일 · 심볼릭 링크 포함)를 복사 폴백 규칙으로 옮기면 내용이 그대로고 원본은 사라진다 — 같은 파일시스템에서도
+        /// `move_path`는 rename을 쓰므로, 여기서는 복사 경로를 직접 돈다(`copy_recursive` + `remove_any` = move_path의 EXDEV 가지).
+        #[cfg(all(unix, not(target_os = "macos")))]
+        #[test]
+        fn move_path_and_top_dir_on_temp() {
+            let dir = std::env::temp_dir().join(format!("nexa-fs-mv-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("src/sub")).expect("mkdir");
+            std::fs::write(dir.join("src/a.txt"), "a").expect("w");
+            std::fs::write(dir.join("src/sub/b.txt"), "bb").expect("w");
+            std::os::unix::fs::symlink("a.txt", dir.join("src/l")).expect("ln");
+            super::imp::move_path(&dir.join("src"), &dir.join("dst")).expect("move");
+            assert!(!dir.join("src").exists());
+            assert_eq!(
+                std::fs::read_to_string(dir.join("dst/sub/b.txt")).expect("copied"),
+                "bb"
+            );
+            assert!(std::fs::symlink_metadata(dir.join("dst/l"))
+                .expect("link copied")
+                .file_type()
+                .is_symlink());
+            // 최상위 = 마운트 지점(그 안의 조상은 전부 같은 st_dev) · 결과 아래에 원본이 있다.
+            let top = super::imp::top_dir(&dir.join("dst/a.txt")).expect("top");
+            assert!(dir.starts_with(&top), "{top:?} ⊄ {dir:?}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
         /// 실 휴지통 왕복(삭제 → 복원 → 원위치) — 실제 OS 휴지통을 건드리므로 수동 실행(`cargo test -p nexa-fs -- --ignored`).
+        /// ★ Linux: `temp_dir()`가 tmpfs(`/tmp`)면 홈과 다른 파일시스템 = EXDEV 경로(`.Trash-<uid>` 또는 복사 폴백)를 함께 검증한다(10-24 T-413).
         #[test]
         #[ignore = "실 휴지통 부수효과 — 수동 실행"]
         fn trash_round_trip_restores_original() {
