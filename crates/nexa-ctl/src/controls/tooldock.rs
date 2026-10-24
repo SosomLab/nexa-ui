@@ -1056,6 +1056,8 @@ impl Widget for ToolDock {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let b = self.base.bounds;
         ctx.fill_rect(b, theme.chrome_bg);
+        // 도크 바닥 선은 **먼저**(228차 · dir3 10-24 캡처 검수): 맨 끝에 그리면 드래그 중 자리 표시 틀의 아래 선(같은 줄)을 덮는다.
+        ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
         let ghosted = self.drag.as_ref().filter(|d| d.moved).map(|d| d.gi);
         // ★ 글자 항목 폭 실측은 툴바 paint에서 — 그려진 뒤 권장 폭이 배치 폭과 다르면 낡음 표시(다음 사건·호스트가 재배치).
         let check_stale = |dock: &Self| {
@@ -1102,7 +1104,6 @@ impl Widget for ToolDock {
                 }
             }
         }
-        ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
         check_stale(self);
     }
 }
