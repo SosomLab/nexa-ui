@@ -42,6 +42,7 @@ pub mod timeout_button;
 pub mod toast;
 pub mod toolbar;
 pub mod tooldock;
+pub mod tooltip;
 pub mod tree;
 
 pub use button::{
@@ -72,6 +73,7 @@ pub use scroll::{
 pub use splitter::{SplitAxis, SplitBand, SplitEvent, Splitter};
 pub use statusbar::{StatusBar, StatusMarker, StatusPart, StatusSeg};
 pub use switch::Switch;
+pub use tooltip::Tooltip;
 /// 스위치 켜짐 색(초록) — 다른 컨트롤의 "켜짐"을 스위치와 같은 색으로 맞출 때(134차 · 툴바 토글).
 pub const SWITCH_ON: crate::theme::Color = switch::ON_GREEN;
 pub use tabbar::{ScrollButtons, TabAction, TabBadge, TabBar};
