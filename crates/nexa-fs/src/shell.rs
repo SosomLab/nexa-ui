@@ -944,8 +944,10 @@ mod service_tests {
         };
         let t = std::time::Instant::now();
         let first = svc.icon(&key, false);
+        // 한도 50 ms(종전 5 ms): 병렬 시험이 같은 전역 서비스 잠금을 잡거나 CPU 100 %이면 5 ms를 넘겨 흔들렸다(dir3 T-142 ·
+        // 10-04 1회 실패). 막는 셸 조회(SHGetFileInfo 등)는 수십~수백 ms라 50 ms로도 "워커에 맡김"을 가려낸다.
         assert!(
-            t.elapsed().as_millis() < 5,
+            t.elapsed().as_millis() < 50,
             "첫 조회는 즉시 돌아온다(워커에 맡김)"
         );
         match first {
