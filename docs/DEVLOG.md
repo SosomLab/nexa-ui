@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-24 (225차 · Linux)** — 🔧 nexa-fs Linux XDG 휴지통 다른 파일시스템(EXDEV) 폴백(`<topdir>/.Trash-<uid>` → 복사+삭제 · nexa-sql 138차 V3 A6 발견 · T-413) — journal 10-24 §2 · 290c801.
 - **2026-10-24 (222차 · mac)** — nexa-ctl 툴바 항목 2단 확인 무장 `ToolItem.armed`/`set_item_armed`(위험색 알약 + 흰 게이지 · `TimeoutButton` 모양 · nexa-sql 2단 통일 10-23) — journal 10-24 §1 · a385eb2.
 - **2026-10-22 (221차)** — 파일 창 편집(nexa-sql 135차 win) = nexa-fs `trash` 3-OS 휴지통 + 복원(7a493ce) · nexa-ctl `text_dx`/`text_pad`(9588521) · nexa-dlg 이름 바꾸기·삭제·Undo/Redo·`set_pinned`(3cdfca2) · CONSUMER-CHANGES 221. → [journal](journal/2026-10-22.md)
 - **2026-10-17 (213차 · mac)** — `LayerPresenter` 장 선택 규칙(front·prev 회피 · 다 바쁘면 프레임 건너뜀 · 풀 4 · 진단 `busy_reuse`/`forced`) = nexa-sql 객체 찾기 깜빡임 — journal 10-16 §7.
