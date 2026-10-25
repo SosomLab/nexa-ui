@@ -145,6 +145,24 @@ impl PairOpts {
     }
 }
 
+/// 체크포인트 간격(줄) — 증분 재스캔은 바뀐 첫 줄 **앞**의 가장 가까운 체크포인트에서 시작한다(T-145 · 10-26).
+const CK_EVERY: usize = 64;
+
+/// 닫힌 쌍 한 건(스캔 순서 · open, close, kind, parent_open).
+type Done = (usize, usize, PairKind, Option<usize>);
+
+/// 스캐너 상태 스냅숏 — `line`번째 줄을 읽기 **직전**의 상태.
+#[derive(Clone, Debug)]
+struct Checkpoint {
+    line: usize,
+    base: usize,
+    state: u32,
+    stack: Vec<(usize, PairKind)>,
+    floors: Vec<usize>,
+    done_len: usize,
+    unmatched_len: usize,
+}
+
 /// 쌍 표 — `pairs`는 열림 위치 오름차순.
 #[derive(Clone, Debug, Default)]
 pub struct PairTable {
@@ -155,150 +173,244 @@ pub struct PairTable {
     pub unmatched: Vec<(usize, PairKind)>,
     /// 모든 괄호 글자 (위치, 깊이, 짝 없음) 정렬 — 페인트의 색 조회.
     marks: Vec<(usize, u16, bool)>,
+    /// ★ 증분 재스캔 재료(T-145): 스캔 순서 그대로의 닫힌 쌍·짝 없음과 줄 체크포인트. 같은 강조기·옵션의 다음 본문에서
+    ///   바뀐 첫 줄 앞 체크포인트부터 다시 읽는다([`PairTable::rebuild`]).
+    done_raw: Vec<Done>,
+    unmatched_raw: Vec<(usize, PairKind)>,
+    checkpoints: Vec<Checkpoint>,
+    /// 표를 만든 조건(강조기 이름 · 옵션) — 다르면 `rebuild`는 전체 스캔으로.
+    sig: (Option<String>, PairOpts),
 }
 
-impl PairTable {
-    /// 텍스트 전체 스캔. `hl`이 없으면 전부 평문으로 본다(인용부호는 문자열 시작/끝으로 직접 판정).
-    #[must_use]
-    pub fn build(text: &str, hl: Option<&dyn Highlighter>, opts: PairOpts) -> PairTable {
-        // (열림, 종류)
-        let mut stack: Vec<(usize, PairKind)> = Vec::new();
+/// 한 줄씩 걷는 스캐너 — [`PairTable::build`](전체)와 [`PairTable::rebuild`](체크포인트 재개)가 같은 코드를 쓴다.
+struct Scanner<'a> {
+    hl: Option<&'a dyn Highlighter>,
+    opts: PairOpts,
+    doubled: bool,
+    span_lines: bool,
+    // (열림, 종류)
+    stack: Vec<(usize, PairKind)>,
+    floors: Vec<usize>, // 열린 인용부호의 스택 인덱스(안쪽이 뒤)
+    done: Vec<Done>,
+    unmatched: Vec<(usize, PairKind)>,
+    state: u32,
+    spans: Vec<(usize, TokenKind)>,
+    chars: Vec<char>,
+    base: usize,
+    line: usize,
+    checkpoints: Vec<Checkpoint>,
+}
+
+impl<'a> Scanner<'a> {
+    fn new(hl: Option<&'a dyn Highlighter>, opts: PairOpts) -> Self {
+        Scanner {
+            hl,
+            opts,
+            // ★ 구문이 "같은 인용부호 두 번 = 이스케이프"(SQL `'O''Neil'`)이면 열린 문자열 안의 `''`는 시작/끝이 아니다(사용자 09-23).
+            doubled: hl.is_some_and(Highlighter::doubled_quote_escapes),
+            span_lines: hl.is_some_and(Highlighter::strings_span_lines),
+            stack: Vec::new(),
+            floors: Vec::new(),
+            done: Vec::new(),
+            unmatched: Vec::new(),
+            state: 0,
+            spans: Vec::new(),
+            chars: Vec::new(),
+            base: 0,
+            line: 0,
+            checkpoints: Vec::new(),
+        }
+    }
+
+    /// 체크포인트에서 재개 — 그 앞 결과(`done`·`unmatched`·체크포인트)는 종전 표에서 잘라 온다.
+    fn resume(
+        hl: Option<&'a dyn Highlighter>,
+        opts: PairOpts,
+        prev: &PairTable,
+        ck_idx: usize,
+    ) -> Self {
+        let ck = &prev.checkpoints[ck_idx];
+        let mut sc = Scanner::new(hl, opts);
+        sc.stack = ck.stack.clone();
+        sc.floors = ck.floors.clone();
+        sc.done = prev.done_raw[..ck.done_len].to_vec();
+        sc.unmatched = prev.unmatched_raw[..ck.unmatched_len].to_vec();
+        sc.state = ck.state;
+        sc.base = ck.base;
+        sc.line = ck.line;
+        sc.checkpoints = prev.checkpoints[..ck_idx].to_vec();
+        sc
+    }
+
+    fn checkpoint(&mut self) {
+        self.checkpoints.push(Checkpoint {
+            line: self.line,
+            base: self.base,
+            state: self.state,
+            stack: self.stack.clone(),
+            floors: self.floors.clone(),
+            done_len: self.done.len(),
+            unmatched_len: self.unmatched.len(),
+        });
+    }
+
+    /// 줄 하나(개행 제외)를 읽는다.
+    fn scan_line(&mut self, line: &str) {
+        if self.line % CK_EVERY == 0 {
+            self.checkpoint();
+        }
         // ★ 문자열 안도 스캔한다(사용자 09-23 "' 안이라도 { " 등의 쌍을 보여 달라"): 열린 인용부호를 스택에 올려 **바닥**으로
         //   삼는다 — 문자열 안의 괄호는 그 문자열 안에서만 짝이 되고(바닥 아래로는 내려가지 않음), 문자열이 닫힐 때
         //   안에 남은 열림은 **조용히 버린다**(짝 없음 표시는 코드 층에서만 · `'('` 같은 문자열이 빨갛게 되지 않게).
         //   같은 인용부호가 겹치면 가장 안쪽부터 닫는다 · `\"` 이스케이프는 닫지 않는다.
-        let mut floors: Vec<usize> = Vec::new(); // 열린 인용부호의 스택 인덱스(안쪽이 뒤)
-        let mut done: Vec<(usize, usize, PairKind, Option<usize>)> = Vec::new(); // open, close, kind, parent_open
-        let mut unmatched: Vec<(usize, PairKind)> = Vec::new();
-        let mut state = 0u32;
-        let mut spans: Vec<(usize, TokenKind)> = Vec::new();
-        let mut base = 0usize;
-        // ★ 구문이 "같은 인용부호 두 번 = 이스케이프"(SQL `'O''Neil'`)이면 열린 문자열 안의 `''`는 시작/끝이 아니다(사용자 09-23).
-        let doubled = hl.is_some_and(Highlighter::doubled_quote_escapes);
-        for line in text.split('\n') {
-            let chars: Vec<char> = line.chars().collect();
-            spans.clear();
-            if let Some(h) = hl {
-                h.line_spans(line, &mut state, &mut spans);
-            } else {
-                spans.push((chars.len(), TokenKind::Plain));
+        let opts = self.opts;
+        self.chars.clear();
+        self.chars.extend(line.chars());
+        self.spans.clear();
+        if let Some(h) = self.hl {
+            h.line_spans(line, &mut self.state, &mut self.spans);
+        } else {
+            self.spans.push((self.chars.len(), TokenKind::Plain));
+        }
+        let chars = &self.chars;
+        let (stack, floors, done, unmatched) = (
+            &mut self.stack,
+            &mut self.floors,
+            &mut self.done,
+            &mut self.unmatched,
+        );
+        let mut ci = 0usize;
+        for &(n, kind) in &self.spans {
+            let end = (ci + n).min(chars.len());
+            if matches!(kind, TokenKind::Comment) {
+                ci = end;
+                continue;
             }
-            let mut ci = 0usize;
-            for &(n, kind) in &spans {
-                let end = (ci + n).min(chars.len());
-                if matches!(kind, TokenKind::Comment) {
-                    ci = end;
-                    continue;
-                }
-                // 인용부호가 구분자로 작동하는 곳 = 강조기의 문자열 토큰 · 평문 모드 전부.
-                let quotes_here = hl.is_none() || matches!(kind, TokenKind::Str);
-                let mut i = ci;
-                while i < end {
-                    let c = chars[i];
-                    let pos = base + i;
-                    let in_string = !floors.is_empty();
-                    if quotes_here
-                        && matches!(c, '"' | '\'' | '`')
-                        && !(i > 0 && chars[i - 1] == '\\')
+            // 인용부호가 구분자로 작동하는 곳 = 강조기의 문자열 토큰 · 평문 모드 전부.
+            let quotes_here = self.hl.is_none() || matches!(kind, TokenKind::Str);
+            let mut i = ci;
+            while i < end {
+                let c = chars[i];
+                let pos = self.base + i;
+                let in_string = !floors.is_empty();
+                if quotes_here && matches!(c, '"' | '\'' | '`') && !(i > 0 && chars[i - 1] == '\\')
+                {
+                    let k = PairKind::from_open(c).expect("quote kind");
+                    if !opts.has(k) {
+                        i += 1;
+                        continue;
+                    }
+                    // 안쪽을 보지 않는 모드(`in_strings` 끔)에서는 지금 열린 인용부호와 같은 것만 닫는다.
+                    if !opts.in_strings
+                        && in_string
+                        && floors.last().is_some_and(|&f| stack[f].1 != k)
                     {
-                        let k = PairKind::from_open(c).expect("quote kind");
-                        if !opts.has(k) {
-                            i += 1;
-                            continue;
-                        }
-                        // 안쪽을 보지 않는 모드(`in_strings` 끔)에서는 지금 열린 인용부호와 같은 것만 닫는다.
-                        if !opts.in_strings
-                            && in_string
-                            && floors.last().is_some_and(|&f| stack[f].1 != k)
-                        {
-                            i += 1;
-                            continue;
-                        }
-                        match floors.iter().rposition(|&f| stack[f].1 == k) {
-                            // 같은 인용부호로 열린 문자열 안에서 그 인용부호가 두 번 = 이스케이프 → 둘 다 건너뛴다.
-                            Some(_) if doubled && chars.get(i + 1) == Some(&c) => {
-                                i += 2;
-                                continue;
-                            }
-                            Some(fi) => {
-                                let f = floors[fi];
-                                stack.truncate(f + 1);
-                                floors.truncate(fi);
-                                let (o, _) = stack.pop().expect("quote open");
-                                done.push((o, pos, k, stack.last().map(|s| s.0)));
-                            }
-                            None => {
-                                floors.push(stack.len());
-                                stack.push((pos, k));
-                            }
-                        }
                         i += 1;
                         continue;
                     }
-                    if in_string && !opts.in_strings {
-                        // 종전 동작: 문자열 안쪽의 괄호는 보지 않는다.
-                        i += 1;
-                        continue;
-                    }
-                    if let Some(k) = PairKind::from_open(c).filter(|k| !k.is_quote()) {
-                        if opts.has(k) {
+                    match floors.iter().rposition(|&f| stack[f].1 == k) {
+                        // 같은 인용부호로 열린 문자열 안에서 그 인용부호가 두 번 = 이스케이프 → 둘 다 건너뛴다.
+                        Some(_) if self.doubled && chars.get(i + 1) == Some(&c) => {
+                            i += 2;
+                            continue;
+                        }
+                        Some(fi) => {
+                            let f = floors[fi];
+                            stack.truncate(f + 1);
+                            floors.truncate(fi);
+                            let (o, _) = stack.pop().expect("quote open");
+                            done.push((o, pos, k, stack.last().map(|s| s.0)));
+                        }
+                        None => {
+                            floors.push(stack.len());
                             stack.push((pos, k));
-                        }
-                    } else if let Some(k) = PairKind::from_close(c) {
-                        if !opts.has(k) {
-                            i += 1;
-                            continue;
-                        }
-                        let floor = floors.last().map_or(0, |&f| f + 1);
-                        match stack[floor..]
-                            .iter()
-                            .rposition(|(_, sk)| *sk == k)
-                            .map(|si| si + floor)
-                        {
-                            Some(si) if si + 1 == stack.len() => {
-                                let (o, _) = stack.pop().expect("top");
-                                done.push((o, pos, k, stack.last().map(|s| s.0)));
-                            }
-                            Some(si) => {
-                                // 사이에 닫히지 않은 열림들 = 짝 없음(문자열 안이면 조용히).
-                                for (o, ok) in stack.drain(si + 1..) {
-                                    if floor == 0 {
-                                        unmatched.push((o, ok));
-                                    }
-                                }
-                                let (o, _) = stack.pop().expect("top");
-                                done.push((o, pos, k, stack.last().map(|s| s.0)));
-                            }
-                            None if floor == 0 => unmatched.push((pos, k)),
-                            None => {}
                         }
                     }
                     i += 1;
+                    continue;
                 }
-                ci = end;
-            }
-            // ★ 줄 끝 재동기화(fail-over · 사용자 09-23): 평문, 그리고 문자열이 줄을 넘지 않는 구문(`strings_span_lines` = false ·
-            //   SQL 규격)에서는 줄 끝에 남은 열린 인용부호와 그 안을 버리고 다음 줄은 코드 층에서 다시 시작한다 — 짝 없는 `'` 하나가
-            //   파일 끝까지 짝을 뒤집어 놓지 않는다(JetBrains 렉서·Sublime 구문의 "문자열은 줄 끝에서 끝난다" 규칙).
-            if hl.is_none_or(|h| !h.strings_span_lines()) {
-                if let Some(&f) = floors.first() {
-                    stack.truncate(f);
+                if in_string && !opts.in_strings {
+                    // 종전 동작: 문자열 안쪽의 괄호는 보지 않는다.
+                    i += 1;
+                    continue;
                 }
-                floors.clear();
+                if let Some(k) = PairKind::from_open(c).filter(|k| !k.is_quote()) {
+                    if opts.has(k) {
+                        stack.push((pos, k));
+                    }
+                } else if let Some(k) = PairKind::from_close(c) {
+                    if !opts.has(k) {
+                        i += 1;
+                        continue;
+                    }
+                    let floor = floors.last().map_or(0, |&f| f + 1);
+                    match stack[floor..]
+                        .iter()
+                        .rposition(|(_, sk)| *sk == k)
+                        .map(|si| si + floor)
+                    {
+                        Some(si) if si + 1 == stack.len() => {
+                            let (o, _) = stack.pop().expect("top");
+                            done.push((o, pos, k, stack.last().map(|s| s.0)));
+                        }
+                        Some(si) => {
+                            // 사이에 닫히지 않은 열림들 = 짝 없음(문자열 안이면 조용히).
+                            for (o, ok) in stack.drain(si + 1..) {
+                                if floor == 0 {
+                                    unmatched.push((o, ok));
+                                }
+                            }
+                            let (o, _) = stack.pop().expect("top");
+                            done.push((o, pos, k, stack.last().map(|s| s.0)));
+                        }
+                        None if floor == 0 => unmatched.push((pos, k)),
+                        None => {}
+                    }
+                }
+                i += 1;
             }
-            base += chars.len() + 1;
+            ci = end;
         }
+        // ★ 줄 끝 재동기화(fail-over · 사용자 09-23): 평문, 그리고 문자열이 줄을 넘지 않는 구문(`strings_span_lines` = false ·
+        //   SQL 규격)에서는 줄 끝에 남은 열린 인용부호와 그 안을 버리고 다음 줄은 코드 층에서 다시 시작한다 — 짝 없는 `'` 하나가
+        //   파일 끝까지 짝을 뒤집어 놓지 않는다(JetBrains 렉서·Sublime 구문의 "문자열은 줄 끝에서 끝난다" 규칙).
+        if !self.span_lines {
+            if let Some(&f) = floors.first() {
+                stack.truncate(f);
+            }
+            floors.clear();
+        }
+        self.base += chars.len() + 1;
+        self.line += 1;
+    }
+
+    fn finish(mut self) -> PairTable {
         // 끝까지 안 닫힌 문자열과 그 안은 버리고, 코드 층에 남은 열림만 짝 없음.
-        if let Some(&f) = floors.first() {
-            stack.truncate(f);
+        if let Some(&f) = self.floors.first() {
+            self.stack.truncate(f);
         }
-        for (o, k) in stack {
-            unmatched.push((o, k));
+        // 꼬리의 짝 없음은 스캔 순서 기록(`unmatched_raw`)에 넣지 않는다 — 재개 때 스택에서 다시 나온다.
+        let mut unmatched = self.unmatched.clone();
+        for (o, k) in &self.stack {
+            unmatched.push((*o, *k));
         }
-        done.sort_by_key(|d| d.0);
-        let index_of = |open: usize| done.binary_search_by_key(&open, |d| d.0).ok();
+        unmatched.sort_unstable();
+        // `done`은 **닫힘 위치 순**(닫힐 때 기록) → 열림 순 인덱스 하나만 정렬하면 `close_order`는 그 역치환이다.
+        let done = &self.done;
+        let mut by_open: Vec<u32> = (0..done.len() as u32).collect();
+        by_open.sort_unstable_by_key(|&i| done[i as usize].0);
+        let mut close_order: Vec<u32> = vec![0; done.len()];
+        for (pi, &di) in by_open.iter().enumerate() {
+            close_order[di as usize] = pi as u32;
+        }
+        let index_of = |open: usize| {
+            by_open
+                .binary_search_by_key(&open, |&i| done[i as usize].0)
+                .ok()
+        };
         let mut pairs: Vec<Pair> = Vec::with_capacity(done.len());
-        for d in &done {
+        for &di in &by_open {
+            let d = &done[di as usize];
             let parent = d.3.and_then(index_of).map(|i| i as u32);
             pairs.push(Pair {
                 open: d.0,
@@ -315,25 +427,86 @@ impl PairTable {
                 None => 0,
             };
         }
-        let mut close_order: Vec<u32> = (0..pairs.len() as u32).collect();
-        close_order.sort_by_key(|&i| pairs[i as usize].close);
+        // marks = 열림(열림 순) · 닫힘(닫힘 순 = `done` 순) · 짝 없음(정렬됨) 세 오름차순 열의 병합 — 정렬 없이 O(n).
         let mut marks: Vec<(usize, u16, bool)> =
             Vec::with_capacity(pairs.len() * 2 + unmatched.len());
-        for p in &pairs {
-            marks.push((p.open, p.depth, false));
-            marks.push((p.close, p.depth, false));
+        let (mut a, mut b, mut c) = (0usize, 0usize, 0usize);
+        loop {
+            let ka = pairs.get(a).map(|p| p.open);
+            let kb = close_order.get(b).map(|&pi| pairs[pi as usize].close);
+            let kc = unmatched.get(c).map(|u| u.0);
+            let m = match ka.min(kb).min(kc) {
+                Some(m) => m,
+                None => break,
+            };
+            if ka == Some(m) {
+                marks.push((m, pairs[a].depth, false));
+                a += 1;
+            } else if kb == Some(m) {
+                marks.push((m, pairs[close_order[b] as usize].depth, false));
+                b += 1;
+            } else {
+                marks.push((m, 0, true));
+                c += 1;
+            }
         }
-        for (pos, _) in &unmatched {
-            marks.push((*pos, 0, true));
-        }
-        marks.sort_unstable();
-        unmatched.sort_unstable();
         PairTable {
             pairs,
             close_order,
             unmatched,
             marks,
+            done_raw: self.done,
+            unmatched_raw: self.unmatched,
+            checkpoints: self.checkpoints,
+            sig: (self.hl.map(|h| h.name().to_string()), self.opts),
         }
+    }
+}
+
+impl PairTable {
+    /// 텍스트 전체 스캔. `hl`이 없으면 전부 평문으로 본다(인용부호는 문자열 시작/끝으로 직접 판정).
+    #[must_use]
+    pub fn build(text: &str, hl: Option<&dyn Highlighter>, opts: PairOpts) -> PairTable {
+        let mut sc = Scanner::new(hl, opts);
+        for line in text.split('\n') {
+            sc.scan_line(line);
+        }
+        sc.finish()
+    }
+
+    /// ★ 증분 재스캔(T-145 · 10-26): `text`의 `first_changed_line` **앞 줄들이 이 표를 만든 본문과 같다**는 전제로, 그 앞의
+    /// 가장 가까운 체크포인트(64줄 단위)부터만 다시 읽는다. 강조기·옵션이 다르거나 체크포인트가 없으면 전체 스캔과 같다.
+    /// 결과는 [`PairTable::build`]와 **동일**(무작위 대조 시험).
+    #[must_use]
+    pub fn rebuild(
+        &self,
+        text: &str,
+        hl: Option<&dyn Highlighter>,
+        opts: PairOpts,
+        first_changed_line: usize,
+    ) -> PairTable {
+        let same = self.sig.1 == opts && self.sig.0.as_deref() == hl.map(Highlighter::name);
+        let ck_idx = same
+            .then(|| {
+                self.checkpoints
+                    .partition_point(|c| c.line <= first_changed_line)
+            })
+            .and_then(|n| n.checked_sub(1));
+        let Some(ck_idx) = ck_idx else {
+            return PairTable::build(text, hl, opts);
+        };
+        let from = self.checkpoints[ck_idx].line;
+        let mut sc = Scanner::resume(hl, opts, self, ck_idx);
+        for line in text.split('\n').skip(from) {
+            sc.scan_line(line);
+        }
+        sc.finish()
+    }
+
+    /// 체크포인트 수(시험·벤치).
+    #[must_use]
+    pub fn checkpoint_count(&self) -> usize {
+        self.checkpoints.len()
     }
 
     /// `[from, to)` 안의 괄호 글자 표시(위치 · 깊이 · 짝 없음).
@@ -412,6 +585,116 @@ impl PairTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 표의 관찰 가능한 내용(증분 ↔ 전체 대조용).
+    type Observable = (
+        Vec<Pair>,
+        Vec<u32>,
+        Vec<(usize, PairKind)>,
+        Vec<(usize, u16, bool)>,
+    );
+
+    fn observable(t: &PairTable) -> Observable {
+        (
+            t.pairs.clone(),
+            t.close_order.clone(),
+            t.unmatched.clone(),
+            t.marks.clone(),
+        )
+    }
+
+    /// 결정적 의사 난수(xorshift) — 시험이 재현되게.
+    fn rng(seed: &mut u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    }
+
+    /// ★ T-145 증분 재스캔 = 전체 스캔과 동일(무작위 대조 · 평문 + SQL 강조기 · 500줄 · 편집 200회 ·
+    /// 삽입/삭제/줄 추가/줄 삭제가 바뀐 첫 줄 앞 체크포인트에서 재개돼도 결과가 같다).
+    #[test]
+    fn rebuild_matches_full_build_randomly() {
+        let alphabet: Vec<char> = "ab (([[{{}}]])) '\"` x\\\n\n,;--".chars().collect();
+        for (hl, seed0) in [
+            (None, 0x9E37_79B9_7F4A_7C15u64),
+            (
+                Some(crate::highlight::SyntaxSpec::sql()),
+                0xD1B5_4A32_D192_ED03u64,
+            ),
+        ] {
+            let hl: Option<&dyn Highlighter> = hl.as_ref().map(|h| h as &dyn Highlighter);
+            let mut seed = seed0;
+            let mut text: Vec<char> = Vec::new();
+            for _ in 0..500 {
+                for _ in 0..(rng(&mut seed) % 40) {
+                    text.push(alphabet[(rng(&mut seed) as usize) % alphabet.len()]);
+                }
+                text.push('\n');
+            }
+            for opts in [
+                PairOpts::default(),
+                PairOpts {
+                    kinds: PairOpts::ALL,
+                    in_strings: false,
+                },
+            ] {
+                let s: String = text.iter().collect();
+                let mut table = PairTable::build(&s, hl, opts);
+                assert!(
+                    table.checkpoint_count() >= 8,
+                    "체크포인트 {}",
+                    table.checkpoint_count()
+                );
+                let mut cur = text.clone();
+                for step in 0..200 {
+                    // 편집 하나: 위치·길이 무작위(삭제 0..6 · 삽입 0..6 · 개행 포함).
+                    let at = (rng(&mut seed) as usize) % (cur.len() + 1);
+                    let del = ((rng(&mut seed) as usize) % 6).min(cur.len() - at);
+                    let ins: Vec<char> = (0..(rng(&mut seed) % 6))
+                        .map(|_| alphabet[(rng(&mut seed) as usize) % alphabet.len()])
+                        .collect();
+                    let first_line = cur[..at].iter().filter(|&&c| c == '\n').count();
+                    cur.splice(at..at + del, ins);
+                    let s: String = cur.iter().collect();
+                    let full = PairTable::build(&s, hl, opts);
+                    let inc = table.rebuild(&s, hl, opts, first_line);
+                    assert_eq!(
+                        observable(&inc),
+                        observable(&full),
+                        "step {step} · line {first_line} · hl {}",
+                        hl.is_some()
+                    );
+                    assert_eq!(
+                        inc.checkpoint_count(),
+                        full.checkpoint_count(),
+                        "step {step} 체크포인트 수"
+                    );
+                    table = inc;
+                }
+            }
+        }
+    }
+
+    /// 조건이 다르면(강조기 · 옵션) 증분이 아니라 전체 스캔으로 — 결과는 역시 전체와 같다.
+    #[test]
+    fn rebuild_falls_back_when_signature_differs() {
+        let text = "f(a, [b]) 'x(' {c}\n(d)\n";
+        let plain = PairTable::build(text, None, PairOpts::default());
+        let sql = crate::highlight::SyntaxSpec::sql();
+        let inc = plain.rebuild(text, Some(&sql), PairOpts::default(), 0);
+        let full = PairTable::build(text, Some(&sql), PairOpts::default());
+        assert_eq!(observable(&inc), observable(&full));
+        let narrow = PairOpts {
+            kinds: PairKind::Round.bit(),
+            in_strings: true,
+        };
+        let inc2 = plain.rebuild(text, None, narrow, 1);
+        assert_eq!(
+            observable(&inc2),
+            observable(&PairTable::build(text, None, narrow))
+        );
+    }
 
     /// 평문 스캔: 깊이 · 인용부호 쌍 · 짝 없음 · 조회(옆/감싸는/부모/자식/형제).
     #[test]

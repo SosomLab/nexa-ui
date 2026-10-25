@@ -556,6 +556,8 @@ pub struct TextBox {
     /// 괄호 쌍 표(docs/51 · 편집마다 무효 · 페인트/명령에서 재계산) + 옵션 + 우클릭 메뉴 추가 항목(호스트).
     pair_table: std::cell::RefCell<Option<super::pairs::PairTable>>,
     pairs_dirty: std::cell::Cell<bool>,
+    /// ★ T-145: 쌍 표를 만든 시점의 본문 세대·변경 번호 — 그 뒤 변경 기록의 최소 줄 앞 체크포인트에서 증분 재스캔.
+    pairs_journal: std::cell::Cell<(u64, u64)>,
     /// 쌍 표를 마지막으로 만든 본문 세대(`diff_rev`와 같은 뜻).
     pairs_rev: std::cell::Cell<u64>,
     bracket_opts: BracketOpts,
@@ -1014,6 +1016,7 @@ impl TextBox {
             diff_dirty: std::cell::Cell::new(false),
             pair_table: std::cell::RefCell::new(None),
             pairs_dirty: std::cell::Cell::new(true),
+            pairs_journal: std::cell::Cell::new((u64::MAX, 0)),
             pairs_rev: std::cell::Cell::new(u64::MAX),
             bracket_opts: BracketOpts::default(),
             menu_extras: Vec::new(),
@@ -1308,6 +1311,9 @@ impl TextBox {
     /// 구문 강조 규격 지정(None = 강조 없음). 멀티라인에서만 그린다.
     pub fn set_highlighter(&mut self, h: Option<Rc<dyn crate::highlight::Highlighter>>) {
         self.highlighter = h;
+        // 강조기가 바뀌면 쌍 표는 전체 스캔(같은 이름의 다른 구문일 수 있어 체크포인트를 믿지 않는다 · T-145).
+        self.pairs_dirty.set(true);
+        self.pairs_journal.set((u64::MAX, 0));
     }
 
     #[must_use]
@@ -2000,6 +2006,7 @@ impl TextBox {
     pub fn set_bracket_opts(&mut self, opts: BracketOpts) {
         if self.bracket_opts.pairs != opts.pairs || self.bracket_opts.max_chars != opts.max_chars {
             self.pairs_dirty.set(true);
+            self.pairs_journal.set((u64::MAX, 0));
         }
         self.bracket_opts = opts;
     }
@@ -2021,8 +2028,17 @@ impl TextBox {
         if !self.pairs_dirty.get() && self.pairs_rev.get() == self.edit.rev() {
             return;
         }
+        // 옵션·강조기가 바뀌면 `pairs_journal`이 비워져 전체 스캔(표의 조건 서명으로도 걸러진다) · 편집만이면 변경 기록으로 증분.
         self.pairs_dirty.set(false);
         self.pairs_rev.set(self.edit.rev());
+        let buf = self.edit.buf();
+        let (epoch0, seq0) = self.pairs_journal.get();
+        // 바뀐 첫 줄 = 기록 속 `first`의 최솟값(모든 변경은 그 시점 번호로 `first` 이상만 건드리므로 그 앞은 옛 표와 같은 줄).
+        let first_changed = (epoch0 == buf.epoch())
+            .then(|| buf.changes_since(seq0))
+            .flatten()
+            .map(|list| list.map(|c| c.first).min().unwrap_or(usize::MAX));
+        self.pairs_journal.set((buf.epoch(), buf.change_seq()));
         let table = if self.edit.len() > self.bracket_opts.max_chars {
             None
         } else {
@@ -2030,11 +2046,18 @@ impl TextBox {
             let text: Rc<String> = self
                 .ml_text_snapshot()
                 .unwrap_or_else(|| Rc::new(self.edit.text()));
-            Some(super::pairs::PairTable::build(
-                &text,
-                self.highlighter.as_deref(),
-                self.bracket_opts.pairs,
-            ))
+            let hl = self.highlighter.as_deref();
+            let prev = self.pair_table.borrow();
+            match (&*prev, first_changed) {
+                (Some(old), Some(line)) => {
+                    Some(old.rebuild(&text, hl, self.bracket_opts.pairs, line))
+                }
+                _ => Some(super::pairs::PairTable::build(
+                    &text,
+                    hl,
+                    self.bracket_opts.pairs,
+                )),
+            }
         };
         *self.pair_table.borrow_mut() = table;
     }

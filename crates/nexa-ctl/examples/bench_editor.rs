@@ -43,6 +43,33 @@ fn main() {
         text
     };
     println!("text: {} bytes · {} lines", text.len(), lines);
+    // 괄호 표 직접 측정(T-145 · 10-26): 전체 스캔 ↔ 마지막 줄/중간 줄 편집 뒤 증분 재스캔(SQL 강조기).
+    if parens {
+        use nexa_ctl::controls::pairs::{PairOpts, PairTable};
+        let spec = nexa_ctl::SyntaxSpec::sql();
+        let t = Instant::now();
+        let table = PairTable::build(&text, Some(&spec), PairOpts::default());
+        println!(
+            "pairs full build: {:.3} ms ({} pairs · {} checkpoints)",
+            t.elapsed().as_secs_f64() * 1000.0,
+            table.len(),
+            table.checkpoint_count()
+        );
+        for (label, line) in [
+            ("last line", lines - 1),
+            ("middle", lines / 2),
+            ("first line", 0),
+        ] {
+            let t = Instant::now();
+            for _ in 0..20 {
+                let _ = table.rebuild(&text, Some(&spec), PairOpts::default(), line);
+            }
+            println!(
+                "pairs rebuild from {label}: {:.3} ms",
+                t.elapsed().as_secs_f64() * 1000.0 / 20.0
+            );
+        }
+    }
     let Some(mono) = nexa_font::mono_font(None) else {
         eprintln!("no mono font");
         return;
