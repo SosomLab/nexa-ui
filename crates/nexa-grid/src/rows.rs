@@ -28,8 +28,10 @@ const BAR_WIDE: i32 = 10;
 const THUMB_MIN: i32 = 24;
 const BAR_ALPHA: u8 = 120;
 const BAR_ALPHA_HOT: u8 = 210;
-const BAR_HOLD_TICKS: u8 = 22;
-const BAR_FADE_STEP: u8 = 24;
+/// 오버레이 바 유지·페이드(233차 · **시간 기준**): 스크롤 뒤 1초 그대로 → 300 ms 동안 사라짐. 종전 틱 횟수(22틱 · 24/틱)는 호스트 틱 간격에
+/// 따라 체감이 달라져(nexa-dir3 = 사건마다 + 16 ms 프레임 → 0.3초 만에 사라짐 · 사용자 10-25) 시간으로 바꿨다.
+const BAR_HOLD_MS: u64 = 1000;
+const BAR_FADE_MS: u64 = 300;
 
 /// 행 왼쪽의 펼침 상태 마커.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -388,12 +390,26 @@ pub struct VirtualRows<S> {
     /// 가로 스크롤 = 가로만, 가로 표시 중 세로 스크롤 = 둘 다): `[세로, 가로]` 썸 알파
     /// (0=숨김)·유지 틱 잔량, 호버 축, 드래그.
     bar_alpha: [u8; 2],
-    bar_hold: [u8; 2],
+    /// 축별 마지막 표시 시각(ms · [`Self::tick`]의 `now_ms` 기준 · 0 = 없음) · 표시 직후엔 시각을 모르므로 다음 틱이 찍는다(`bar_stamp`).
+    bar_flash_at: [u64; 2],
+    bar_stamp: [bool; 2],
     bar_hover: Option<Axis>,
     bar_drag: Option<BarDrag>,
 }
 
-/// 오버레이 바 축 인덱스(`bar_alpha`/`bar_hold`).
+/// 표시 뒤 `elapsed_ms`에서의 바 알파(순수 · 233차): 유지 구간 = 그대로 · 페이드 구간 = 선형 감소 · 그 뒤 0.
+fn bar_alpha_at(elapsed_ms: u64) -> u8 {
+    if elapsed_ms < BAR_HOLD_MS {
+        BAR_ALPHA
+    } else if elapsed_ms < BAR_HOLD_MS + BAR_FADE_MS {
+        let left = BAR_HOLD_MS + BAR_FADE_MS - elapsed_ms;
+        (u64::from(BAR_ALPHA) * left / BAR_FADE_MS) as u8
+    } else {
+        0
+    }
+}
+
+/// 오버레이 바 축 인덱스(`bar_alpha`/`bar_flash_at`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Axis {
     V = 0,
@@ -462,7 +478,8 @@ impl<S: RowSource> VirtualRows<S> {
             sort_mark_vector: false,
             sort_click_adds: false,
             bar_alpha: [0, 0],
-            bar_hold: [0, 0],
+            bar_flash_at: [0, 0],
+            bar_stamp: [false, false],
             bar_hover: None,
             bar_drag: None,
         }
@@ -996,12 +1013,19 @@ impl<S: RowSource> VirtualRows<S> {
                 continue; // 호버/드래그 중인 축은 페이드 보류(이탈 시 flash_bar가 재개)
             }
             let i = axis as usize;
-            if self.bar_hold[i] > 0 {
-                self.bar_hold[i] -= 1;
+            if self.bar_stamp[i] {
+                // 표시 직후 첫 틱 = 시각 기록(유지 시간은 여기서부터).
+                self.bar_stamp[i] = false;
+                self.bar_flash_at[i] = now_ms;
                 inv.request_tick();
-            } else if self.bar_alpha[i] > 0 {
-                self.bar_alpha[i] = self.bar_alpha[i].saturating_sub(BAR_FADE_STEP);
-                self.push_bar_strip(axis, inv);
+                continue;
+            }
+            if self.bar_alpha[i] > 0 {
+                let a = bar_alpha_at(now_ms.saturating_sub(self.bar_flash_at[i]));
+                if a != self.bar_alpha[i] {
+                    self.bar_alpha[i] = a;
+                    self.push_bar_strip(axis, inv);
+                }
                 if self.bar_alpha[i] > 0 {
                     inv.request_tick();
                 }
@@ -1079,7 +1103,7 @@ impl<S: RowSource> VirtualRows<S> {
     /// (가로가 보이는 중 세로 스크롤 = 둘 다 — 사용자 확정 09-04).
     fn flash_bar(&mut self, axis: Axis, inv: &mut Invalidations) {
         self.bar_alpha[axis as usize] = BAR_ALPHA;
-        self.bar_hold[axis as usize] = BAR_HOLD_TICKS;
+        self.bar_stamp[axis as usize] = true; // 다음 틱이 시각을 찍는다(여기서는 시각을 모른다)
         self.push_bar_strip(axis, inv);
         inv.request_tick();
     }
@@ -3539,6 +3563,39 @@ mod tests {
         assert_eq!(v.sort(), &[(k[1], false), (k[0], true)], "다시 = 방향");
         click(&mut v, &mut inv, 50, 5, false);
         assert_eq!(v.sort(), &[(k[1], false)], "세 번째 = 제거");
+    }
+
+    /// 오버레이 바 유지·페이드 = 시간 기준(233차 · 사용자 10-25 "스크롤바가 잠깐 보였다 바로 숨겨짐"): 같은 시각에 틱을 아무리 많이 돌려도
+    /// 알파가 줄지 않고 · 1초 뒤부터 300 ms 동안 선형으로 사라진다 · 다시 스크롤하면 처음부터.
+    #[test]
+    fn overlay_bar_fades_by_time_not_by_tick_count() {
+        let (mut v, mut inv) = list_with_cols(400, 220);
+        v.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        assert_eq!(v.bar_alpha[0], BAR_ALPHA, "스크롤 = 표시");
+        v.tick(10_000, &mut inv); // 시각 기록
+        for _ in 0..60 {
+            v.tick(10_000, &mut inv);
+        }
+        assert_eq!(
+            v.bar_alpha[0], BAR_ALPHA,
+            "같은 시각 틱 60번 = 그대로(종전 22틱이면 사라졌다)"
+        );
+        v.tick(10_000 + BAR_HOLD_MS - 1, &mut inv);
+        assert_eq!(v.bar_alpha[0], BAR_ALPHA, "유지 구간");
+        v.tick(10_000 + BAR_HOLD_MS + BAR_FADE_MS / 2, &mut inv);
+        assert!(
+            v.bar_alpha[0] > 0 && v.bar_alpha[0] < BAR_ALPHA,
+            "페이드 중: {}",
+            v.bar_alpha[0]
+        );
+        v.tick(10_000 + BAR_HOLD_MS + BAR_FADE_MS, &mut inv);
+        assert_eq!(v.bar_alpha[0], 0, "끝 = 숨김");
+        v.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        v.tick(20_000, &mut inv);
+        v.tick(20_000 + 500, &mut inv);
+        assert_eq!(v.bar_alpha[0], BAR_ALPHA, "다시 스크롤 = 처음부터 유지");
+        assert_eq!(bar_alpha_at(0), BAR_ALPHA);
+        assert_eq!(bar_alpha_at(BAR_HOLD_MS + BAR_FADE_MS), 0);
     }
 
     #[test]
