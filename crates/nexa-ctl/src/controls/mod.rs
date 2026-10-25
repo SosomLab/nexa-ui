@@ -33,8 +33,10 @@ pub mod progress;
 pub mod pulldown;
 pub mod radio;
 pub mod scroll;
+pub mod searchbox;
 pub mod splitter;
 pub mod statusbar;
+pub mod svgicon;
 pub mod switch;
 pub mod tabbar;
 pub mod textbox;
@@ -70,6 +72,7 @@ pub use radio::{RadioGroup, RadioOption};
 pub use scroll::{
     fast_scroll, set_fast_scroll, FastScroll, HudStyle, ScrollAccel, ScrollBars, SpeedHud, TextHud,
 };
+pub use searchbox::{SearchBox, SearchEvent, SearchToggle};
 pub use splitter::{SplitAxis, SplitBand, SplitEvent, Splitter};
 pub use statusbar::{StatusBar, StatusMarker, StatusPart, StatusSeg};
 pub use switch::Switch;

@@ -68,6 +68,7 @@ pub use controls::{
 };
 pub use controls::{Palette, PaletteAction, PaletteItem, PaletteStrings};
 pub use controls::{ProbeCtx, RecordCtx, StatusBar, StatusMarker, StatusPart, StatusSeg};
+pub use controls::{SearchBox, SearchEvent, SearchToggle};
 pub use draw::{set_tooltip_above, tooltip_above, DrawCtx, FontSlot};
 pub use edit::{EditCommand, EditKey, EditState};
 pub use event::{set_wheel_lines, wheel_lines, InputEvent, Key, WheelAccum, WHEEL_DELTA};
