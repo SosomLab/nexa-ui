@@ -230,6 +230,74 @@ pub fn diff_lines_hint(
     cur: &[&str],
     hint: Option<usize>,
 ) -> Vec<(usize, DiffKind)> {
+    diff_seq_hint(base, cur, hint)
+}
+
+/// 줄 해시 — `str::lines()`와 같은 줄 정의(끝의 `\r`은 뗀다). 기준선·현재 줄 둘 다 이 값으로 비교한다(T-145).
+#[must_use]
+pub fn line_hash(line: &str) -> u64 {
+    let s = line.strip_suffix('\r').unwrap_or(line);
+    let mut h = crate::edit::Hash64::new();
+    h.write(s.as_bytes());
+    h.finish()
+}
+
+/// ★ T-145: 현재 본문의 줄 해시 캐시 — [`TextBuf::changes_since`]의 소비자(`hl_states_lines`·`line_widths_max`와 같은 꼴).
+#[derive(Default, Debug)]
+struct LineHashCache {
+    epoch: u64,
+    seq: u64,
+    /// 버퍼의 모든 줄(마지막 빈 줄 포함) 해시.
+    hashes: Vec<u64>,
+    ready: bool,
+}
+
+impl LineHashCache {
+    /// 변경 기록을 따라 바뀐 줄만 다시 해시(기록이 끊겼거나 통째 교체면 전부).
+    fn sync(&mut self, buf: &crate::edit::TextBuf) {
+        let hash_line = |i: usize| line_hash(&buf.line_text(i));
+        let changes = (self.ready && self.epoch == buf.epoch())
+            .then(|| buf.changes_since(self.seq))
+            .flatten();
+        match changes {
+            Some(list) => {
+                for ch in list {
+                    let first = ch.first.min(self.hashes.len());
+                    let end = (first + ch.removed).min(self.hashes.len());
+                    let fresh: Vec<u64> = (first..first + ch.inserted).map(hash_line).collect();
+                    self.hashes.splice(first..end, fresh);
+                }
+                // 기록은 믿되 길이가 어긋났으면(있을 수 없는 일) 전부 다시.
+                if self.hashes.len() != buf.line_count() {
+                    self.hashes = (0..buf.line_count()).map(hash_line).collect();
+                }
+            }
+            None => {
+                self.hashes = (0..buf.line_count()).map(hash_line).collect();
+            }
+        }
+        self.ready = true;
+        self.epoch = buf.epoch();
+        self.seq = buf.change_seq();
+    }
+
+    /// `str::lines()`가 보는 줄 수 — 본문이 `\n`으로 끝나면 버퍼의 마지막 빈 줄은 줄이 아니다.
+    fn logical_len(&self, buf: &crate::edit::TextBuf) -> usize {
+        let n = self.hashes.len();
+        if n > 0 && buf.line_text(n - 1).is_empty() {
+            n - 1
+        } else {
+            n
+        }
+    }
+}
+
+/// [`diff_lines_hint`]의 일반형 — 줄 글(`String`/`&str`)이든 줄 해시(`u64`)든 같은 알고리즘(T-145).
+pub fn diff_seq_hint<A, B>(base: &[A], cur: &[B], hint: Option<usize>) -> Vec<(usize, DiffKind)>
+where
+    A: PartialEq<B> + PartialEq,
+    B: PartialEq,
+{
     const LCS_CAP: usize = 1500;
     let mut out: Vec<(usize, DiffKind)> = Vec::new();
     let n = base.len();
@@ -474,7 +542,11 @@ pub struct TextBox {
     /// 줄 끝 인라인 라벨(논리 줄 → 흐린 글) — 본문 뒤에 여백을 두고 `text_dim`으로(북마크 라벨 · 편집 대상 아님).
     inline_labels: Vec<(usize, String)>,
     /// ★ 저장 기준선(마지막 저장/열기 시점의 줄들) — 있으면 거터 띠에 줄 변경 유형을 그린다(nexa-sql 사용자 09-17 · Sublime mini_diff/VS Code).
-    baseline: Option<Vec<String>>,
+    ///   T-145(10-25): 줄 글이 아니라 **줄 해시**(8 B/줄 · 종전 = 본문 사본)만 둔다 — 비교는 해시 배열끼리.
+    baseline: Option<Vec<u64>>,
+    /// ★ T-145: 현재 본문의 줄 해시(변경 기록 `changes_since`의 소비자 · 바뀐 줄만 다시 해시) — 종전엔 리비전마다 본문 전체를
+    ///   문자열로 다시 만들어 줄로 나눴다(4만 줄 입력 1회 ≈ 11 ms 중 4.8 ms).
+    diff_cur: std::cell::RefCell<LineHashCache>,
     /// 기준선 대비 줄 변경(논리 줄 0 기준 · 정렬) — `DiffKind`. 편집 때마다 `diff_dirty`로 다시 계산(페인트에서).
     diff_marks: std::cell::RefCell<Vec<(usize, DiffKind)>>,
     /// 줄 변경 표시를 마지막으로 계산한 본문 세대(`EditState::rev`) — 사건 경로를 지나지 않는 편집(명령·호스트 호출)도
@@ -936,6 +1008,7 @@ impl TextBox {
             minimap_marks: Vec::new(),
             inline_labels: Vec::new(),
             baseline: None,
+            diff_cur: std::cell::RefCell::new(LineHashCache::default()),
             diff_marks: std::cell::RefCell::new(Vec::new()),
             diff_rev: std::cell::Cell::new(u64::MAX),
             diff_dirty: std::cell::Cell::new(false),
@@ -1889,7 +1962,7 @@ impl TextBox {
     /// 표시 띠의 색 막대(논리 줄 0부터 · 색) — 전체 교체.
     /// 저장 기준선(줄 변경 표시의 원천) — `None` = 표시 안 함(제목 없는 탭 · 설정 off).
     pub fn set_baseline(&mut self, text: Option<&str>) {
-        self.baseline = text.map(|t| t.lines().map(str::to_string).collect());
+        self.baseline = text.map(|t| t.lines().map(line_hash).collect());
         self.diff_marks.borrow_mut().clear();
         self.diff_dirty.set(self.baseline.is_some());
     }
@@ -1906,6 +1979,7 @@ impl TextBox {
     }
 
     /// 기준선 vs 현재 줄 — 공통 앞/뒤를 잘라내고 가운데만 LCS(상한 안) · 넘치면 가운데 전부 `Modified`.
+    /// ★ T-145: 현재 줄 해시는 변경 기록으로 **바뀐 줄만** 다시 만들고(본문 문자열 재생성 0) 해시 배열끼리 비교한다.
     fn recompute_diff(&self) {
         self.diff_dirty.set(false);
         self.diff_rev.set(self.edit.rev());
@@ -1913,13 +1987,13 @@ impl TextBox {
             self.diff_marks.borrow_mut().clear();
             return;
         };
-        let text: Rc<String> = self
-            .ml_text_snapshot()
-            .unwrap_or_else(|| Rc::new(self.edit.text()));
-        let cur: Vec<&str> = text.lines().collect();
+        let buf = self.edit.buf();
+        let mut c = self.diff_cur.borrow_mut();
+        c.sync(buf);
+        let n = c.logical_len(buf);
         // 힌트 = 캐럿 줄(마지막 편집 자리의 근사) — 빈 줄 묶음 안 삽입/삭제 표시가 편집한 줄에 붙게(사용자 09-23).
-        let hint = self.edit.buf().line_of(self.edit.caret());
-        *self.diff_marks.borrow_mut() = diff_lines_hint(base, &cur, Some(hint));
+        let hint = buf.line_of(self.edit.caret());
+        *self.diff_marks.borrow_mut() = diff_seq_hint(base, &c.hashes[..n], Some(hint));
     }
 
     /// 레인보우 괄호·자동 닫기 옵션(nexa-sql `rainbow.*`).
@@ -1952,7 +2026,10 @@ impl TextBox {
         let table = if self.edit.len() > self.bracket_opts.max_chars {
             None
         } else {
-            let text = self.edit.text();
+            // T-145: 그리기와 같은 리비전 스냅샷을 빌린다(본문 String 사본 하나 덜 · 조합 중엔 종전대로).
+            let text: Rc<String> = self
+                .ml_text_snapshot()
+                .unwrap_or_else(|| Rc::new(self.edit.text()));
             Some(super::pairs::PairTable::build(
                 &text,
                 self.highlighter.as_deref(),
@@ -6732,6 +6809,75 @@ c  d",
             t.diff_marks(),
             vec![(1, DiffKind::Added)],
             "복제한 줄에 표시"
+        );
+    }
+
+    /// ★ T-145 난수 대조: 해시 증분 경로(`diff_marks`) == 종전 전체 경로(`diff_lines_hint`(줄 글)) — 삽입·삭제·개행·되돌리기를 섞은 편집 400회.
+    fn feed_chars(t: &mut TextBox, inv: &mut Invalidations, s: &str) {
+        for c in s.chars() {
+            t.on_event(&InputEvent::Char { c, now_ms: 0 }, inv);
+        }
+    }
+
+    #[test]
+    fn diff_marks_incremental_matches_full_model() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = move |n: usize| -> usize {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let base_text: String = (0..60)
+            .map(|i| match i % 7 {
+                0 => String::new(),
+                1 => "SELECT 1 FROM T;".to_string(),
+                _ => format!("line {i} 한글 ({i})"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let base_lines: Vec<String> = base_text.lines().map(str::to_string).collect();
+        let mut t = TextBox::new("p").with_multiline().with_text(&base_text);
+        t.set_baseline(Some(&base_text));
+        t.set_focused(true);
+        let mut inv = Invalidations::default();
+        for step in 0..400 {
+            let len = t.edit.len();
+            let pos = rnd(len + 1);
+            t.edit.set_caret(pos, false);
+            match rnd(6) {
+                0 => feed_chars(&mut t, &mut inv, "\n"),
+                1 => feed_chars(&mut t, &mut inv, "x"),
+                2 => feed_chars(&mut t, &mut inv, "SELECT 1 FROM T;"),
+                3 if pos > 0 => {
+                    // Backspace = `Char('\u{8}')`.
+                    t.on_event(
+                        &InputEvent::Char {
+                            c: '\u{8}',
+                            now_ms: 0,
+                        },
+                        &mut inv,
+                    );
+                }
+                4 if step % 9 == 0 => {
+                    assert!(t.edit_command(crate::edit::EditCommand::DuplicateLines));
+                }
+                _ => feed_chars(&mut t, &mut inv, "한"),
+            }
+            let text = t.text();
+            let cur: Vec<&str> = text.lines().collect();
+            let hint = t.edit.buf().line_of(t.edit.caret());
+            let expect = diff_lines_hint(&base_lines, &cur, Some(hint));
+            assert_eq!(t.diff_marks(), expect, "step {step} text={text:?}");
+        }
+        // 통째 교체(epoch) 뒤에도 같다.
+        t.set_text("new\nbody\n");
+        let text = t.text();
+        let cur: Vec<&str> = text.lines().collect();
+        let hint = t.edit.buf().line_of(t.edit.caret());
+        assert_eq!(
+            t.diff_marks(),
+            diff_lines_hint(&base_lines, &cur, Some(hint))
         );
     }
 

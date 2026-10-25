@@ -19,6 +19,8 @@ fn main() {
     let mut text = String::new();
     // `BENCH_ASCII=1` = 한글 없는 본문(덤프·마이그레이션 SQL의 보통 모습 — 고정폭 지름길이 듣는 경우).
     let ascii = std::env::var_os("BENCH_ASCII").is_some();
+    // `BENCH_PARENS=1` = 줄마다 괄호 쌍을 섞는다(괄호 표 비용 측정 · T-145 — 기본 본문엔 괄호가 없어 바닥값만 잡힌다).
+    let parens = std::env::var_os("BENCH_PARENS").is_some();
     for i in 0..lines {
         if ascii {
             text.push_str(&format!(
@@ -35,6 +37,11 @@ fn main() {
             i % 50
         ));
     }
+    let text = if parens {
+        text.replace("AND 1=1;", "AND (A IN (1, 2) OR (B = 'x' AND (C > 0)));")
+    } else {
+        text
+    };
     println!("text: {} bytes · {} lines", text.len(), lines);
     let Some(mono) = nexa_font::mono_font(None) else {
         eprintln!("no mono font");
