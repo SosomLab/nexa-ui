@@ -131,6 +131,28 @@ pub enum SelectOp {
     RangeTo,
 }
 
+/// 행 바탕 색조(230차 · nexa-dir3 일괄 이름 변경 충돌 행): 선택되지 않은 행의 바탕을 테마 `warn`/`danger`와 살짝 섬는다(`ROW_MARK_MIX`) ·
+/// 선택 하이라이트가 우선. 소스가 [`RowSource::row_mark`]로 준다 · 기본 = 없음.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RowMark {
+    #[default]
+    None,
+    Warn,
+    Danger,
+}
+
+/// 행 색조 섬기 비율(바탕 → warn/danger · 0.22 = 지브라 음영과 구분되며 글 대비 유지).
+pub const ROW_MARK_MIX: f32 = 0.22;
+
+/// 행 바탕 = 기본 바탕에 색조를 섬은 것(순수 · 그리기 두 경로(목록·타일)가 공유).
+pub fn marked_bg(base: crate::theme::Color, mark: RowMark, theme: &Theme) -> crate::theme::Color {
+    match mark {
+        RowMark::None => base,
+        RowMark::Warn => base.lerp(theme.warn, ROW_MARK_MIX),
+        RowMark::Danger => base.lerp(theme.danger, ROW_MARK_MIX),
+    }
+}
+
 /// 행 데이터 공급자. 위젯은 가시 행에 대해서만 호출한다.
 pub trait RowSource {
     fn len(&self) -> usize;
@@ -168,6 +190,11 @@ pub trait RowSource {
     fn is_ghosted(&self, index: usize) -> bool {
         let _ = index;
         false
+    }
+    /// 행 바탕 색조(경고/오류 행 — nexa-dir3 일괄 이름 변경 충돌 행 · 230차). 선택 행은 하이라이트가 우선. 기본 = 없음.
+    fn row_mark(&self, index: usize) -> RowMark {
+        let _ = index;
+        RowMark::None
     }
     fn select(&mut self, index: usize, op: SelectOp) -> bool {
         let _ = (index, op);
@@ -1876,7 +1903,7 @@ impl<S: RowSource> VirtualRows<S> {
                     theme.sel_bg_inactive
                 }
             } else {
-                theme.panel_bg
+                marked_bg(theme.panel_bg, self.src.row_mark(idx), theme)
             };
             // 셀 배경(안쪽 1px 여백 — 타일 간 시각 분리)
             let cell = Rect::new(rc.x + 2, rc.y + 2, rc.w - 4, rc.h - 4);
@@ -2497,10 +2524,13 @@ impl<S: RowSource> VirtualRows<S> {
                 } else {
                     theme.sel_bg_inactive
                 }
-            } else if row % 2 == 0 {
-                theme.panel_bg
             } else {
-                theme.panel_bg_alt
+                let zebra = if row % 2 == 0 {
+                    theme.panel_bg
+                } else {
+                    theme.panel_bg_alt
+                };
+                marked_bg(zebra, self.src.row_mark(row), theme)
             };
             // 텍스트 세로 위치: 행 높이의 4/5를 글자 높이로 보고 중앙 정렬(M0-7 계승)
             let ty = y + (self.row_h - (self.row_h * 4) / 5) / 2;
@@ -4104,6 +4134,77 @@ mod tests {
         let fg_of = |name: &str| p.named.iter().find(|(t, _)| t == name).unwrap().1;
         assert_eq!(fg_of("g-0"), th.text_dim, "잘라내기 대기 행 = 흐림");
         assert_eq!(fg_of("g-1"), th.text, "일반 행 = 기본 색");
+    }
+
+    /// 행 색조(230차): row_mark 행의 바탕 = 지브라 바탕에 warn/danger를 섬은 색 · 선택 행은 하이라이트 우선 · 기본 행은 지브라 그대로.
+    #[test]
+    fn marked_row_paints_tinted_background() {
+        struct Marked;
+        impl RowSource for Marked {
+            fn len(&self) -> usize {
+                4
+            }
+            fn row(&self, index: usize) -> RowItem {
+                RowItem {
+                    text: format!("m-{index}"),
+                    is_dir: false,
+                    depth: 0,
+                    marker: Marker::None,
+                }
+            }
+            fn is_selected(&self, index: usize) -> bool {
+                index == 2
+            }
+            fn row_mark(&self, index: usize) -> RowMark {
+                match index {
+                    0 => RowMark::Warn,
+                    1 => RowMark::Danger,
+                    2 => RowMark::Warn,
+                    _ => RowMark::None,
+                }
+            }
+        }
+        struct Probe {
+            named: Vec<(String, Color)>,
+        }
+        impl DrawCtx for Probe {
+            fn fill_rect(&mut self, _rect: Rect, _color: Color) {}
+            fn text_opaque(
+                &mut self,
+                _x: i32,
+                _y: i32,
+                _clip: Rect,
+                text: &str,
+                _fg: Color,
+                bg: Color,
+            ) {
+                self.named.push((text.to_string(), bg));
+            }
+            fn text_width(&mut self, text: &str) -> i32 {
+                text.chars().count() as i32 * 8
+            }
+        }
+        let mut v = VirtualRows::new(Marked, 20, 6, 16);
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 300, 120), &mut inv);
+        v.set_focused(true, &mut inv);
+        let mut p = Probe { named: vec![] };
+        let th = Theme::dark();
+        v.paint_grid(&mut p, &th);
+        let bg_of = |name: &str| p.named.iter().find(|(t, _)| t == name).unwrap().1;
+        assert_eq!(
+            bg_of("m-0"),
+            th.panel_bg.lerp(th.warn, ROW_MARK_MIX),
+            "경고 행"
+        );
+        assert_eq!(
+            bg_of("m-1"),
+            th.panel_bg_alt.lerp(th.danger, ROW_MARK_MIX),
+            "오류 행(지브라 음영 위)"
+        );
+        assert_eq!(bg_of("m-2"), th.sel_bg, "선택 행 = 하이라이트 우선");
+        assert_eq!(bg_of("m-3"), th.panel_bg_alt, "기본 행 = 지브라");
+        assert_eq!(marked_bg(th.panel_bg, RowMark::None, &th), th.panel_bg);
     }
 
     #[test]

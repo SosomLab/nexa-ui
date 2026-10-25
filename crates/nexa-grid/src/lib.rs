@@ -21,7 +21,8 @@ pub mod rows;
 pub mod typeahead;
 
 pub use rows::{
-    marker_chevron_points, marker_glyphs, marker_vector, set_marker_glyphs, set_marker_vector,
+    marked_bg, marker_chevron_points, marker_glyphs, marker_vector, set_marker_glyphs,
+    set_marker_vector, RowMark, ROW_MARK_MIX,
 };
 
 /// 기하 — nexa-ctl 재노출.
