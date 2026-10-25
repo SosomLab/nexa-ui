@@ -949,7 +949,7 @@ impl FilePicker {
         let b = self.path_box.bounds();
         ctx.fill_round_rect(b, self.s(6), theme.field_bg);
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
-        ctx.select_font(FontSlot::Base, false);
+        ctx.select_font(FontSlot::Dialog, false);
         let ty = ctx.text_center_y(b.y, b.h);
         let crumbs = self.crumbs();
         let seg_pad = self.s(6);
@@ -3240,7 +3240,7 @@ impl Widget for FilePicker {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let b = self.base.bounds;
         ctx.fill_rect(b, theme.window_bg);
-        ctx.select_font(FontSlot::Base, false);
+        ctx.select_font(FontSlot::Dialog, false);
         // 라벨
         let nb = self.name_box.bounds();
         let ty = ctx.text_center_y(nb.y, nb.h);

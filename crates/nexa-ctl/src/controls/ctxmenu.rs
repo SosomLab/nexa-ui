@@ -1619,7 +1619,7 @@ impl ContextMenu {
         // ★ 폭 실측 보정(08-14 실기 — 자당 근사가 글꼴 크기에 뒤처져 라벨이 잘렸다):
         // 여기서만 글자를 잴 수 있으므로 첫 paint가 진짜 폭으로 올려치고, 넓어져서
         // 호스트 오른쪽을 넘으면 경계 접기를 다시 한다(히트 판정 rect·at 동기 갱신).
-        ctx.select_font(FontSlot::Base, false);
+        ctx.select_font(FontSlot::Menu, false);
         let mut real = 0;
         let mut sc_real = 0;
         for it in &self.items {
@@ -1676,7 +1676,7 @@ impl ContextMenu {
         // 바탕 + 테두리(그림자 대신 테두리로 층을 만든다 — 렌더러에 블러가 없다).
         ctx.fill_round_rect(r, self.s(RADIUS), theme.panel_bg);
         ctx.stroke_round_rect(r, self.s(RADIUS), theme.border, 1.0);
-        ctx.select_font(FontSlot::Base, false);
+        ctx.select_font(FontSlot::Menu, false);
         let icon_col = self.icon_col();
         let arrows = self.has_arrows();
         let top = at.y + self.s(PAD_V);
@@ -1815,19 +1815,19 @@ impl ContextMenu {
                     let draw_label = |ctx: &mut dyn DrawCtx, lx: i32, clip: Rect| -> i32 {
                         // ★ 경고 항목 = 굵게 + 테마 danger(hover 행은 반전 글자색 · nexa-sql "모두 취소" 2단 확정 · 10-16).
                         if *danger {
-                            ctx.select_font(FontSlot::Base, true);
+                            ctx.select_font(FontSlot::Menu, true);
                             let c = if hot { fg } else { theme.danger };
                             ctx.text(lx, ty, clip, label, c);
                             let w = ctx.text_width(label);
-                            ctx.select_font(FontSlot::Base, false);
+                            ctx.select_font(FontSlot::Menu, false);
                             return w;
                         }
                         if *emph {
-                            ctx.select_font(FontSlot::Base, true);
+                            ctx.select_font(FontSlot::Menu, true);
                             let c = if hot { fg } else { blue };
                             ctx.text(lx, ty, clip, label, c);
                             let w = ctx.text_width(label);
-                            ctx.select_font(FontSlot::Base, false);
+                            ctx.select_font(FontSlot::Menu, false);
                             return w;
                         }
                         if marks.is_empty() || hot {

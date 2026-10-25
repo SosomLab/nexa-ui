@@ -842,7 +842,7 @@ impl Widget for MenuBar {
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
 
         // 라벨/팝업 폭 실측 캐시 갱신(첫 페인트 이후 hit-test가 정확해진다).
-        ctx.select_font(FontSlot::Base, false);
+        ctx.select_font(FontSlot::Menu, false);
         {
             let mut m = self.measured.borrow_mut();
             m.0 = self

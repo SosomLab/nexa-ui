@@ -25,6 +25,10 @@ pub enum FontSlot {
     Status,
     /// **고정폭** — 시각·수치처럼 폭이 흔들리면 안 되는 표시(크기는 Base와 공유).
     Mono,
+    /// 메뉴(메뉴 바 풀다운 · 우클릭 메뉴 · 232차 · nexa-dir3 `ui.menu_font_face/size`). 지정이 없으면 Base와 같다.
+    Menu,
+    /// 대화상자(nexa-dlg · 232차 · nexa-dir3 `ui.dialog_font_face/size`). 지정이 없으면 Base와 같다.
+    Dialog,
 }
 
 /// 위젯의 그리기 어휘. 기본 구현이 있는 메서드는 백엔드가 미구현해도 된다(테스트 백엔드).

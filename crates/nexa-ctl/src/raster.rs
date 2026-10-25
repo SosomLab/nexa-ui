@@ -46,7 +46,7 @@ impl<'f> FontSet<'f> {
     #[must_use]
     pub fn face(&self, slot: FontSlot) -> &'f Font {
         match slot {
-            FontSlot::Base => Some(self.base),
+            FontSlot::Base | FontSlot::Menu | FontSlot::Dialog => Some(self.base), // 메뉴·대화상자 얼굴은 RasterCtx 확장(`with_area_fonts`)
             FontSlot::PeerList => self.peerlist,
             FontSlot::Message => self.message,
             FontSlot::Status => self.status,
@@ -64,6 +64,10 @@ pub struct RasterCtx<'s, 'b, 'f> {
     font: &'f Font,
     /// 영역별 글꼴 설정(사용자 설정).
     prefs: FontPrefs,
+    /// 메뉴 · 대화상자 얼굴/크기 확장(232차 · [`Self::with_area_fonts`] · [`Self::with_area_prefs`]) — `FontSet`/`FontPrefs`는 소비자가
+    /// 리터럴로 만들어 필드를 늘릴 수 없어 따로 둔다. `None` = Base와 같다.
+    area_faces: [Option<&'f Font>; 2],
+    area_prefs: [Option<SlotFont>; 2],
     /// 현재 선택된 슬롯 글꼴(select_font로 전환).
     cur: SlotFont,
     /// 배율(고DPI — FR-U-6). 크기에 곱한다. 좌표는 이미 물리 px(호출자 몫).
@@ -109,6 +113,8 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
             cur: prefs.base,
             scale: scale.max(0.5),
             mono_mult: 1.0,
+            area_faces: [None, None],
+            area_prefs: [None, None],
             tab_origin: None,
             caret_on: true,
             caret_asked: std::cell::Cell::new(false),
@@ -155,6 +161,20 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
     pub fn with_fonts(mut self, prefs: FontPrefs) -> Self {
         self.prefs = prefs;
         self.cur = prefs.base;
+        self
+    }
+
+    /// 메뉴 · 대화상자 **얼굴**(232차 · nexa-dir3 영역별 글꼴): `None` = Base 얼굴. [`FontSlot::Menu`] · [`FontSlot::Dialog`]가 쓴다.
+    #[must_use]
+    pub fn with_area_fonts(mut self, menu: Option<&'f Font>, dialog: Option<&'f Font>) -> Self {
+        self.area_faces = [menu, dialog];
+        self
+    }
+
+    /// 메뉴 · 대화상자 **크기/장식**(232차): `None` = Base 설정과 같다.
+    #[must_use]
+    pub fn with_area_prefs(mut self, menu: Option<SlotFont>, dialog: Option<SlotFont>) -> Self {
+        self.area_prefs = [menu, dialog];
         self
     }
 
@@ -399,6 +419,8 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     fn select_font(&mut self, slot: FontSlot, bold: bool) {
         self.cur = match slot {
             FontSlot::Base => self.prefs.base,
+            FontSlot::Menu => self.area_prefs[0].unwrap_or(self.prefs.base),
+            FontSlot::Dialog => self.area_prefs[1].unwrap_or(self.prefs.base),
             FontSlot::PeerList => self.prefs.peerlist,
             FontSlot::Message => self.prefs.message,
             FontSlot::Status => self.prefs.status,
@@ -407,7 +429,11 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             // (사용자 지적 08-10 — Consolas 밀도까지 겹쳐 차이가 도드라졌다).
             FontSlot::Mono => self.prefs.status,
         };
-        self.font = self.fonts.face(slot);
+        self.font = match slot {
+            FontSlot::Menu => self.area_faces[0].unwrap_or(self.fonts.base),
+            FontSlot::Dialog => self.area_faces[1].unwrap_or(self.fonts.base),
+            _ => self.fonts.face(slot),
+        };
         // 광학 크기 보정 — 같은 px라도 고정폭 숫자는 본문보다 커 보인다(사용자 지적
         // 08-10 2차: px를 맞춰도 차이가 심하다). 숫자 '0'의 실측 외곽 높이 비로 맞춘다.
         self.mono_mult = if matches!(slot, FontSlot::Mono)
@@ -1498,6 +1524,39 @@ mod clip_tests {
             ctx.fill_rect(full, red);
         }
         assert!(buf.iter().all(|p| *p != BG));
+    }
+
+    /// 영역 글꼴(232차): 지정 없음 = Menu/Dialog가 Base 크기·얼굴과 같다 · 지정하면 그 크기(얼굴은 같은 글꼴로 대리 확인).
+    #[test]
+    fn area_fonts_fall_back_to_base_and_apply_when_given() {
+        let Some(loaded) = nexa_font::ui_font(None) else {
+            return;
+        };
+        let mut buf = vec![BG; 16];
+        let mut s = Surface::new(&mut buf, 4, 4);
+        let prefs = FontPrefs::with_base(14.0);
+        {
+            let mut ctx = RasterCtx::new(&mut s, &loaded.font, 1.0).with_fonts(prefs);
+            ctx.select_font(FontSlot::Menu, false);
+            assert_eq!(ctx.cur.size, 14.0, "지정 없음 = Base");
+            ctx.select_font(FontSlot::Dialog, false);
+            assert_eq!(ctx.cur.size, 14.0);
+            assert!(core::ptr::eq(
+                ctx.font as *const Font,
+                &loaded.font as *const Font
+            ));
+        }
+        let mut s = Surface::new(&mut buf, 4, 4);
+        let mut ctx = RasterCtx::new(&mut s, &loaded.font, 1.0)
+            .with_fonts(prefs)
+            .with_area_prefs(Some(SlotFont::plain(11.0)), Some(SlotFont::plain(18.0)))
+            .with_area_fonts(Some(&loaded.font), None);
+        ctx.select_font(FontSlot::Menu, false);
+        assert_eq!(ctx.cur.size, 11.0);
+        ctx.select_font(FontSlot::Dialog, true);
+        assert_eq!((ctx.cur.size, ctx.cur.bold), (18.0, true));
+        ctx.select_font(FontSlot::Base, false);
+        assert_eq!(ctx.cur.size, 14.0, "Base는 그대로");
     }
 }
 
