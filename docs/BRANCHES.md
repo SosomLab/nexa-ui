@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| (main 직접) | 2026-10-25 | 2026-10-25 → main · **0750d98**(다른 세션 226~233차 위 리베이스) | 1 | 234차 T-145 `TextBox` 줄 변경 표시 = 줄 해시 증분(`LineHashCache` · `diff_seq_hint`/`line_hash` 공개) · 괄호 표 스냅샷 재사용 · bench `BENCH_PARENS=1`(nexa-sql 138차 Linux · 59 §6-4) — 4만 줄 입력 11.0 → 7.3 ms |
 | fix/nexa-fs-trash-xdev | 2026-10-24 | 2026-10-24 → main(삭제) · **290c801** + 97fd950(기록) | 1 | 225차 Linux XDG 휴지통 다른 파일시스템(EXDEV) 폴백 `<topdir>/.Trash-<uid>` → 복사+삭제(nexa-sql 138차 Linux · T-413) · 290c801 |
 | feat/222-toolbar-armed | 2026-10-24 | 2026-10-24 → main(삭제) · **a385eb2** | 1(+기록) | 222차 툴바 항목 2단 확인 무장 `set_item_armed`(위험색 알약 + 게이지 · nexa-sql 131차 mac 2단 통일) — journal 10-24 |
 | (main 직접) | 2026-10-22 | 2026-10-22 → main · **3cdfca2**(nexa-dlg) + 7a493ce(nexa-fs) + 9588521(nexa-ctl) | 3 | 221차 파일 창 편집(nexa-sql 135차 win · 사용자 10-22) — nexa-fs `trash`(3-OS 휴지통 · Token/restore) · nexa-ctl `text_dx`/`text_pad` · nexa-dlg 이름 바꾸기(인라인·한 번 더 클릭·제자리·글자 정렬) · 삭제(휴지통·영구 2단) · Undo/Redo · `set_pinned` · 시험 nexa-fs 23 · nexa-dlg 8 · nexa-ctl 452 |
