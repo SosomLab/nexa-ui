@@ -115,6 +115,10 @@ pub trait DrawCtx {
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         let _ = (rect, color);
     }
+    /// 삼각형 AA 채움(231차 · 정렬 표시 ▲/▼ 도형). 기본 = no-op.
+    fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
+        let _ = (a, b, c, color);
+    }
     /// 라운드 사각형 AA 채움. 기본 = no-op.
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         let _ = (rect, radius, color);
@@ -234,6 +238,9 @@ impl DrawCtx for Adapt<'_> {
     }
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         self.0.fill_ellipse(rect, color);
+    }
+    fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
+        self.0.fill_triangle(a, b, c, color);
     }
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         self.0.fill_round_rect(rect, radius, color);

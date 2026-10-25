@@ -377,8 +377,13 @@ pub struct VirtualRows<S> {
     font_decor: (bool, bool, bool),
     /// 컬럼을 끄는 동안 놓일 자리 표식(131차 · [`Self::set_col_drag_marker`]) — 기본 꺼짐(고스트만).
     col_drag_marker: bool,
-    /// 정렬 표시를 헤더 칸 **오른쪽 끝**에(130차 · [`Self::set_sort_mark_trailing`]) — 기본 꺼짐(▲ 이름 ①).
+    /// 정렬 표시를 헤더 칸 **오른챬 끝**에(130차 · [`Self::set_sort_mark_trailing`]) — 기본 꺼짐(▲ 이름 ①).
     sort_mark_trailing: bool,
+    /// 끝 정렬 표시를 글자(▲/▼) 대신 **삼각형 도형**으로(231차 · nexa-dir3 T-128 · nexa-sql 결과 그리드 모양 · [`Self::set_sort_mark_vector`]) —
+    /// 글꼴·배율에 상관없이 같은 크기 · 기본 꺼짐.
+    sort_mark_vector: bool,
+    /// Shift 없는 헤더 클릭도 다중 정렬에 **추가**(231차 · dir2식 · [`Self::set_sort_click_adds`]) — 기본 꺼짐(= 단일 3상태 리셋).
+    sort_click_adds: bool,
     /// 오버레이 스크롤바(09-04 X-47) — **축별 독립**(사용자 확정: 세로 스크롤 = 세로만,
     /// 가로 스크롤 = 가로만, 가로 표시 중 세로 스크롤 = 둘 다): `[세로, 가로]` 썸 알파
     /// (0=숨김)·유지 틱 잔량, 호버 축, 드래그.
@@ -454,6 +459,8 @@ impl<S: RowSource> VirtualRows<S> {
             font_decor: (false, false, false),
             col_drag_marker: false,
             sort_mark_trailing: false,
+            sort_mark_vector: false,
+            sort_click_adds: false,
             bar_alpha: [0, 0],
             bar_hold: [0, 0],
             bar_hover: None,
@@ -496,6 +503,26 @@ impl<S: RowSource> VirtualRows<S> {
             self.sort_mark_trailing = on;
             inv.push(self.bounds);
         }
+    }
+
+    /// 끝 정렬 표시를 삼각형 도형으로(231차): 한 변 = 행 높이의 2/5(최소 6px) · 강조색 · 다중 정렬 순번은 그 오른쪽에 글자.
+    /// [`Self::sort_mark`] 글(▲/▼ + 순번)은 그대로 돌려준다(자동 맞춤 폭 · 시험 · 접근성) — 그리기만 바뀐다. 끝 정렬 모양일 때만 효과.
+    pub fn set_sort_mark_vector(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.sort_mark_vector != on {
+            self.sort_mark_vector = on;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// Shift 없는 헤더 클릭도 정렬 목록에 **추가**(dir2식 · 231차 · nexa-dir3 설정 `list.sort_click_adds`). 기본(꺼짐) = 단순 클릭은 그 열
+    /// 하나로 3상태 순환 · Shift+클릭만 추가(nexa-sql · 탐색기 관념).
+    pub fn set_sort_click_adds(&mut self, on: bool) {
+        self.sort_click_adds = on;
+    }
+
+    #[must_use]
+    pub fn sort_click_adds(&self) -> bool {
+        self.sort_click_adds
     }
 
     /// 헤더 칸 오른쪽 끝에 그릴 정렬 표시(끝 정렬 모양일 때만): `▲` · 다중 정렬이면 `▲2`(1부터). 정렬되지 않은 열 = `None`.
@@ -2445,9 +2472,9 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         }
                         inv.push(self.bounds);
                     } else if self.columns[d.col].sortable {
-                        // 무드래그 클릭 = 정렬(다중열 = Shift 전용 — 07-18)
+                        // 무드래그 클릭 = 정렬(다중열 = Shift 전용 — 07-18 · `sort_click_adds`면 Shift 없이도 추가 · 231차)
                         let key = self.columns[d.col].key;
-                        self.apply_sort(key, d.shift, inv);
+                        self.apply_sort(key, d.shift || self.sort_click_adds, inv);
                     }
                 }
                 // 클릭 확정(무드래그) — 기선택 행 프레스를 단일 선택으로 붕괴(탐색기 규약).
@@ -2652,9 +2679,18 @@ impl<S: RowSource> VirtualRows<S> {
                 let cell = Rect::new(cx, hy, col.width, self.row_h);
                 // 끝 정렬 정렬 표시(130차): 칸 오른쪽 끝에 강조색으로 · 제목은 그 왼쪽까지만(겹치지 않게 클립).
                 let mark = self.sort_mark(col.key);
-                let mark_w = mark
-                    .as_deref()
-                    .map_or(0, |m| (ctx.text_width(m) + self.pad_x).min(cell.w));
+                // 삼각형 도형(231차): 한 변 g · 순번은 그 오른쪽(간격 g/3) · 폭 = g + 순번 + pad.
+                let g = (self.row_h * 2 / 5).max(6);
+                let mark_num = mark.as_deref().and_then(|m| m.split(' ').nth(1));
+                let mark_w = if self.sort_mark_vector {
+                    mark.as_deref().map_or(0, |_| {
+                        let nw = mark_num.map_or(0, |n| g / 3 + ctx.text_width(n));
+                        (g + nw + self.pad_x).min(cell.w)
+                    })
+                } else {
+                    mark.as_deref()
+                        .map_or(0, |m| (ctx.text_width(m) + self.pad_x).min(cell.w))
+                };
                 let title_cell = Rect::new(cell.x, cell.y, cell.w - mark_w, cell.h);
                 ctx.text_opaque(
                     cell.x + self.pad_x,
@@ -2666,14 +2702,29 @@ impl<S: RowSource> VirtualRows<S> {
                 );
                 if let Some(m) = mark.as_deref() {
                     let mc = Rect::new(title_cell.right(), cell.y, mark_w, cell.h);
-                    ctx.text_opaque(
-                        mc.x,
-                        hty,
-                        mc,
-                        m,
-                        theme.accent,
-                        crate::theme::header_bg(theme),
-                    );
+                    if self.sort_mark_vector {
+                        ctx.fill_rect(mc, crate::theme::header_bg(theme));
+                        let cy = cell.y + cell.h / 2;
+                        let (gx, top, bottom) = (mc.x, cy - g / 2, cy + g / 2);
+                        let (a, b, c) = if m.starts_with('▼') {
+                            ((gx, top), (gx + g, top), (gx + g / 2, bottom)) // ▼ 꼭지 아래
+                        } else {
+                            ((gx, bottom), (gx + g, bottom), (gx + g / 2, top)) // ▲ 꼭지 위
+                        };
+                        ctx.fill_triangle(a, b, c, theme.accent);
+                        if let Some(n) = mark_num {
+                            ctx.text(gx + g + g / 3, hty, mc, n, theme.accent);
+                        }
+                    } else {
+                        ctx.text_opaque(
+                            mc.x,
+                            hty,
+                            mc,
+                            m,
+                            theme.accent,
+                            crate::theme::header_bg(theme),
+                        );
+                    }
                 }
                 // 컬럼 경계선(헤더 안, 오른쪽 1px)
                 let sep_x = cell.right() - 1;
@@ -3432,6 +3483,64 @@ mod tests {
 
     /// 191차: 정렬 시드(`set_sort`) = 새 탭 상속 · 세션 복원 — 소스에 전달되고 표시에 반영되지만 `take_sort_changed`는 세우지
     /// 않는다 · 헤더 클릭은 세운다 · 같은 값 시드는 무효화 없음.
+    /// 삼각형 정렬 표시(231차): 켜면 ▲/▼ 글자 대신 `fill_triangle`(▲ = 꼭지 위 · ▼ = 꼭지 아래 · 강조색) · 다중 정렬 순번은 글자로 ·
+    /// `sort_mark` 글은 그대로 · 끄면 종전 글자.
+    #[test]
+    fn vector_sort_mark_paints_triangles() {
+        let (mut v, mut inv) = list_with_cols(10, 220);
+        let k: Vec<u32> = v.columns().iter().map(|c| c.key).collect();
+        v.set_sort_mark_trailing(true, &mut inv);
+        v.set_sort_mark_vector(true, &mut inv);
+        click(&mut v, &mut inv, 50, 5, false); // 이름 ▲
+        click(&mut v, &mut inv, 250, 5, true); // Shift+크기 ▲ 2
+        click(&mut v, &mut inv, 250, 5, true); // 크기 ▼ 2
+        assert_eq!(v.sort_mark(k[0]).as_deref(), Some("▲ 1"), "글은 그대로");
+        assert_eq!(v.sort_mark(k[1]).as_deref(), Some("▼ 2"));
+        let th = Theme::dark();
+        let mut rec = nexa_ctl::RecordCtx::with_surface(600, 300);
+        v.paint(&mut rec, &th);
+        assert_eq!(rec.triangles.len(), 2, "{:?}", rec.triangles);
+        let (a, b, c, col) = rec.triangles[0];
+        assert_eq!(col, th.accent);
+        assert!(c.1 < a.1 && a.1 == b.1, "▲ = 꼭지 위: {a:?} {b:?} {c:?}");
+        let (a2, b2, c2, _) = rec.triangles[1];
+        assert!(
+            c2.1 > a2.1 && a2.1 == b2.1,
+            "▼ = 꼭지 아래: {a2:?} {b2:?} {c2:?}"
+        );
+        assert!(rec.drew_text("1") && rec.drew_text("2"), "순번은 글자");
+        assert!(
+            !rec.drew_text("▲") && !rec.drew_text("▼"),
+            "글자 화살표 없음"
+        );
+        v.set_sort_mark_vector(false, &mut inv);
+        let mut rec = nexa_ctl::RecordCtx::with_surface(600, 300);
+        v.paint(&mut rec, &th);
+        assert!(rec.triangles.is_empty() && rec.drew_text("▲ 1"));
+    }
+
+    /// Shift 없는 클릭 = 추가 옵트인(231차 · dir2식): 기본은 단순 클릭 = 리셋 · 켜면 다른 열 클릭이 정렬 목록에 더해진다.
+    #[test]
+    fn sort_click_adds_makes_plain_click_add_keys() {
+        let (mut v, mut inv) = list_with_cols(10, 220);
+        let k: Vec<u32> = v.columns().iter().map(|c| c.key).collect();
+        click(&mut v, &mut inv, 50, 5, false);
+        click(&mut v, &mut inv, 250, 5, false);
+        assert_eq!(v.sort(), &[(k[1], false)], "기본 = 리셋(nexa-sql식)");
+        assert!(!v.sort_click_adds());
+        v.set_sort_click_adds(true);
+        click(&mut v, &mut inv, 50, 5, false);
+        assert_eq!(
+            v.sort(),
+            &[(k[1], false), (k[0], false)],
+            "켜면 Shift 없이 추가"
+        );
+        click(&mut v, &mut inv, 50, 5, false);
+        assert_eq!(v.sort(), &[(k[1], false), (k[0], true)], "다시 = 방향");
+        click(&mut v, &mut inv, 50, 5, false);
+        assert_eq!(v.sort(), &[(k[1], false)], "세 번째 = 제거");
+    }
+
     #[test]
     fn seeded_sort_applies_without_change_flag() {
         let (mut v, mut inv) = list_with_cols(10, 220);

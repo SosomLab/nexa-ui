@@ -839,6 +839,8 @@ pub struct RecordCtx {
     pub polylines: usize,
     /// `image`/`image_scaled` 호출 — 그려진 사각형.
     pub images: Vec<Rect>,
+    /// `fill_triangle` 호출 — (a, b, c, 색)(231차 · 그리드 정렬 표시 도형 시험).
+    pub triangles: Vec<RecordedTriangle>,
     /// 표면 크기(`None` = 모름).
     pub surface: Option<(i32, i32)>,
     /// 글자 높이(기본 16).
@@ -846,6 +848,9 @@ pub struct RecordCtx {
     /// `select_font`/`select_font_styled`/`select_font_sized` 호출 — (슬롯, 굵게, 기울임) 순서대로(10-03 UIC-313 장식 시험).
     pub fonts: Vec<(FontSlot, bool, bool)>,
 }
+
+/// 기록된 삼각형(세 꼭짓점 + 색 · 231차).
+pub type RecordedTriangle = ((i32, i32), (i32, i32), (i32, i32), Color);
 
 impl RecordCtx {
     /// 표면 크기를 아는 기록기(팝업·툴팁 클램프 시험).
@@ -945,6 +950,9 @@ impl DrawCtx for RecordCtx {
     }
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         self.round_rects.push((rect, radius, color));
+    }
+    fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
+        self.triangles.push((a, b, c, color));
     }
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, _width: f32) {
         self.strokes.push((rect, radius, color));
