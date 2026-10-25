@@ -145,6 +145,8 @@ pub enum RowMark {
 
 /// 행 색조 섬기 비율(바탕 → warn/danger · 0.22 = 지브라 음영과 구분되며 글 대비 유지).
 pub const ROW_MARK_MIX: f32 = 0.22;
+/// 셀 강조 구간의 바탕 섬기 비율(바탕 → accent · 236차 · 선택 행 위에서도 보이게 행 색조보다 짙게).
+pub const CELL_EMPHASIS_MIX: f32 = 0.35;
 
 /// 행 바탕 = 기본 바탕에 색조를 섬은 것(순수 · 그리기 두 경로(목록·타일)가 공유).
 pub fn marked_bg(base: crate::theme::Color, mark: RowMark, theme: &Theme) -> crate::theme::Color {
@@ -197,6 +199,12 @@ pub trait RowSource {
     fn row_mark(&self, index: usize) -> RowMark {
         let _ = index;
         RowMark::None
+    }
+    /// 셀 글 안의 **강조 구간**(글자 번호 `start..end` · 236차 · nexa-dir3 일괄 이름 바꾸기 "바뀐 부분"): 목록 모드의 글 셀(트리 열·아이콘 셀 제외)에서
+    /// 그 구간 바탕을 강조색으로 살짝 칠하고([`CELL_EMPHASIS_MIX`]) 글을 다시 그린다. 말줄임으로 잘린 뒤쪽은 보이는 만큼만. 기본 = 없음.
+    fn cell_emphasis(&self, index: usize, key: u32) -> Option<(usize, usize)> {
+        let _ = (index, key);
+        None
     }
     fn select(&mut self, index: usize, op: SelectOp) -> bool {
         let _ = (index, op);
@@ -2637,6 +2645,27 @@ impl<S: RowSource> VirtualRows<S> {
                             }
                         };
                         ctx.text_opaque(tx, ty, cell, &text, fg, bg);
+                        // 강조 구간(236차): 글자 번호 → 바이트 · 보이는(말줄임 뒤) 범위로 클램프 · 바탕 덧칠 뒤 그 조각만 다시.
+                        if let Some((s0, s1)) = self.src.cell_emphasis(row, col.key) {
+                            let idx: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
+                            let n = idx.len();
+                            let (a, b2) = (s0.min(n), s1.min(n));
+                            if a < b2 {
+                                let (ba, bb) = (idx[a], if b2 < n { idx[b2] } else { text.len() });
+                                let x0 = tx + ctx.text_width(&text[..ba]);
+                                let w = ctx.text_width(&text[ba..bb]);
+                                let left = x0.max(cell.x);
+                                let right = (x0 + w).min(cell.right());
+                                if right > left {
+                                    let hl = bg.lerp(theme.accent, CELL_EMPHASIS_MIX);
+                                    ctx.fill_rect(
+                                        Rect::new(left, y + 1, right - left, self.row_h - 2),
+                                        hl,
+                                    );
+                                    ctx.text(x0, ty, cell, &text[ba..bb], fg);
+                                }
+                            }
+                        }
                     }
                 }
                 // 마지막 컬럼 오른쪽 잔여 = 빈 본문(선택 하이라이트 제외 — 원본 B-4·QA 07-13)
@@ -4249,6 +4278,100 @@ mod tests {
         // 헤더는 y=0행에 그려짐
         let hdr = p.texts.iter().find(|(_, _, t)| t == "이름").unwrap();
         assert!(hdr.1 < 20);
+    }
+
+    /// 셀 강조 구간(236차): 소스가 (2, 4)를 주면 "abcdef"의 "cd" 자리에 바탕이 덧칠되고 그 조각이 다시 그려진다 · 범위가 글 길이를 넘으면 클램프 ·
+    /// 비어 있으면(a ≥ b) 아무것도 없음.
+    #[test]
+    fn cell_emphasis_paints_range_background_and_text() {
+        struct Emph;
+        impl RowSource for Emph {
+            fn len(&self) -> usize {
+                2
+            }
+            fn row(&self, index: usize) -> RowItem {
+                RowItem {
+                    text: format!("r{index}"),
+                    is_dir: false,
+                    depth: 0,
+                    marker: Marker::None,
+                }
+            }
+            fn cell(&self, _index: usize, key: u32) -> String {
+                if key == 7 {
+                    "abcdef".into()
+                } else {
+                    String::new()
+                }
+            }
+            fn cell_emphasis(&self, index: usize, key: u32) -> Option<(usize, usize)> {
+                match (index, key) {
+                    (0, 7) => Some((2, 4)),
+                    (1, 7) => Some((5, 99)),
+                    _ => None,
+                }
+            }
+        }
+        struct Probe {
+            texts: Vec<(i32, String)>,
+            plain: Vec<(i32, String)>,
+            fills: Vec<Rect>,
+        }
+        impl DrawCtx for Probe {
+            fn fill_rect(&mut self, rect: Rect, _color: Color) {
+                self.fills.push(rect);
+            }
+            fn text_opaque(
+                &mut self,
+                x: i32,
+                _y: i32,
+                _clip: Rect,
+                text: &str,
+                _fg: Color,
+                _bg: Color,
+            ) {
+                self.texts.push((x, text.to_string()));
+            }
+            fn text(&mut self, x: i32, _y: i32, _clip: Rect, text: &str, _fg: Color) {
+                self.plain.push((x, text.to_string()));
+            }
+            fn text_width(&mut self, text: &str) -> i32 {
+                text.chars().count() as i32 * 8
+            }
+        }
+        let mut v = VirtualRows::new(Emph, 20, 6, 16);
+        let mut inv = Invalidations::default();
+        v.set_columns(
+            vec![Column::new(0, "name", 100), Column::new(7, "after", 200)],
+            &mut inv,
+        );
+        v.set_bounds(Rect::new(0, 0, 300, 100), &mut inv);
+        let mut p = Probe {
+            texts: vec![],
+            plain: vec![],
+            fills: vec![],
+        };
+        v.paint_grid(&mut p, &Theme::dark());
+        let full = p.texts.iter().find(|(_, t)| t == "abcdef").expect("셀 글");
+        let cd = p
+            .plain
+            .iter()
+            .find(|(_, t)| t == "cd")
+            .expect("강조 조각 다시 그림");
+        assert_eq!(cd.0, full.0 + 2 * 8, "조각 x = 셀 글 x + 앞 2글자 폭");
+        assert!(
+            p.fills
+                .iter()
+                .any(|r| r.x == cd.0 && r.w == 2 * 8 && r.h == 18),
+            "바탕 덧칠 {:?}",
+            p.fills
+        );
+        let f = p
+            .plain
+            .iter()
+            .find(|(_, t)| t == "f")
+            .expect("클램프: 5..99 → 5..6");
+        assert_eq!(f.0, full.0 + 5 * 8);
     }
 
     #[test]
