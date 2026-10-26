@@ -801,6 +801,31 @@ impl<S: RowSource> VirtualRows<S> {
         self.rename.as_ref().is_some_and(|(_, es)| es.hit(x, y))
     }
 
+    /// 이름 바꾸기 필드 **더블클릭** = 그 자리 단어 선택(dir3 10-26 — 호스트가 행 더블클릭(열기)보다 먼저 부른다 · 필드 밖이면 `false`).
+    pub fn rename_select_word_at(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
+        let Some((_, es)) = &mut self.rename else {
+            return false;
+        };
+        if !es.hit(x, y) || !es.select_word_at(x) {
+            return false;
+        }
+        inv.push(self.bounds);
+        true
+    }
+
+    /// 이름 바꾸기 필드 **트리플 클릭** = 전체 선택(필드 밖이면 `false`).
+    pub fn rename_select_all(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
+        let Some((_, es)) = &mut self.rename else {
+            return false;
+        };
+        if !es.hit(x, y) {
+            return false;
+        }
+        es.select_all();
+        inv.push(self.bounds);
+        true
+    }
+
     /// 편집 취소(Esc·외부 클릭) — 입력 무시.
     pub fn cancel_rename(&mut self, inv: &mut Invalidations) {
         if self.rename.take().is_some() {

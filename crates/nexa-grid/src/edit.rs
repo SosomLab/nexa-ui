@@ -284,6 +284,56 @@ impl EditState {
         }
     }
 
+    /// 클릭 x 아래의 **글자** 번호(경계가 아니라 글자 · paint 캐시 역참조 · 빈 버퍼/paint 전 = `None`).
+    fn char_at(&self, x: i32) -> Option<usize> {
+        let (_, ox, offs) = &*self.layout.borrow();
+        if offs.len() < 2 {
+            return None;
+        }
+        let rel = x - ox;
+        let n = offs.len() - 1;
+        Some(
+            offs.windows(2)
+                .position(|w| rel >= w[0] && rel < w[1])
+                .unwrap_or(if rel < offs[0] { 0 } else { n - 1 }),
+        )
+    }
+
+    /// 더블클릭 — 그 자리 **단어**(글자 · 숫자 · `_` 연속 · 구분자 위면 그 글자 하나)를 선택(탐색기 이름 바꾸기 관례 · dir3 10-26 —
+    /// 종전엔 행 더블클릭으로 흘러 파일이 실행됐다). 드래그 상태는 푼다. 선택했으면 `true`.
+    pub fn select_word_at(&mut self, x: i32) -> bool {
+        self.dragging = false;
+        let Some(i) = self.char_at(x) else {
+            return false;
+        };
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let (a, b) = if is_word(self.buf[i]) {
+            let back = self.buf[..i]
+                .iter()
+                .rev()
+                .take_while(|c| is_word(**c))
+                .count();
+            let fwd = self.buf[i..].iter().take_while(|c| is_word(**c)).count();
+            (i - back, i + fwd)
+        } else {
+            (i, i + 1)
+        };
+        self.anchor = Some(a);
+        self.caret = b;
+        true
+    }
+
+    /// 트리플 클릭 — 전체 선택(단일행 = 줄 = 전체). 드래그 상태는 푼다.
+    pub fn select_all(&mut self) {
+        self.dragging = false;
+        if self.buf.is_empty() {
+            self.anchor = None;
+            return;
+        }
+        self.anchor = Some(0);
+        self.caret = self.buf.len();
+    }
+
     /// 필드 페인트(공용) — 필드 배경·선택 하이라이트·텍스트·**세로바 캐럿**·accent 테두리.
     /// 텍스트가 넘치면 **캐럿이 보이도록 좌측을 잘라** 그린다(캐럿=끝이면 끝 정렬 —
     /// 긴 경로에서 최근 폴더 가시, 사용자 지시 07-13). 문자 경계 오프셋을 캐시한다.
@@ -402,6 +452,31 @@ mod tests {
         e.key(EditKey::Home, false);
         e.key(EditKey::DeleteForward, false);
         assert_eq!(e.text(), ".txt");
+    }
+
+    /// 더블클릭 = 그 자리 단어(`_` 포함 · 점은 구분자 · 구분자 위 = 그 글자) · 트리플 = 전체 · paint 전 = 아무것도 안 함(dir3 10-26).
+    #[test]
+    fn double_click_selects_word_and_triple_selects_all() {
+        let mut e = EditState::new("hello_world.txt", false);
+        assert!(!e.select_word_at(10), "paint 전 = 캐시 없음");
+        e.paint_field(&mut Probe, Rect::new(0, 0, 300, 24), 6, &Theme::dark());
+        assert!(e.select_word_at(6 + 8 * 2 + 3)); // 글자 2('l') 위
+        assert_eq!(e.sel_range(), Some((0, 11)), "hello_world");
+        assert!(e.select_word_at(6 + 8 * 11 + 3)); // 글자 11('.') 위 = 그 글자 하나
+        assert_eq!(e.sel_range(), Some((11, 12)));
+        assert!(e.select_word_at(6 + 8 * 13 + 3)); // 'x' → txt
+        assert_eq!(e.sel_range(), Some((12, 15)));
+        assert!(
+            e.select_word_at(6 + 8 * 40),
+            "오른쪽 밖 = 마지막 글자의 단어"
+        );
+        assert_eq!(e.sel_range(), Some((12, 15)));
+        e.select_all();
+        assert_eq!(e.sel_range(), Some((0, 15)));
+        assert_eq!(e.selected_text().as_deref(), Some("hello_world.txt"));
+        let mut empty = EditState::new("", false);
+        empty.select_all();
+        assert_eq!(empty.sel_range(), None);
     }
 
     #[test]
