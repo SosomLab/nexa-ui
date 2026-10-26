@@ -23,7 +23,8 @@ use crate::theme::{Color, IconImage, Theme};
 use crate::tokens::{hover_color, Fade, FadeSpeed};
 use crate::widget::{Invalidations, Widget};
 
-/// 틀 안쪽 토글 종류(순서 = 왼쪽 → 오른쪽).
+/// 틀 안쪽 토글 종류(순서 = 왼쪽 → 오른쪽). 기본 셋 = Aa · ab · .* · 넷째 [`SearchToggle::Scope`]는
+/// [`SearchBox::with_scope_toggle`]로 켠 상자에만 있다(없는 토글은 [`SearchBox::is_on`] = 거짓 · [`SearchBox::set_checked`] = 무시).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SearchToggle {
     /// 대소문자 구분(Aa).
@@ -32,6 +33,8 @@ pub enum SearchToggle {
     Word,
     /// 정규식(.*).
     Regex,
+    /// 범위(폴더 + 체크 · 선택) — 호스트가 뜻을 정한다(dir3 = 하위 폴더까지 검색 · nexa-sql "경로까지 검색" 자리 · 10-26).
+    Scope,
 }
 
 impl SearchToggle {
@@ -40,6 +43,7 @@ impl SearchToggle {
             SearchToggle::Case => 0,
             SearchToggle::Word => 1,
             SearchToggle::Regex => 2,
+            SearchToggle::Scope => 3,
         }
     }
 }
@@ -168,9 +172,10 @@ pub struct SearchBox {
     tb: TextBox,
     /// 틀 = 컨트롤 경계(텍스트박스 + 토글).
     frame: Rect,
-    toggles: [Toggle; 3],
-    /// 토글 툴팁 글(호스트가 i18n으로 준다 · 빈 글 = 툴팁 없음).
-    tips: [String; 3],
+    /// 기본 셋(Aa · ab · .*) + 선택 넷째(범위 · [`Self::with_scope_toggle`]) — 차례 = [`SearchToggle::index`].
+    toggles: Vec<Toggle>,
+    /// 토글 툴팁 글(호스트가 i18n으로 준다 · 빈 글 = 툴팁 없음 · 길이 = 토글 수).
+    tips: Vec<String>,
     tooltip: Tooltip,
     clamp_x: (i32, i32),
     error: bool,
@@ -192,12 +197,12 @@ impl SearchBox {
             base: ControlBase::default(),
             tb,
             frame: Rect::default(),
-            toggles: [
+            toggles: vec![
                 Toggle::new(SearchToggle::Case, material::match_case),
                 Toggle::new(SearchToggle::Word, material::match_word),
                 Toggle::new(SearchToggle::Regex, material::regex),
             ],
-            tips: Default::default(),
+            tips: vec![String::new(); 3],
             tooltip: Tooltip::new(),
             clamp_x: (0, i32::MAX / 2),
             error: false,
@@ -205,6 +210,37 @@ impl SearchBox {
             placeholder,
             pending: SearchEvent::None,
         }
+    }
+
+    /// 넷째 토글 [`SearchToggle::Scope`](폴더 + 체크 아이콘)를 틀 안 맨 오른쪽에 둔다(nexa-sql `FilterBar::with_path_toggle` 꼴 · 기본 끔).
+    /// 툴팁은 [`Self::set_tip`]으로.
+    #[must_use]
+    pub fn with_scope_toggle(mut self) -> Self {
+        if self.toggle(SearchToggle::Scope).is_none() {
+            self.toggles
+                .push(Toggle::new(SearchToggle::Scope, material::folder_check));
+            self.tips.push(String::new());
+            if self.frame.w > 0 {
+                let mut inv = Invalidations::default();
+                self.layout(&mut inv);
+            }
+        }
+        self
+    }
+
+    /// 토글 하나의 툴팁 글(없는 토글 = 무시) — 기본 셋은 [`Self::set_tips`]로도.
+    pub fn set_tip(&mut self, k: SearchToggle, tip: impl Into<String>) {
+        if let Some(t) = self.tips.get_mut(k.index()) {
+            *t = tip.into();
+        }
+    }
+
+    fn toggle(&self, k: SearchToggle) -> Option<&Toggle> {
+        self.toggles.get(k.index()).filter(|t| t.kind == k)
+    }
+
+    fn toggle_mut(&mut self, k: SearchToggle) -> Option<&mut Toggle> {
+        self.toggles.get_mut(k.index()).filter(|t| t.kind == k)
     }
 
     /// 자리 표시 글(언어 전환).
@@ -221,7 +257,9 @@ impl SearchBox {
         word: impl Into<String>,
         regex: impl Into<String>,
     ) {
-        self.tips = [case.into(), word.into(), regex.into()];
+        self.tips[0] = case.into();
+        self.tips[1] = word.into();
+        self.tips[2] = regex.into();
     }
 
     /// 툴팁 지연(ms · 호스트 설정).
@@ -256,15 +294,17 @@ impl SearchBox {
         self.tb.set_text(text);
     }
 
-    /// 토글 상태.
+    /// 토글 상태(없는 토글 = 거짓).
     #[must_use]
     pub fn is_on(&self, k: SearchToggle) -> bool {
-        self.toggles[k.index()].checked
+        self.toggle(k).is_some_and(|t| t.checked)
     }
 
-    /// 토글 상태를 밖에서(설정 복원 · 시험) — 사건을 내지 않는다.
+    /// 토글 상태를 밖에서(설정 복원 · 시험) — 사건을 내지 않는다(없는 토글 = 무시).
     pub fn set_checked(&mut self, k: SearchToggle, on: bool) {
-        self.toggles[k.index()].checked = on;
+        if let Some(t) = self.toggle_mut(k) {
+            t.checked = on;
+        }
     }
 
     /// 정규식 오류 표시(틀 테두리 danger).
@@ -365,11 +405,12 @@ impl SearchBox {
             }
             InputEvent::MouseMove { x, y } => {
                 let p = Point { x, y };
-                let tip = self
-                    .toggles
-                    .iter()
-                    .find(|t| t.rect.contains(p))
-                    .map(|t| (t.rect, self.tips[t.kind.index()].clone()));
+                let tip = self.toggles.iter().find(|t| t.rect.contains(p)).map(|t| {
+                    (
+                        t.rect,
+                        self.tips.get(t.kind.index()).cloned().unwrap_or_default(),
+                    )
+                });
                 if self.tooltip.hover(tip) {
                     inv.push(self.frame);
                 }
@@ -411,7 +452,7 @@ impl SearchBox {
         let s = self.scale;
         let px = |v: f32| (v * s).round() as i32;
         let ih = area.h;
-        // 안쪽 토글 = 정사각 20(스케일) · 간격 2 · 세로 중앙 · 오른쪽 끝에서 거꾸로(Aa · ab · .* 순이 왼쪽→오른쪽).
+        // 안쪽 토글 = 정사각 20(스케일) · 간격 2 · 세로 중앙 · 오른쪽 끝에서 거꾸로(Aa · ab · .* [· 범위] 순이 왼쪽→오른쪽).
         let tg = px(20.0).min(ih.max(1));
         let tgap = px(2.0);
         let mut tx = area.right() - px(2.0) - tg;
@@ -619,5 +660,39 @@ mod tests {
             "오류 = 틀 전체 danger 테두리"
         );
         assert!(sb.busy_ring().animating() && sb.wants_tick());
+    }
+
+    /// 넷째 토글(범위 · 선택): 기본 상자에는 없다(`is_on` 거짓 · `set_checked` 무시 · 아이콘 3) · `with_scope_toggle`이면 틀 안 맨 오른쪽 넷째 ·
+    /// 클릭 = `Toggled(Scope)` · 툴팁은 `set_tip` · 아이콘 4.
+    #[test]
+    fn scope_toggle_is_optional_fourth() {
+        let th = Theme::dark();
+        let mut inv = Invalidations::default();
+        let mut plain = SearchBox::new("find");
+        plain.set_bounds(Rect::new(0, 0, 300, 25), &mut inv);
+        plain.set_checked(SearchToggle::Scope, true);
+        assert!(!plain.is_on(SearchToggle::Scope), "없는 토글 = 거짓");
+        assert_eq!(plain.toggles.len(), 3);
+
+        let mut sb = SearchBox::new("find").with_scope_toggle();
+        sb.set_tips("c", "w", "r");
+        sb.set_tip(SearchToggle::Scope, "scope");
+        sb.set_bounds(Rect::new(0, 0, 300, 25), &mut inv);
+        assert_eq!(sb.toggles.len(), 4);
+        assert_eq!(sb.tips, vec!["c", "w", "r", "scope"]);
+        let rects: Vec<Rect> = sb.toggles.iter().map(|t| t.rect).collect();
+        assert!(rects.windows(2).all(|w| w[0].right() < w[1].x));
+        assert_eq!(rects[3].right(), 300 - 2, "범위 토글이 맨 오른쪽");
+        assert_eq!(sb.toggles[3].kind, SearchToggle::Scope);
+        let (cx, cy) = (rects[3].x + 10, rects[3].y + 10);
+        sb.handle(&down(cx, cy), &mut inv);
+        assert_eq!(
+            sb.handle(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv),
+            SearchEvent::Toggled(SearchToggle::Scope)
+        );
+        assert!(sb.is_on(SearchToggle::Scope) && !sb.is_on(SearchToggle::Regex));
+        let mut rec = RecordCtx::with_surface(320, 40);
+        sb.paint(&mut rec, &th);
+        assert_eq!(rec.images.len(), 4, "토글 아이콘 넷");
     }
 }
