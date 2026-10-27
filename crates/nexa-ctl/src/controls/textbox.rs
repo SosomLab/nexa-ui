@@ -1751,6 +1751,13 @@ impl TextBox {
         self.edit.set_history_max(n);
     }
 
+    /// 모든 구간 `[start, end)`(주 선택 포함 · 시작 오름차순 · 빈 캐럿 = `start == end`) — 239차(nexa-sql Insert Sequence · 10-27):
+    /// 다중 캐럿 자리에 값을 넣는 호스트가 시작 구간을 읽고 [`Self::set_regions_pub`]으로 되돌린다.
+    #[must_use]
+    pub fn regions(&self) -> Vec<(usize, usize)> {
+        self.edit.regions()
+    }
+
     /// 구간 목록으로 선택을 통째로 바꾼다(찾기 "일치 전부 선택" Alt+Enter · 마지막이 주 선택).
     pub fn set_regions_pub(&mut self, regions: &[(usize, usize)]) {
         self.edit.set_regions(regions);

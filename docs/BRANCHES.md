@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| (main 직접) | 2026-10-27 | 2026-10-27 → main · (해시 = 아래 docs 커밋에서 보정) | 1 | 239차 `TextBox::regions()` 조회(nexa-sql 143차 Insert Sequence · docs/124) |
 | (main 직접) | 2026-10-26 | 2026-10-26 → main · **a06600c** | 1 | 236차 T-145 괄호 표 증분 재스캔(64줄 체크포인트 재개 · finish O(n) 병합 · `PairTable::rebuild`/`checkpoint_count` 공개 · nexa-sql 138차 Linux 10-26 밤) |
 | (main 직접) | 2026-10-25 | 2026-10-25 → main · **0750d98**(다른 세션 226~233차 위 리베이스) | 1 | 234차 T-145 `TextBox` 줄 변경 표시 = 줄 해시 증분(`LineHashCache` · `diff_seq_hint`/`line_hash` 공개) · 괄호 표 스냅샷 재사용 · bench `BENCH_PARENS=1`(nexa-sql 138차 Linux · 59 §6-4) — 4만 줄 입력 11.0 → 7.3 ms |
 | fix/nexa-fs-trash-xdev | 2026-10-24 | 2026-10-24 → main(삭제) · **290c801** + 97fd950(기록) | 1 | 225차 Linux XDG 휴지통 다른 파일시스템(EXDEV) 폴백 `<topdir>/.Trash-<uid>` → 복사+삭제(nexa-sql 138차 Linux · T-413) · 290c801 |
