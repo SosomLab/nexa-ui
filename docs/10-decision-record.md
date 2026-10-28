@@ -8,7 +8,7 @@
 |:--:|---|---|---|
 | **DR-1** | **공통 UI를 공유 라이브러리로 분리** — `nexa-clip`에서 `nclip-gfx`·`nclip-ctl`·`nexa-conf`를 이름만 `nexa-*`로 바꿔 이관(기능 무변경) | `nexa-clip` DR-18 *"다음 유사 프로젝트는 공통을 먼저 라이브러리로 분리한 뒤 시작한다"* · 사용자 요청 09-12 *"컨트롤들을 별도 라이브러리로 묶어서 재사용 가능한 구조를 먼저"* | ✅ 사용자 09-12 |
 | **DR-2** | **앱 도메인 의존 0** 불변식 계승(nbeep-ctl DR-6 · nclip-ctl docs/13 §2-2) | 이 크레이트의 존재 이유 | ✅ 계승 |
-| **DR-3** | 외부 crate 기본 0 지향 — 현재 `ab_glyph`(nexa-gfx) 1개 | 계열 공통 규율 | ✅ 계승 |
+| **DR-3** | 외부 crate 기본 0 지향 — 현재 `ab_glyph`(nexa-gfx) 1개 + 선택 feature `rustybuzz`(nexa-gfx `shaping` · 10-29 T-11 스파이크) | 계열 공통 규율 | ✅ 계승 |
 | **DR-4** | **소비 앱 이관은 각 저장소의 결정** — nexa-sql이 path 의존으로 먼저 소비 · clip/beep은 API 안정 뒤 | 다른 프로젝트 직접 수정은 승인 대상(clip CLAUDE.md §4) | ✅ 09-12 |
 | **DR-5** | 라이선스 PolyForm NC 1.0.0 (계열 동일) | — | ✅ 09-12 |
 | **DR-6** | 원본(clip)에 남아 있는 `nclip-*` 출처 주석은 **지우지 않는다**(앱 고유 이름만 `<app>-plat` 식으로 일반화) | 기록의 목적 = 재발명 방지 | ✅ 09-12 |
@@ -33,4 +33,5 @@
 | crate | 크레이트 | 사유 | 라이선스 |
 |---|---|---|---|
 | `ab_glyph 0.2` | nexa-gfx | TTF 파싱·글리프 래스터(계승) | Apache-2.0 |
+| `rustybuzz 0.20` | nexa-gfx(**선택 feature `shaping`** · 기본 끔) | UI 텍스트 셰이핑 스파이크(nexa-sql T-11 · D-383 · 10-29) — 글리프 배치(GSUB/GPOS) · 켜면 UI 글자를 글리프 id로 래스터 | MIT/Apache-2.0 |
 | `memmap2 0.9` | nexa-font | 시스템 폰트 mmap(clip DR 계승 — 힙 복사 55MB 회피) | MIT/Apache-2.0 |

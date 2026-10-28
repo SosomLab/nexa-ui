@@ -26,4 +26,4 @@ button · timeout_button · checkbox · radio · switch · textbox(1,657 LOC · 
 | **도킹 패널 · 탭 그룹 · 메뉴바** | `nexa-dir2/nexa-gui/widgets/{dock,tabbar,menubar}.rs` (DrawCtx 세대 차) | U-2 어댑터 이식 → `nexa-ctl::widgets` |
 | **가상화 데이터 그리드**(10만 행 · 컬럼 리사이즈/정렬) | `nexa-gui/{columns,rows}.rs` + `nexa-ctl::TreeGrid` | U-3 `nexa-grid` 크레이트 |
 | **다중행 코드 편집기** | `textbox`는 단일행 | ★ `nexa-edit` 크레이트(nexa-sql docs/07 설계) — rope · 다중 커서 · 구문 강조 |
-| **텍스트 셰이핑**(한글 조합·합자·복합 스크립트) | `ab_glyph` 글리프 단위 | U-4 셰이퍼 검토(자체 vs `rustybuzz`) — 편집기가 요구 |
+| **텍스트 셰이핑**(한글 조합·합자·복합 스크립트) | `ab_glyph` 글리프 단위 + ★ 10-29 선택 feature `shaping`(rustybuzz 0.20 · `Font::shape`/`draw_shaped`/`measure_shaped` · UI 비례 글꼴만 · 스위치 기본 끔) | U-4 = nexa-sql T-11 스파이크 1단계(D-383) — 2단계 = 크기·시간·육안 A/B 뒤 도입 결정 · OS 래스터(GDI/CoreText)와의 결합은 미정 |

@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| t11-shaping-spike | 2026-10-29 | 2026-10-29 → main ff(삭제) · **b9f4d1a** | 2 | 240차 T-11 셰이핑 스파이크(nexa-gfx feature `shaping` · rustybuzz · nexa-ctl RasterCtx 배선) · b25f022 + clippy 정리 |
 | (main 직접) | 2026-10-27 | 2026-10-27 → main · **1480414** | 1 | 239차 `TextBox::regions()` 조회(nexa-sql 143차 Insert Sequence · docs/124) |
 | (main 직접) | 2026-10-26 | 2026-10-26 → main · **a06600c** | 1 | 236차 T-145 괄호 표 증분 재스캔(64줄 체크포인트 재개 · finish O(n) 병합 · `PairTable::rebuild`/`checkpoint_count` 공개 · nexa-sql 138차 Linux 10-26 밤) |
 | (main 직접) | 2026-10-25 | 2026-10-25 → main · **0750d98**(다른 세션 226~233차 위 리베이스) | 1 | 234차 T-145 `TextBox` 줄 변경 표시 = 줄 해시 증분(`LineHashCache` · `diff_seq_hint`/`line_hash` 공개) · 괄호 표 스냅샷 재사용 · bench `BENCH_PARENS=1`(nexa-sql 138차 Linux · 59 §6-4) — 4만 줄 입력 11.0 → 7.3 ms |
