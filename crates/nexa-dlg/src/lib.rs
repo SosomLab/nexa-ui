@@ -3485,10 +3485,12 @@ mod tests {
         );
         p.make_new_folder();
         settle(&mut p);
+        // ★ `temp_dir()`가 만든 `sub`를 집지 않는다(242차 · ubuntu CI 4회 ✗ = `read_dir` 순서가 파일시스템마다 달라 `sub`가 먼저 나오면
+        //   undo가 지운 새 폴더가 아니라 `sub`를 보고 "안 지워졌다"고 판정했다 · 시험 결함 · 기능 이상 아님).
         let made = std::fs::read_dir(&d)
             .expect("read")
             .flatten()
-            .find(|e| e.path().is_dir())
+            .find(|e| e.path().is_dir() && e.file_name() != "sub")
             .map(|e| e.path())
             .expect("new folder");
         p.undo();
