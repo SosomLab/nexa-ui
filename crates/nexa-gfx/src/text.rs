@@ -1279,12 +1279,17 @@ impl Font {
                     buf.push_str(&text[start..end]);
                     buf.guess_segment_properties();
                     let gb = rustybuzz::shape(&face, &[], buf);
+                    // ★ 정수 스냅(`text_snap` · 기본 켬)이면 **전진 폭·오프셋을 글리프마다 정수로**(GDI의 정수 전진 폭과 같은 규칙) —
+                    //   소수 전진 폭을 펜에 누적한 뒤 글리프마다 반올림하면 자간이 7·8·7·8px로 흔들렸다(nexa-sql 166차 V1
+                    //   "데이터베이스" 자간 불균일). 측정(`measure_shaped`)도 같은 값을 더하므로 그리기와 일치한다.
+                    let snap = text_snap();
+                    let q = |v: f32| if snap { v.round() } else { v };
                     for (info, pos) in gb.glyph_infos().iter().zip(gb.glyph_positions()) {
                         out.push(ShapedGlyph {
                             face: face_i as u8,
                             gid: info.glyph_id as u16,
-                            x_advance: pos.x_advance as f32 * sf.horizontal,
-                            x_offset: pos.x_offset as f32 * sf.horizontal,
+                            x_advance: q(pos.x_advance as f32 * sf.horizontal),
+                            x_offset: q(pos.x_offset as f32 * sf.horizontal),
                             y_offset: pos.y_offset as f32 * sf.vertical,
                             cluster: info.cluster + start as u32,
                         });
@@ -1502,6 +1507,18 @@ mod shaping_tests {
         );
         assert!(g.windows(2).all(|w| w[0].cluster <= w[1].cluster), "{g:?}");
         assert_eq!(g[0].cluster, 0);
+        // 정수 스냅이면 전진 폭·오프셋이 전부 정수(자간 흔들림 방지).
+        let prev = text_snap();
+        set_text_snap(true);
+        set_text_shaping(true);
+        let gs = f.shape("데이터베이스 AV", 16.0).expect("snap");
+        set_text_shaping(false);
+        set_text_snap(prev);
+        assert!(
+            gs.iter()
+                .all(|g| g.x_advance.fract() == 0.0 && g.x_offset.fract() == 0.0),
+            "{gs:?}"
+        );
     }
 
     /// feature 켬: 한글 완성형은 글자 수 = 글리프 수 · 조합형(초성+중성+종성 3개)은 글꼴이 조합하면 글리프가 줄어든다(≤ 3) ·
