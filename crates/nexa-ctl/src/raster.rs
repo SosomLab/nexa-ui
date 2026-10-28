@@ -544,6 +544,24 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         let origin = self.tab_origin.map_or(x as f32, |o| o as f32);
         // 광학 보정 — 슬롯 얼굴(고정폭)은 보정 크기로, 폴백(기본 얼굴)은 명목 크기로.
         let own = size * self.mono_mult;
+        // ★ T-11 셰이핑(스파이크 · UI 텍스트 한정): **기본(비례) 글꼴**이고 스위치가 켜져 있으면 rustybuzz 배치로 — 고정폭 슬롯(편집기·그리드)은
+        //   `self.font != base`라 자동 제외 · 탭·제어 문자가 섞인 글은 `shape`가 `None` → 종전 경로.
+        if core::ptr::eq(self.font, self.fonts.base) && nexa_gfx::text::text_shaping() {
+            if let Some(run) = self.font.shape(text, own) {
+                let baseline = y as f32 + self.font.ascent(own);
+                self.font.draw_shaped(
+                    self.surface,
+                    x as f32,
+                    baseline,
+                    own,
+                    fg,
+                    &run,
+                    Self::clip_of(clip),
+                    self.cur_style(),
+                );
+                return;
+            }
+        }
         // 슬롯 얼굴에 없는 글자는 **기본 얼굴로 폴백**(08-10 — 고정폭 Consolas에 한글이
         // 없어 두부(□)가 나던 문제. 베이스라인은 공유 = 줄이 안 흔들린다).
         if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
@@ -588,6 +606,12 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     fn text_width(&mut self, text: &str) -> i32 {
         let size = self.px_size();
         let own = size * self.mono_mult;
+        // ★ T-11 셰이핑: 그리기와 같은 조건에서 같은 배치로 잰다(라벨 폭 · 중앙 정렬이 어긋나지 않게).
+        if core::ptr::eq(self.font, self.fonts.base) && nexa_gfx::text::text_shaping() {
+            if let Some(run) = self.font.shape(text, own) {
+                return nexa_gfx::text::measure_shaped(&run).ceil() as i32;
+            }
+        }
         if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
         {
             return self

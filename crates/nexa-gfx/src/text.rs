@@ -65,6 +65,64 @@ pub fn text_gdi() -> bool {
 ///   `w`px만큼 번지게 해(`cov[x] += cov[x-1]·w`) 세로 줄기를 1px에서 1+w px로. GDI ClearType의 진한 획(≈1.2px)에 가깝게.
 static TEXT_WEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// ★ T-11 셰이핑(스파이크 · nexa-sql D-383 · 10-29): **UI 텍스트 한정** 스위치. 켜면 [`Font::shape`]가 rustybuzz로 글리프 배치
+/// (커닝 · 합자 · 한글 자모 조합)를 만들고 호스트(nexa-ctl `RasterCtx`)가 기본(비례) 글꼴의 라벨·메뉴·대화상자에만 쓴다 —
+/// 편집기·그리드의 고정폭 경로는 그대로. feature `shaping`이 없으면 늘 꺼짐([`shaping_available`]).
+static TEXT_SHAPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_text_shaping(on: bool) {
+    TEXT_SHAPING.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 셰이핑이 켜져 있고 **빌드에 들어 있는가**.
+#[must_use]
+pub fn text_shaping() -> bool {
+    shaping_available() && TEXT_SHAPING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 이 빌드에 셰이퍼(feature `shaping` = rustybuzz)가 들어 있는가.
+#[must_use]
+pub const fn shaping_available() -> bool {
+    cfg!(feature = "shaping")
+}
+
+/// 셰이핑된 글리프 하나 — 위치는 px(요청 크기 기준) · `cluster` = 원문 바이트 오프셋(글자 ↔ 글리프 대응).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapedGlyph {
+    pub face: u8,
+    pub gid: u16,
+    pub x_advance: f32,
+    pub x_offset: f32,
+    pub y_offset: f32,
+    pub cluster: u32,
+}
+
+/// 셰이핑된 런의 폭(px) = 전진 폭 합.
+#[must_use]
+pub fn measure_shaped(glyphs: &[ShapedGlyph]) -> f32 {
+    glyphs.iter().map(|g| g.x_advance).sum()
+}
+
+/// rustybuzz face 캐시 — 키 = 원본 바이트 주소·길이·컬렉션 인덱스(Font 복제본·폴백 체인이 같은 `&'static` 바이트를 공유하므로 1회 파싱).
+#[cfg(feature = "shaping")]
+static SHAPERS: Mutex<Vec<((usize, usize, u32), Arc<rustybuzz::Face<'static>>)>> =
+    Mutex::new(Vec::new());
+
+#[cfg(feature = "shaping")]
+fn shaper_face(data: &'static [u8], index: u32) -> Option<Arc<rustybuzz::Face<'static>>> {
+    let key = (data.as_ptr() as usize, data.len(), index);
+    if let Ok(c) = SHAPERS.lock() {
+        if let Some((_, f)) = c.iter().find(|(k, _)| *k == key) {
+            return Some(Arc::clone(f));
+        }
+    }
+    let face = Arc::new(rustybuzz::Face::from_slice(data, index)?);
+    if let Ok(mut c) = SHAPERS.lock() {
+        c.push((key, Arc::clone(&face)));
+    }
+    Some(face)
+}
+
 /// 획 두께 보강(0.0~0.6).
 pub fn set_text_weight(w: f32) {
     let w = if (0.0..=0.6).contains(&w) { w } else { 0.0 };
@@ -670,6 +728,63 @@ impl Font {
             }
             return Some(bm);
         }
+        self.raster_outline(key, face_i, gid, size, sub, hint, gamma_bits, weight_bits)
+    }
+
+    /// ★ 글리프 **id**로 래스터(셰이핑 경로 · T-11): OS 래스터라이저(GDI·CoreText)는 글자 단위라 쓰지 않고 ab_glyph 외곽선만 —
+    /// 캐시 키는 `gdi=false`라 글자 경로와 섞이지 않는다.
+    fn glyph_bitmap_gid(
+        &self,
+        face_i: usize,
+        gid: u16,
+        size: f32,
+        sub: u8,
+    ) -> Option<Arc<GlyphBitmap>> {
+        let gamma_bits = TEXT_GAMMA.load(std::sync::atomic::Ordering::Relaxed);
+        let hint = text_hint();
+        let weight_bits = TEXT_WEIGHT.load(std::sync::atomic::Ordering::Relaxed);
+        let key = GlyphKey {
+            face: face_i as u8,
+            gid,
+            size: size.to_bits(),
+            sub,
+            gamma: gamma_bits,
+            hint,
+            weight: weight_bits,
+            gdi: false,
+            bold: false,
+        };
+        if let Ok(c) = self.cache.lock() {
+            if let Some(bm) = c.get(&key) {
+                return Some(Arc::clone(bm));
+            }
+        }
+        self.raster_outline(
+            key,
+            face_i,
+            ab_glyph::GlyphId(gid),
+            size,
+            sub,
+            hint,
+            gamma_bits,
+            weight_bits,
+        )
+    }
+
+    /// ab_glyph 외곽선 래스터 + 캐시 삽입(글자 경로·글리프 id 경로 공용).
+    #[allow(clippy::too_many_arguments)]
+    fn raster_outline(
+        &self,
+        key: GlyphKey,
+        face_i: usize,
+        gid: ab_glyph::GlyphId,
+        size: f32,
+        sub: u8,
+        hint: bool,
+        gamma_bits: u32,
+        weight_bits: u32,
+    ) -> Option<Arc<GlyphBitmap>> {
+        let face = &self.faces[face_i];
         // 힌트: x-높이가 정수 px가 되는 크기로 래스터(자간·전진 폭은 원래 크기 그대로 — 배치 불변).
         let fsize = self.face_size(face_i, size);
         let rsize = if hint {
@@ -1129,6 +1244,120 @@ impl Font {
         let clip = (0, 0, surface.width() as i32, surface.height() as i32);
         self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN, x)
     }
+
+    /// ★ T-11 셰이핑(스파이크): 텍스트를 face(폴백 체인) 단위 런으로 나눠 rustybuzz로 배치한다. 반환 `None` = 셰이핑 안 함
+    /// (꺼짐 · feature 없음 · 탭/제어 문자 포함 · face 파싱 실패) → 호출자는 종전 글자 단위 경로로. 위치 단위 = px(요청 크기).
+    #[must_use]
+    pub fn shape(&self, text: &str, size: f32) -> Option<Vec<ShapedGlyph>> {
+        #[cfg(not(feature = "shaping"))]
+        {
+            let _ = (text, size);
+            None
+        }
+        #[cfg(feature = "shaping")]
+        {
+            if !text_shaping() || text.is_empty() || text.chars().any(char::is_control) {
+                return None;
+            }
+            let mut out = Vec::with_capacity(text.len());
+            // 런 = 같은 face의 연속 글자(공백은 앞 런을 따른다 — 폴백 런 분할 규칙과 같음).
+            let mut run_start = 0usize;
+            let mut run_face: Option<usize> = None;
+            let flush =
+                |start: usize, end: usize, face_i: usize, out: &mut Vec<ShapedGlyph>| -> bool {
+                    if start >= end {
+                        return true;
+                    }
+                    let (data, index) = self.raw[face_i];
+                    let Some(face) = shaper_face(data, index) else {
+                        return false;
+                    };
+                    let scaled = self.faces[face_i].as_scaled(self.face_size(face_i, size));
+                    let sf = scaled.scale_factor();
+                    let mut buf = rustybuzz::UnicodeBuffer::new();
+                    buf.push_str(&text[start..end]);
+                    buf.guess_segment_properties();
+                    let gb = rustybuzz::shape(&face, &[], buf);
+                    for (info, pos) in gb.glyph_infos().iter().zip(gb.glyph_positions()) {
+                        out.push(ShapedGlyph {
+                            face: face_i as u8,
+                            gid: info.glyph_id as u16,
+                            x_advance: pos.x_advance as f32 * sf.horizontal,
+                            x_offset: pos.x_offset as f32 * sf.horizontal,
+                            y_offset: pos.y_offset as f32 * sf.vertical,
+                            cluster: info.cluster + start as u32,
+                        });
+                    }
+                    true
+                };
+            for (i, ch) in text.char_indices() {
+                let f = if ch == ' ' {
+                    run_face.unwrap_or_else(|| self.face_index_for(ch))
+                } else {
+                    self.face_index_for(ch)
+                };
+                if run_face != Some(f) {
+                    if let Some(rf) = run_face {
+                        if !flush(run_start, i, rf, &mut out) {
+                            return None;
+                        }
+                    }
+                    run_start = i;
+                    run_face = Some(f);
+                }
+            }
+            if let Some(rf) = run_face {
+                if !flush(run_start, text.len(), rf, &mut out) {
+                    return None;
+                }
+            }
+            Some(out)
+        }
+    }
+
+    /// 셰이핑된 런을 `(x, y)` = 베이스라인 왼쪽 끝에 그린다(ab_glyph 외곽선 · 글리프 id 래스터 · faux 볼드/이탤릭은 글자 경로와 같음).
+    /// 반환 = 그린 폭(px).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_shaped(
+        &self,
+        surface: &mut Surface<'_>,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+        glyphs: &[ShapedGlyph],
+        clip: (i32, i32, i32, i32),
+        style: TextStyle,
+    ) -> f32 {
+        let slant = if style.italic { 0.22 } else { 0.0 };
+        let base_y = y.round() as i32;
+        let bold_pass = if style.bold { 2 } else { 1 };
+        let mut pen = x;
+        for g in glyphs {
+            let gx = pen + g.x_offset;
+            let (pen_i, sub) = if text_snap() {
+                (gx.round(), 0u8)
+            } else {
+                let pi = gx.floor();
+                (
+                    pi,
+                    ((gx - pi) * SUBPX).floor().clamp(0.0, SUBPX - 1.0) as u8,
+                )
+            };
+            if let Some(bm) = self.glyph_bitmap_gid(usize::from(g.face), g.gid, size, sub) {
+                let gx0 = pen_i as i32 + i32::from(bm.ox);
+                if gx0 >= clip.2 {
+                    break;
+                }
+                let gy0 = base_y - g.y_offset.round() as i32 + i32::from(bm.oy);
+                for dx in 0..bold_pass {
+                    surface.blend_mask(gx0 + dx, gy0, &bm, color, clip, slant, base_y);
+                }
+            }
+            pen += g.x_advance;
+        }
+        pen - x
+    }
 }
 
 /// 폴백 face 크기의 순수 계산(시험용): 주 글꼴 크기 `size`(전체 높이 px)와 같은 em이 되는 폴백 크기 —
@@ -1218,6 +1447,106 @@ mod hint_tests {
 }
 
 /// ★ 비트맵 컬러 이모지(nexa-clip T-18f 이식 · 192차) — Linux의 DejaVu + Noto Color Emoji가 있을 때만 돈다(없으면 건너뜀).
+#[cfg(test)]
+mod shaping_tests {
+    use super::*;
+
+    /// 전역 스위치(`TEXT_SHAPING`)를 켜고 끄는 시험들은 직렬로(병렬 실행에서 서로의 상태를 본다).
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 시험 글꼴 = 이 기기에 있는 것(Windows 맑은 고딕 · Linux DejaVu) · 없으면 건너뜀.
+    fn load() -> Option<Font> {
+        for p in [
+            "C:/Windows/Fonts/malgun.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+        ] {
+            if let Ok(d) = std::fs::read(p) {
+                if let Ok(f) = Font::from_bytes(d, 0) {
+                    return Some(f);
+                }
+            }
+        }
+        None
+    }
+
+    /// 꺼짐·feature 없음 = `None`(호출자는 종전 경로) · 제어 문자 포함 = `None`.
+    #[test]
+    fn shape_is_none_when_off_or_control() {
+        let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(f) = load() else { return };
+        set_text_shaping(false);
+        assert!(f.shape("abc", 14.0).is_none());
+        set_text_shaping(true);
+        assert!(f.shape("a\tb", 14.0).is_none());
+        assert!(f.shape("", 14.0).is_none());
+        set_text_shaping(false);
+    }
+
+    /// feature 켬: 라틴 "AV"는 글리프 2개 · 폭은 글자 단위 측정과 커닝만큼만 다르다(±2px) · cluster는 바이트 오프셋 단조.
+    #[cfg(feature = "shaping")]
+    #[test]
+    fn shape_latin_matches_measure_within_kerning() {
+        let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(f) = load() else { return };
+        set_text_shaping(true);
+        let g = f.shape("AV Wa", 16.0).expect("shaped");
+        set_text_shaping(false);
+        assert_eq!(g.len(), 5, "{g:?}");
+        let plain = f.measure("AV Wa", 16.0);
+        let shaped = measure_shaped(&g);
+        assert!(
+            (plain - shaped).abs() <= 2.5,
+            "plain {plain} shaped {shaped}"
+        );
+        assert!(g.windows(2).all(|w| w[0].cluster <= w[1].cluster), "{g:?}");
+        assert_eq!(g[0].cluster, 0);
+    }
+
+    /// feature 켬: 한글 완성형은 글자 수 = 글리프 수 · 조합형(초성+중성+종성 3개)은 글꼴이 조합하면 글리프가 줄어든다(≤ 3) ·
+    /// 두 표기의 폭 차는 한 글자 폭 안(조합 미지원 글꼴도 통과).
+    #[cfg(feature = "shaping")]
+    #[test]
+    fn shape_hangul_syllable_and_jamo() {
+        let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(f) = load() else { return };
+        if !f.covers('한') {
+            return;
+        }
+        set_text_shaping(true);
+        let nfc = f.shape("한글", 16.0).expect("nfc");
+        let nfd = f.shape("\u{1112}\u{1161}\u{11AB}", 16.0).expect("nfd");
+        set_text_shaping(false);
+        assert_eq!(nfc.len(), 2, "{nfc:?}");
+        assert!(nfd.len() <= 3, "{nfd:?}");
+        let one = f.measure("한", 16.0);
+        assert!(
+            measure_shaped(&nfd) <= one * 1.5 + 1.0,
+            "{}",
+            measure_shaped(&nfd)
+        );
+        // 그리기: 셰이핑 경로가 픽셀을 찍는다(비어 있지 않음).
+        let mut buf = vec![0u32; 64 * 24];
+        let mut sf = Surface::new(&mut buf, 64, 24);
+        sf.fill(Color::from_rgb(255, 255, 255));
+        let w = f.draw_shaped(
+            &mut sf,
+            2.0,
+            18.0,
+            16.0,
+            Color::from_rgb(0, 0, 0),
+            &nfc,
+            (0, 0, 64, 24),
+            TextStyle::PLAIN,
+        );
+        assert!(w > 0.0);
+        assert!(
+            buf.iter().any(|p| *p != buf[0]),
+            "셰이핑 그리기가 아무것도 찍지 않음"
+        );
+    }
+}
+
 #[cfg(test)]
 mod bitmap_glyph_tests {
     use super::*;

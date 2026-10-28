@@ -13,3 +13,8 @@ workspace = true
 
 [dependencies]
 ab_glyph = "0.2"
+# ★ T-11 셰이핑 스파이크(nexa-sql D-383 · 10-29): UI 텍스트 한정 · 선택 feature `shaping` — 끄면 종전 글리프 단위 경로 그대로(외부 crate 원장 docs/10 §3).
+rustybuzz = { version = "0.20", optional = true }
+
+[features]
+shaping = ["dep:rustybuzz"]
