@@ -105,8 +105,9 @@ pub fn measure_shaped(glyphs: &[ShapedGlyph]) -> f32 {
 
 /// rustybuzz face 캐시 — 키 = 원본 바이트 주소·길이·컬렉션 인덱스(Font 복제본·폴백 체인이 같은 `&'static` 바이트를 공유하므로 1회 파싱).
 #[cfg(feature = "shaping")]
-static SHAPERS: Mutex<Vec<((usize, usize, u32), Arc<rustybuzz::Face<'static>>)>> =
-    Mutex::new(Vec::new());
+type ShaperEntry = ((usize, usize, u32), Arc<rustybuzz::Face<'static>>);
+#[cfg(feature = "shaping")]
+static SHAPERS: Mutex<Vec<ShaperEntry>> = Mutex::new(Vec::new());
 
 #[cfg(feature = "shaping")]
 fn shaper_face(data: &'static [u8], index: u32) -> Option<Arc<rustybuzz::Face<'static>>> {
