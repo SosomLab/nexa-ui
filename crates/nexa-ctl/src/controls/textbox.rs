@@ -553,6 +553,12 @@ pub struct TextBox {
     /// 페인트 때 세대 비교로 잡는다(사용자 09-23: 줄 복제 명령 뒤 표시가 안 뜸).
     diff_rev: std::cell::Cell<u64>,
     diff_dirty: std::cell::Cell<bool>,
+    /// ★ 둘째 기준선 = 버전 관리 HEAD 본문(nexa-sql docs/46 2-3 · 10-30): 저장본 기준선(`baseline`)과 별개 · 미니맵 안쪽 열에만 그린다
+    ///   (추가 = ok · 수정 = accent · 위에서 삭제 = danger) · 호스트가 `git show HEAD:./file`을 배경에서 받아 넣는다.
+    git_baseline: Option<Vec<u64>>,
+    git_marks: std::cell::RefCell<Vec<(usize, DiffKind)>>,
+    git_rev: std::cell::Cell<u64>,
+    git_dirty: std::cell::Cell<bool>,
     /// 괄호 쌍 표(docs/51 · 편집마다 무효 · 페인트/명령에서 재계산) + 옵션 + 우클릭 메뉴 추가 항목(호스트).
     pair_table: std::cell::RefCell<Option<super::pairs::PairTable>>,
     pairs_dirty: std::cell::Cell<bool>,
@@ -651,6 +657,8 @@ pub struct TextBox {
     /// ★ 저장 뒤 수정 줄(nexa-sql docs/46 2-4 · 10-30): 기준선(`set_baseline`) 대비 `diff_marks`를 미니맵 왼쪽 가장자리에(추가 = ok · 수정 = warn ·
     /// 위에서 삭제 = danger 가는 선) — 거터 diff 띠와 같은 원천 · 기본 끔.
     minimap_diff: bool,
+    /// ★ git 변경 줄(docs/46 2-3 · 10-30): 둘째 기준선(`git_baseline`) 대비 변경을 미니맵 왼쪽 **안쪽** 열에(저장 diff 열 오른쪽) · 기본 끔.
+    minimap_git: bool,
     minimap_viewport_hover: bool,
     minimap_click_text: bool,
     /// 본문 텍스트 가용 폭(마지막 페인트 실측 · 테스트).
@@ -1019,6 +1027,10 @@ impl TextBox {
             diff_marks: std::cell::RefCell::new(Vec::new()),
             diff_rev: std::cell::Cell::new(u64::MAX),
             diff_dirty: std::cell::Cell::new(false),
+            git_baseline: None,
+            git_marks: std::cell::RefCell::new(Vec::new()),
+            git_rev: std::cell::Cell::new(u64::MAX),
+            git_dirty: std::cell::Cell::new(false),
             pair_table: std::cell::RefCell::new(None),
             pairs_dirty: std::cell::Cell::new(true),
             pairs_journal: std::cell::Cell::new((u64::MAX, 0)),
@@ -1068,6 +1080,7 @@ impl TextBox {
             minimap_box: (None, None, false),
             minimap_errors: Vec::new(),
             minimap_diff: false,
+            minimap_git: false,
             minimap_find: true,
             minimap_viewport_hover: false,
             minimap_click_text: false,
@@ -2007,6 +2020,41 @@ impl TextBox {
             self.recompute_diff();
         }
         self.diff_marks.borrow().clone()
+    }
+
+    /// ★ 둘째 기준선 = 버전 관리 HEAD 본문(docs/46 2-3 · 10-30) — 저장본 기준선과 별개 · `None` = 표시 없음.
+    pub fn set_git_baseline(&mut self, text: Option<&str>) {
+        self.git_baseline = text.map(|t| t.lines().map(line_hash).collect());
+        self.git_marks.borrow_mut().clear();
+        self.git_dirty.set(self.git_baseline.is_some());
+    }
+
+    /// HEAD 기준선 대비 줄 변경(정렬 안 됨 · 호출자가 정렬) — 필요하면 계산(저장 diff와 같은 줄 해시 캐시를 쓴다).
+    #[must_use]
+    pub fn git_marks(&self) -> Vec<(usize, DiffKind)> {
+        if self.git_dirty.get()
+            || (self.git_baseline.is_some() && self.git_rev.get() != self.edit.rev())
+        {
+            self.git_dirty.set(false);
+            self.git_rev.set(self.edit.rev());
+            match self.git_baseline.as_ref() {
+                None => self.git_marks.borrow_mut().clear(),
+                Some(base) => {
+                    let buf = self.edit.buf();
+                    let mut c = self.diff_cur.borrow_mut();
+                    c.sync(buf);
+                    let n = c.logical_len(buf);
+                    let hint = buf.line_of(self.edit.caret());
+                    *self.git_marks.borrow_mut() = diff_seq_hint(base, &c.hashes[..n], Some(hint));
+                }
+            }
+        }
+        self.git_marks.borrow().clone()
+    }
+
+    /// ★ git 변경 줄을 미니맵에(docs/46 2-3): 켜면 둘째 기준선 대비 변경을 왼쪽 안쪽 열에 그린다(기준선 없으면 아무것도).
+    pub fn set_minimap_git(&mut self, on: bool) {
+        self.minimap_git = on;
     }
 
     /// 기준선 vs 현재 줄 — 공통 앞/뒤를 잘라내고 가운데만 LCS(상한 안) · 넘치면 가운데 전부 `Modified`.
@@ -4681,6 +4729,14 @@ impl TextBox {
             } else {
                 Vec::new()
             };
+            // ★ git 변경 줄(docs/46 2-3): 둘째 기준선이 있고 켜져 있을 때만 · 정렬 뒤 이진 탐색.
+            let gits: Vec<(usize, DiffKind)> = if self.minimap_git && self.git_baseline.is_some() {
+                let mut g = self.git_marks();
+                g.sort_by_key(|(l, _)| *l);
+                g
+            } else {
+                Vec::new()
+            };
             for (wi, (start_idx, line_str)) in window.iter().enumerate() {
                 let row = mm_start + wi;
                 let y = mm_y(row);
@@ -4735,12 +4791,28 @@ impl TextBox {
                         .ok()
                         .map(|i| diffs[i].1)
                 };
+                // git 변경 줄(2-3): 같은 논리 줄 계산 · 이진 탐색.
+                let git = if gits.is_empty() {
+                    None
+                } else {
+                    let li = if self.wrap {
+                        logical_starts
+                            .partition_point(|&st| st <= *start_idx)
+                            .saturating_sub(1)
+                    } else {
+                        row
+                    };
+                    gits.binary_search_by_key(&li, |(l, _)| *l)
+                        .ok()
+                        .map(|i| gits[i].1)
+                };
                 if !has_sel
                     && needle.is_none()
                     && !has_find
                     && !is_err
                     && mark.is_none()
                     && diff.is_none()
+                    && git.is_none()
                 {
                     continue;
                 }
@@ -4803,6 +4875,30 @@ impl TextBox {
                         }
                         DiffKind::DeletedAbove => {
                             let line = Rect::new(band.x + 1, y, w * 2, 1).intersection(&band);
+                            if !line.is_empty() {
+                                ctx.fill_rect(line, theme.danger);
+                            }
+                        }
+                    }
+                }
+                // ★ git 변경 줄(docs/46 2-3): 저장 diff 열의 **오른쪽 안쪽 열** — 추가 = ok · 수정 = accent · 위에서 삭제 = danger 가는 선.
+                if let Some(k) = git {
+                    let w = mm_cw.max(2);
+                    let x = band.x + 1 + w + 1;
+                    match k {
+                        DiffKind::Added | DiffKind::Modified => {
+                            let c = if matches!(k, DiffKind::Added) {
+                                theme.ok
+                            } else {
+                                theme.accent
+                            };
+                            let edge = Rect::new(x, y, w, mm_row_h).intersection(&band);
+                            if !edge.is_empty() {
+                                ctx.fill_rect(edge, c);
+                            }
+                        }
+                        DiffKind::DeletedAbove => {
+                            let line = Rect::new(x, y, w * 2, 1).intersection(&band);
                             if !line.is_empty() {
                                 ctx.fill_rect(line, theme.danger);
                             }
@@ -7434,6 +7530,29 @@ mod minimap_tests {
         paint(&t);
         assert!(t.minimap_rect().w > 0);
         t.set_minimap_diff(false);
+        paint(&t);
+    }
+
+    /// ★ git 변경 줄(docs/46 2-3 · 10-30): 둘째 기준선은 저장 기준선과 독립 · 편집 뒤 재계산 · 끄면 그리기 경로 영향 없음.
+    #[test]
+    fn minimap_git_marks_independent_of_save_baseline() {
+        let mut t = editor(8);
+        let head = t.text();
+        // 저장본 = 현재(저장 diff 없음) · HEAD = 둘째 줄이 다름(git diff 있음).
+        t.set_baseline(Some(&head));
+        let mut old = head.clone();
+        let l1 = t.buf().line_start(1);
+        old.insert_str(l1, "-- head only\n");
+        t.set_git_baseline(Some(&old));
+        assert!(t.diff_marks().is_empty(), "저장 diff 없음");
+        let g = t.git_marks();
+        assert!(!g.is_empty(), "HEAD 대비 변경: {g:?}");
+        t.set_minimap(true);
+        t.set_minimap_git(true);
+        paint(&t);
+        assert!(t.minimap_rect().w > 0);
+        t.set_git_baseline(None);
+        assert!(t.git_marks().is_empty());
         paint(&t);
     }
 
