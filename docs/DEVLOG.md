@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-30 (244차 · Windows)** — nexa-ctl `TokenKind::Error`/`Warn`(추가 · SQL 규격 미사용) · nexa-sql 181차 Output 줄 색 — [journal 10-30 §2](journal/2026-10-30.md).
 - **2026-10-30 (243차 · Windows)** — nexa-ctl `TextBox::token_kind_at`(키맵 selector) · `SyntaxSpec::json()`(JSON-with-comments) · 미니맵 `set_minimap_min_cols`(좁은 창 숨김) · `set_minimap_diff`(저장 뒤 수정 줄 왼쪽 가장자리) · 모두 추가(기본 동작 불변) · nexa-sql 180차 · b5afb6e — [journal 10-30 §1](journal/2026-10-30.md).
 - **2026-10-24 (225차 · Linux)** — 🔧 nexa-fs Linux XDG 휴지통 다른 파일시스템(EXDEV) 폴백(`<topdir>/.Trash-<uid>` → 복사+삭제 · nexa-sql 138차 V3 A6 발견 · T-413) — journal 10-24 §2 · 290c801.
 - **2026-10-24 (222차 · mac)** — nexa-ctl 툴바 항목 2단 확인 무장 `ToolItem.armed`/`set_item_armed`(위험색 알약 + 흰 게이지 · `TimeoutButton` 모양 · nexa-sql 2단 통일 10-23) — journal 10-24 §1 · a385eb2.

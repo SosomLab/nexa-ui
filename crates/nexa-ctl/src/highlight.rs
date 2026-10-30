@@ -23,7 +23,8 @@
 use crate::theme::{Color, Theme};
 use std::collections::HashSet;
 
-/// 토큰 종류 — 테마 색 4종 + 기본.
+/// 토큰 종류 — 테마 색 4종 + 기본 + ★ 등급 2종(10-30 · nexa-sql T-266 Output 탭 줄 색: 오류 = danger · 경고 = warn · 읽기 전용 로그 상자가
+/// 줄 단위로 쓴다 · SQL 규격은 내지 않는다).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenKind {
     Plain,
@@ -31,6 +32,10 @@ pub enum TokenKind {
     Str,
     Comment,
     Number,
+    /// 오류 줄(테마 `danger`).
+    Error,
+    /// 경고 줄(테마 `warn`).
+    Warn,
 }
 
 impl TokenKind {
@@ -43,6 +48,8 @@ impl TokenKind {
             TokenKind::Str => th.syn_string,
             TokenKind::Comment => th.syn_comment,
             TokenKind::Number => th.syn_number,
+            TokenKind::Error => th.danger,
+            TokenKind::Warn => th.warn,
         }
     }
 }
