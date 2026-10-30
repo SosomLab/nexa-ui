@@ -757,7 +757,330 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS — NSWorkspace 아이콘(10-31 · nexa-dir3 T-114 ①): 종류 = `iconForContentType:`(UTType · 확장자/폴더/일반 데이터) ·
+/// 경로 = `iconForFile:` · 종류 이름 = UTType `localizedDescription`(동적 UTI = 없음 → 호출자가 자체 이름). NSImage는
+/// `NSBitmapImageRep`(32bpp RGBA · 승산 알파)에 `drawInRect:`로 그려 픽셀을 꺼내고 비승산으로 되돌린다(`lockFocus` 안 씀 ·
+/// 워커 스레드에서 안전). 호출마다 autorelease 풀을 감싼다(워커 스레드에는 풀이 없다 — 안 감싸면 누수).
+/// objc 런타임 수동 extern(외부 crate 0 — 이 크레이트의 의존 0 규칙 · nexa-sys `open_files.rs` 선례) · 작은 아이콘 16 px · 큰 아이콘 32 px
+/// (Windows SHGFI_SMALLICON/LARGEICON과 같은 눈금 · Retina는 호출자가 큰 쪽을 고른다). 링크 오버레이는 macOS가 별칭에 스스로 붙인다.
+#[cfg(target_os = "macos")]
+mod imp {
+    use super::RgbaIcon;
+    use std::ffi::{c_char, c_void, CStr, CString};
+    use std::path::Path;
+
+    pub(super) const SUPPORTED: bool = true;
+
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct NSRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    }
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn sel_registerName(name: *const c_char) -> Sel;
+        fn objc_msgSend();
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+    // 클래스가 로드되도록 프레임워크를 링크한다(심벌은 안 쓴다). UniformTypeIdentifiers = macOS 11+.
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+    #[link(name = "UniformTypeIdentifiers", kind = "framework")]
+    extern "C" {}
+
+    /// `NSCompositingOperationSourceOver`.
+    const SOURCE_OVER: usize = 2;
+    const SMALL_PX: usize = 16;
+    const LARGE_PX: usize = 32;
+
+    /// 스레드별 autorelease 풀(워커 한 번의 조회 = 풀 하나).
+    struct Pool(*mut c_void);
+    impl Pool {
+        fn new() -> Self {
+            // SAFETY: push/pop 짝(Drop).
+            Self(unsafe { objc_autoreleasePoolPush() })
+        }
+    }
+    impl Drop for Pool {
+        fn drop(&mut self) {
+            // SAFETY: new()에서 받은 풀.
+            unsafe { objc_autoreleasePoolPop(self.0) }
+        }
+    }
+
+    /// COM 자리(Windows와 같은 모양 · macOS는 할 일 없음).
+    pub(super) struct ComApartment;
+    impl ComApartment {
+        pub(super) fn enter() -> Self {
+            Self
+        }
+    }
+
+    unsafe fn sel(s: &CStr) -> Sel {
+        sel_registerName(s.as_ptr())
+    }
+    unsafe fn cls(s: &CStr) -> Id {
+        objc_getClass(s.as_ptr())
+    }
+    unsafe fn send0(o: Id, s: &CStr) -> Id {
+        let f: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msgSend as *const ());
+        f(o, sel(s))
+    }
+    unsafe fn send1(o: Id, s: &CStr, a: Id) -> Id {
+        let f: unsafe extern "C" fn(Id, Sel, Id) -> Id =
+            std::mem::transmute(objc_msgSend as *const ());
+        f(o, sel(s), a)
+    }
+    /// `[NSString stringWithUTF8String:]`(autorelease · NUL이 들어 있으면 널).
+    unsafe fn nsstring(s: &str) -> Id {
+        let Ok(c) = CString::new(s) else {
+            return std::ptr::null_mut();
+        };
+        let f: unsafe extern "C" fn(Id, Sel, *const c_char) -> Id =
+            std::mem::transmute(objc_msgSend as *const ());
+        f(cls(c"NSString"), sel(c"stringWithUTF8String:"), c.as_ptr())
+    }
+    unsafe fn utf8(o: Id) -> Option<String> {
+        if o.is_null() {
+            return None;
+        }
+        let f: unsafe extern "C" fn(Id, Sel) -> *const c_char =
+            std::mem::transmute(objc_msgSend as *const ());
+        let p = f(o, sel(c"UTF8String"));
+        (!p.is_null()).then(|| CStr::from_ptr(p).to_string_lossy().into_owned())
+    }
+
+    /// NSImage → RGBA(비승산 알파 · 위 행부터 · `px`×`px`). 실패 = None.
+    unsafe fn render(img: Id, px: usize) -> Option<RgbaIcon> {
+        if img.is_null() {
+            return None;
+        }
+        let rep = send0(cls(c"NSBitmapImageRep"), c"alloc");
+        if rep.is_null() {
+            return None;
+        }
+        #[allow(clippy::type_complexity)]
+        let init: unsafe extern "C" fn(
+            Id,
+            Sel,
+            *mut *mut u8,
+            isize,
+            isize,
+            isize,
+            isize,
+            bool,
+            bool,
+            Id,
+            usize,
+            isize,
+            isize,
+        ) -> Id = std::mem::transmute(objc_msgSend as *const ());
+        let rep = init(
+            rep,
+            sel(c"initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bitmapFormat:bytesPerRow:bitsPerPixel:"),
+            std::ptr::null_mut(),
+            px as isize,
+            px as isize,
+            8,
+            4,
+            true,
+            false,
+            nsstring("NSDeviceRGBColorSpace"),
+            0,
+            (px * 4) as isize,
+            32,
+        );
+        if rep.is_null() {
+            return None;
+        }
+        let gc = cls(c"NSGraphicsContext");
+        let ctx = send1(gc, c"graphicsContextWithBitmapImageRep:", rep);
+        let mut out = None;
+        if !ctx.is_null() {
+            send0(gc, c"saveGraphicsState");
+            send1(gc, c"setCurrentContext:", ctx);
+            // 반환 BOOL(signed char)은 u8로 받는다 — Rust `bool`로 받으면 0/1 밖 값이 UB라 분기가 흔들렸다(10-31 시험에서 재현).
+            let draw: unsafe extern "C" fn(Id, Sel, NSRect, NSRect, usize, f64, bool, Id) -> u8 =
+                std::mem::transmute(objc_msgSend as *const ());
+            let full = NSRect {
+                x: 0.0,
+                y: 0.0,
+                w: px as f64,
+                h: px as f64,
+            };
+            let zero = NSRect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            };
+            let ok = draw(
+                img,
+                sel(c"drawInRect:fromRect:operation:fraction:respectFlipped:hints:"),
+                full,
+                zero,
+                SOURCE_OVER,
+                1.0,
+                true,
+                std::ptr::null_mut(),
+            ) != 0;
+            send0(gc, c"restoreGraphicsState");
+            let data: unsafe extern "C" fn(Id, Sel) -> *mut u8 =
+                std::mem::transmute(objc_msgSend as *const ());
+            let p = data(rep, sel(c"bitmapData"));
+            if ok && !p.is_null() {
+                let mut rgba = std::slice::from_raw_parts(p, px * px * 4).to_vec();
+                // 승산 알파 → 비승산(반올림).
+                for q in rgba.chunks_exact_mut(4) {
+                    let a = u32::from(q[3]);
+                    if a != 0 && a != 255 {
+                        for c in &mut q[..3] {
+                            *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                        }
+                    }
+                }
+                out = Some(RgbaIcon {
+                    w: px as u32,
+                    h: px as u32,
+                    rgba,
+                });
+            }
+        }
+        send0(rep, c"release");
+        out
+    }
+
+    /// 확장자/폴더 → UTType(autorelease · 모르는 확장자는 동적 UTI · 널 = 클래스 없음(10.15 이하)).
+    unsafe fn uttype(ext: &str, is_dir: bool) -> Id {
+        let ut = cls(c"UTType");
+        if ut.is_null() {
+            return std::ptr::null_mut();
+        }
+        if is_dir {
+            send1(ut, c"typeWithIdentifier:", nsstring("public.folder"))
+        } else if ext.is_empty() {
+            send1(ut, c"typeWithIdentifier:", nsstring("public.data"))
+        } else {
+            send1(ut, c"typeWithFilenameExtension:", nsstring(ext))
+        }
+    }
+
+    fn px(large: bool) -> usize {
+        if large {
+            LARGE_PX
+        } else {
+            SMALL_PX
+        }
+    }
+
+    pub(super) fn shell_alias(_name: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    pub(super) fn icon_for_kind(ext: &str, is_dir: bool, large: bool) -> Option<RgbaIcon> {
+        let _pool = Pool::new();
+        // SAFETY: 모든 객체는 autorelease(풀이 해제) 또는 render 안에서 release · 널은 단계마다 검사.
+        unsafe {
+            let t = uttype(ext, is_dir);
+            if t.is_null() {
+                return None;
+            }
+            let ws = send0(cls(c"NSWorkspace"), c"sharedWorkspace");
+            render(send1(ws, c"iconForContentType:", t), px(large))
+        }
+    }
+
+    pub(super) fn icon_for_path(path: &Path, large: bool, _overlay: bool) -> Option<RgbaIcon> {
+        let _pool = Pool::new();
+        // SAFETY: 위와 같음 · 경로는 UTF-8 손실 변환(NSString은 NUL 불가 → 널이면 None).
+        unsafe {
+            let s = nsstring(&path.to_string_lossy());
+            if s.is_null() {
+                return None;
+            }
+            let ws = send0(cls(c"NSWorkspace"), c"sharedWorkspace");
+            render(send1(ws, c"iconForFile:", s), px(large))
+        }
+    }
+
+    pub(super) fn kind_name(ext: &str, is_dir: bool) -> Option<String> {
+        let _pool = Pool::new();
+        // SAFETY: 위와 같음.
+        unsafe {
+            let t = uttype(ext, is_dir);
+            if t.is_null() {
+                return None;
+            }
+            utf8(send0(t, c"localizedDescription")).filter(|s| !s.trim().is_empty())
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn opaque(i: &RgbaIcon) -> usize {
+        i.rgba.chunks_exact(4).filter(|p| p[3] > 0).count()
+    }
+
+    /// 종류 아이콘(txt 16 · 큰 32 · 폴더) · 경로 아이콘(/bin/ls · 없는 경로도 일반 아이콘) · 크기와 불투명 픽셀 · 종류 이름.
+    #[test]
+    fn workspace_icons_and_kind_names() {
+        let small = icon_for_kind("txt", false, false).expect("txt 16");
+        assert_eq!((small.w, small.h, small.rgba.len()), (16, 16, 16 * 16 * 4));
+        assert!(opaque(&small) > 50, "{}", opaque(&small));
+        let large = icon_for_kind("txt", false, true).expect("txt 32");
+        assert_eq!((large.w, large.h), (32, 32));
+        assert!(opaque(&large) > 200);
+        let folder = icon_for_kind("", true, false).expect("folder");
+        assert_ne!(folder.rgba, small.rgba, "폴더와 문서 아이콘은 다르다");
+        assert!(icon_for_path(Path::new("/bin/ls"), false).is_some());
+        assert!(icon_for_path(Path::new("/nonexistent/zz"), false).is_some());
+        assert!(kind_name("", true).is_some_and(|s| !s.is_empty()));
+        assert!(kind_name("png", false).is_some_and(|s| !s.is_empty()));
+        // 동적 UTI(등록 안 된 확장자)의 이름은 없다 → 호출자 폴백.
+        assert_eq!(kind_name("zzqq-unknown", false), None);
+    }
+
+    /// 반복 조회가 새지 않는다(autorelease 풀) — 500회 뒤 상주 메모리 증가 < 8 MB.
+    #[test]
+    fn repeated_lookups_do_not_leak() {
+        fn rss() -> u64 {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                .output()
+                .ok();
+            out.and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+                .unwrap_or(0)
+        }
+        for _ in 0..50 {
+            let _ = icon_for_kind("txt", false, true);
+        }
+        let before = rss();
+        for i in 0..500 {
+            let _ = icon_for_kind(if i % 2 == 0 { "txt" } else { "rs" }, false, i % 3 == 0);
+            let _ = kind_name("png", false);
+        }
+        let after = rss();
+        assert!(
+            after.saturating_sub(before) < 8 * 1024,
+            "RSS {before} → {after} kB"
+        );
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
     use super::RgbaIcon;
     use std::path::Path;
