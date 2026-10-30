@@ -585,6 +585,35 @@ impl Toolbar {
         }
     }
 
+    /// ★ 항목 순서 바꾸기(nexa-sql T-278 10-30 "툴바 그룹 안 버튼 순서"): `ids`에 있는 항목들이 **차지하던 자리들**에 `ids` 순서대로 다시
+    ///   앉힌다 — 구분자·목록에 없는 항목(글자 항목 · 상태 항목)은 제자리. 모르는 id는 무시 · 바뀐 것이 없으면 `false`. hover/눌림·틴트
+    ///   캐시는 index 기준이라 비운다.
+    pub fn reorder(&mut self, ids: &[&str], inv: &mut Invalidations) -> bool {
+        let slots: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| ids.contains(&it.id.as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        let wanted: Vec<usize> = ids
+            .iter()
+            .filter_map(|id| self.items.iter().position(|it| it.id == *id))
+            .collect();
+        if slots.len() != wanted.len() || slots == wanted {
+            return false;
+        }
+        let moved: Vec<ToolItem> = wanted.iter().map(|&i| self.items[i].clone()).collect();
+        for (slot, it) in slots.into_iter().zip(moved) {
+            self.items[slot] = it;
+        }
+        self.hover = None;
+        self.pressed = None;
+        *self.tint.borrow_mut() = vec![None; self.items.len()];
+        inv.push(self.base.bounds);
+        true
+    }
+
     /// 항목 표시/숨김(08-22 — 서버 접속 표시 등 상태 항목). 미지 id는 무시.
     pub fn set_item_visible(&mut self, id: &str, visible: bool, inv: &mut Invalidations) {
         if let Some(i) = self.items.iter().position(|it| it.id == id) {
@@ -1509,5 +1538,32 @@ mod tests {
             tb.on_event(&InputEvent::MouseUp { x, y }, &mut inv);
             assert_eq!(tb.take_clicked().as_deref(), Some(want), "{mode:?}");
         }
+    }
+
+    /// ★ T-278: 순서 바꾸기 = 목록 항목들의 자리만 돌려 앉힘 · 구분자·목록 밖 항목은 제자리 · 모르는 id 무시 · 같은 순서 = false.
+    #[test]
+    fn reorder_keeps_separators_and_unlisted_in_place() {
+        let mut tb = Toolbar::new(vec![
+            ToolItem::new("a", ToolIcon::Glyph("a".into())),
+            ToolItem::new("b", ToolIcon::Glyph("b".into())),
+            ToolItem::separator(),
+            ToolItem::new("c", ToolIcon::Glyph("c".into())),
+            ToolItem::text("label", "L"),
+        ]);
+        let ids =
+            |tb: &Toolbar| -> Vec<String> { tb.items().iter().map(|i| i.id.clone()).collect() };
+        let mut inv = Invalidations::default();
+        assert!(tb.reorder(&["c", "a", "b", "zzz"], &mut inv));
+        let got = ids(&tb);
+        assert_eq!(got[0], "c");
+        assert_eq!(got[1], "a");
+        assert!(tb.items()[2].separator, "구분자 제자리");
+        assert_eq!(got[3], "b");
+        assert_eq!(got[4], "label", "글자 항목 제자리");
+        assert!(
+            !tb.reorder(&["c", "a", "b"], &mut inv),
+            "같은 순서 = 변화 없음"
+        );
+        assert!(!tb.reorder(&["nope"], &mut inv));
     }
 }

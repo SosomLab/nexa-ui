@@ -185,6 +185,8 @@ pub struct ToolDock {
     row_h: i32,
     /// 플로팅 그룹(index, x, y).
     floating: Vec<(usize, i32, i32)>,
+    /// ★ 숨긴 그룹(index별 · nexa-sql T-278 10-30 "그룹 숨김"): 배치·그리기·사건에서 빠진다 · 순서(`order`)·행은 그대로 둬 다시 보이면 제자리.
+    hidden: Vec<bool>,
     /// 그룹별 그립 사각형(마지막 배치).
     grips: Vec<Rect>,
     hover_grip: Option<usize>,
@@ -238,6 +240,7 @@ impl ToolDock {
             row_of: vec![0; n],
             row_h: 0,
             floating: Vec::new(),
+            hidden: vec![false; n],
             grips: vec![Rect::new(0, 0, 0, 0); n],
             hover_grip: None,
             drag: None,
@@ -336,7 +339,7 @@ impl ToolDock {
     pub fn rows(&self) -> usize {
         self.order
             .iter()
-            .filter(|&&i| !self.is_floating_idx(i))
+            .filter(|&&i| !self.skip_idx(i))
             .map(|&i| self.row_of[i] + 1)
             .max()
             .unwrap_or(1)
@@ -379,7 +382,7 @@ impl ToolDock {
         let mut used: Vec<usize> = self
             .order
             .iter()
-            .filter(|&&i| !self.is_floating_idx(i))
+            .filter(|&&i| !self.skip_idx(i))
             .map(|&i| self.row_of[i])
             .collect();
         used.sort_unstable();
@@ -429,6 +432,35 @@ impl ToolDock {
 
     fn is_floating_idx(&self, i: usize) -> bool {
         self.floating.iter().any(|(f, _, _)| *f == i)
+    }
+
+    /// 도크 배치·그리기·사건에서 빠지는 그룹(플로팅 또는 숨김).
+    fn skip_idx(&self, i: usize) -> bool {
+        self.is_floating_idx(i) || self.hidden.get(i).copied().unwrap_or(false)
+    }
+
+    /// ★ 그룹 표시/숨김(T-278): 숨기면 자리를 차지하지 않는다(행이 비면 접힌다) · 사각형은 0 · 플로팅 상태·순서는 그대로. 모르는 id = false.
+    pub fn set_group_visible(&mut self, id: &str, visible: bool) -> bool {
+        let Some(i) = self.index(id) else {
+            return false;
+        };
+        if self.hidden[i] == !visible {
+            return false;
+        }
+        self.hidden[i] = !visible;
+        if !visible {
+            let mut inv = Invalidations::default();
+            self.bars[i].set_bounds(Rect::new(0, 0, 0, 0), &mut inv);
+            self.grips[i] = Rect::new(0, 0, 0, 0);
+        }
+        self.relayout();
+        true
+    }
+
+    /// 그룹이 보이는가(숨김이 아님 · 플로팅은 보임으로 센다). 모르는 id = false.
+    #[must_use]
+    pub fn is_group_visible(&self, id: &str) -> bool {
+        self.index(id).is_some_and(|i| !self.hidden[i])
     }
 
     #[must_use]
@@ -546,7 +578,7 @@ impl ToolDock {
     /// 도크에 붙은 그룹에서 클릭된 액션 id(1회성 · 플로팅 창의 클릭은 호스트가 `bar_mut`로 직접 가져간다).
     pub fn take_clicked(&mut self) -> Option<String> {
         for &i in &self.order {
-            if self.is_floating_idx(i) {
+            if self.skip_idx(i) {
                 continue;
             }
             if let Some(id) = self.bars[i].take_clicked() {
@@ -687,7 +719,7 @@ impl ToolDock {
             let mut x = b.x + self.s(2);
             let mut rx = b.right() - self.s(2);
             for &i in &self.order.clone() {
-                if self.is_floating_idx(i) {
+                if self.skip_idx(i) {
                     self.grips[i] = Rect::new(0, 0, 0, 0);
                     continue;
                 }
@@ -753,7 +785,7 @@ impl ToolDock {
         self.order
             .iter()
             .copied()
-            .find(|&i| !self.is_floating_idx(i) && self.grips[i].contains(p))
+            .find(|&i| !self.skip_idx(i) && self.grips[i].contains(p))
     }
 
     /// 드래그 중 자리 이동(라이브 미리보기) — 커서의 행(`target_row`) 안에서, 같은 정렬 띠의 다른 그룹들 중앙을 기준으로
@@ -770,7 +802,7 @@ impl ToolDock {
             .copied()
             .filter(|&i| {
                 i != gi
-                    && !self.is_floating_idx(i)
+                    && !self.skip_idx(i)
                     && self.row_of[i] == row
                     && self.groups[i].right == right
             })
@@ -800,7 +832,7 @@ impl ToolDock {
             // 같은 행·같은 띠의 마지막 뒤 → 없으면 (왼쪽 띠면) 그 행 첫 그룹 앞 · (오른쪽 띠면) 그 행 마지막 뒤 →
             // 행이 비었으면 앞 행들의 끝(새 행이면 맨 끝).
             let same_band_last = self.order.iter().rposition(|&i| {
-                !self.is_floating_idx(i) && self.row_of[i] == row && self.groups[i].right == right
+                !self.skip_idx(i) && self.row_of[i] == row && self.groups[i].right == right
             });
             match same_band_last {
                 Some(q) => q + 1,
@@ -808,11 +840,11 @@ impl ToolDock {
                     let row_first = self
                         .order
                         .iter()
-                        .position(|&i| !self.is_floating_idx(i) && self.row_of[i] == row);
+                        .position(|&i| !self.skip_idx(i) && self.row_of[i] == row);
                     let row_last = self
                         .order
                         .iter()
-                        .rposition(|&i| !self.is_floating_idx(i) && self.row_of[i] == row);
+                        .rposition(|&i| !self.skip_idx(i) && self.row_of[i] == row);
                     match (row_first, row_last) {
                         (Some(f), Some(l)) => {
                             if right {
@@ -824,7 +856,7 @@ impl ToolDock {
                         _ => self
                             .order
                             .iter()
-                            .rposition(|&i| !self.is_floating_idx(i) && self.row_of[i] < row)
+                            .rposition(|&i| !self.skip_idx(i) && self.row_of[i] < row)
                             .map_or(0, |q| q + 1),
                     }
                 }
@@ -876,7 +908,7 @@ impl ToolDock {
         let bar = self
             .order
             .iter()
-            .any(|&i| !self.is_floating_idx(i) && self.bars[i].tooltip_visible());
+            .any(|&i| !self.skip_idx(i) && self.bars[i].tooltip_visible());
         let grip = self
             .hover_grip
             .filter(|_| self.drag.is_none())
@@ -891,7 +923,7 @@ impl ToolDock {
         // 도크의 폭(= 창 폭) 안에 — 오른쪽 정렬 그룹의 툴팁도 창 안에서 왼쪽으로 밀린다.
         let clamp = (self.base.bounds.x, self.base.bounds.right());
         for &i in &self.order {
-            if !self.is_floating_idx(i) {
+            if !self.skip_idx(i) {
                 self.bars[i].paint_tooltip_in(ctx, theme, clamp);
             }
         }
@@ -952,7 +984,7 @@ impl Widget for ToolDock {
                 }
                 // 마우스 라우팅 규칙: 커서 아래 그룹에만.
                 for &i in &self.order.clone() {
-                    if !self.is_floating_idx(i) && self.bars[i].bounds().contains(p) {
+                    if !self.skip_idx(i) && self.bars[i].bounds().contains(p) {
                         self.bars[i].on_event(ev, inv);
                     }
                 }
@@ -977,7 +1009,7 @@ impl Widget for ToolDock {
                 }
                 let p = Point { x, y };
                 for &i in &self.order.clone() {
-                    if !self.is_floating_idx(i) {
+                    if !self.skip_idx(i) {
                         // Up은 눌린 툴바가 스스로 판정(눌림 해제 포함)하도록 전부에.
                         let _ = p;
                         self.bars[i].on_event(ev, inv);
@@ -1044,7 +1076,7 @@ impl Widget for ToolDock {
                     inv.push(b);
                 }
                 for &i in &self.order.clone() {
-                    if !self.is_floating_idx(i) {
+                    if !self.skip_idx(i) {
                         self.bars[i].on_event(ev, inv);
                     }
                 }
@@ -1062,7 +1094,7 @@ impl Widget for ToolDock {
         // ★ 글자 항목 폭 실측은 툴바 paint에서 — 그려진 뒤 권장 폭이 배치 폭과 다르면 낡음 표시(다음 사건·호스트가 재배치).
         let check_stale = |dock: &Self| {
             for &i in &dock.order {
-                if dock.is_floating_idx(i) {
+                if dock.skip_idx(i) {
                     continue;
                 }
                 if dock.bars[i].preferred_width() != dock.bars[i].bounds().w {
@@ -1073,7 +1105,7 @@ impl Widget for ToolDock {
         };
         let _ = &check_stale;
         for &i in &self.order {
-            if self.is_floating_idx(i) {
+            if self.skip_idx(i) {
                 continue;
             }
             if ghosted == Some(i) {
@@ -1436,5 +1468,31 @@ mod drag_cancel_tests {
         assert!(dock.relayout_if_stale(&mut inv));
         assert_eq!(dock.bars[0].bounds().w, dock.bars[0].preferred_width());
         assert!(dock.bars[0].bounds().w > w0);
+    }
+
+    /// ★ T-278 그룹 숨김: 숨긴 그룹은 자리를 차지하지 않고(다음 그룹이 당겨짐) 사각형 0 · 다시 보이면 제자리 · 순서·groups()는 그대로.
+    #[test]
+    fn hidden_group_takes_no_space_and_returns_in_place() {
+        let mut d = ToolDock::new(vec![
+            ToolGroup::new("a", "A", vec![item("a.1"), item("a.2")]),
+            ToolGroup::new("b", "B", vec![item("b.1")]),
+        ]);
+        d.set_icon_size(16);
+        let mut inv = Invalidations::default();
+        d.set_bounds(Rect::new(0, 0, 600, d.preferred_height()), &mut inv);
+        let before_b = d.bar("b").unwrap().bounds().x;
+        assert!(d.set_group_visible("a", false));
+        assert!(!d.set_group_visible("a", false), "같은 상태 = false");
+        assert!(!d.is_group_visible("a"));
+        assert_eq!(d.bar("a").unwrap().bounds().w, 0);
+        assert!(
+            d.bar("b").unwrap().bounds().x < before_b,
+            "앞 그룹이 숨으면 당겨진다"
+        );
+        let ids: Vec<String> = d.groups().into_iter().map(|(id, _, _)| id).collect();
+        assert!(ids.contains(&"a".to_string()), "순서 목록에는 남는다");
+        assert!(d.set_group_visible("a", true));
+        assert_eq!(d.bar("b").unwrap().bounds().x, before_b);
+        assert!(!d.set_group_visible("zzz", false));
     }
 }
