@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-30 (243차 · win · nexa-sql 180차)** — nexa-ctl `TextBox::token_kind_at` · `SyntaxSpec::json()` · 미니맵 `set_minimap_min_cols`/`set_minimap_diff`(추가 · 기본 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **b5afb6e** · [journal 10-30 §1](journal/2026-10-30.md).
 - **2026-10-17 (213차 · mac · nexa-sql 130차 깜빡임)** — nexa-sys `LayerPresenter` 장 선택 규칙(front·prev 회피 · 바쁘면 프레임 건너뜀 · 풀 3 → 4 · `busy_reuse()`·`forced()` · 수정 · 맥 iosurface 동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 사용자 실기 ✓ · journal 10-16 §7.
 - **2026-10-17 (212차 · mac · nexa-sql 130차 T-352)** — nexa-sys `open_files`(macOS Finder·`open -a` 파일 전달 · 추가 · 맥만 동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 소비 = nexa-sql `open_os_path` · journal 10-16 §6.
 - **2026-10-16 (211차 · win · nexa-sql 128차 메모리 창)** — nexa-ctl `Switch::wanted_width(ctx)`(추가 · 트랙 + 틈 + 라벨 글 폭) — [CONSUMER-CHANGES](CONSUMER-CHANGES.md) · nexa-sql journal 10-16 §6 64.
