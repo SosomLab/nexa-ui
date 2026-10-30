@@ -616,6 +616,8 @@ pub struct TextBox {
     minimap: bool,
     /// 미니맵 폭(논리 px · 기본 [`MINIMAP_DEFAULT_WIDTH`]).
     minimap_w: i32,
+    /// ★ 좁은 창 자동 숨김(nexa-sql T-110 2-5 · 10-30): 본문 열 수가 이보다 작으면 미니맵을 그리지 않는다(설정 값은 그대로) · 0 = 규칙 없음.
+    minimap_min_cols: usize,
     /// 미니맵 픽셀 캐시 — 창(띠에 보이는 행 범위)·텍스트 해시·폭·배율·테마 색이 키. 매 프레임은 블릿만.
     minimap_cache: std::cell::RefCell<Option<MinimapCache>>,
     /// **본문 문자열 + 논리 줄 표 캐시**(세대 `edit.rev` 열쇠 · nexa-sql 09-19 메모리 점검: 3.6 MB·4만 줄에서 매 프레임
@@ -646,6 +648,9 @@ pub struct TextBox {
     /// 미니맵 마크(nexa-sql docs/46 1순위): 오류 논리 줄(0 기준) · 찾기 결과 띠 표시 여부 · 뷰포트 hover 때만 · 클릭 = 클릭한 글로.
     minimap_errors: Vec<usize>,
     minimap_find: bool,
+    /// ★ 저장 뒤 수정 줄(nexa-sql docs/46 2-4 · 10-30): 기준선(`set_baseline`) 대비 `diff_marks`를 미니맵 왼쪽 가장자리에(추가 = ok · 수정 = warn ·
+    /// 위에서 삭제 = danger 가는 선) — 거터 diff 띠와 같은 원천 · 기본 끔.
+    minimap_diff: bool,
     minimap_viewport_hover: bool,
     minimap_click_text: bool,
     /// 본문 텍스트 가용 폭(마지막 페인트 실측 · 테스트).
@@ -1048,6 +1053,7 @@ impl TextBox {
             whitespace: WhitespaceStyle::default(),
             minimap: false,
             minimap_w: MINIMAP_DEFAULT_WIDTH,
+            minimap_min_cols: 0,
             minimap_cache: std::cell::RefCell::new(None),
             ml_text_cache: std::cell::RefCell::new(None),
             hl_state_cache: std::cell::RefCell::new(HlStateCache::default()),
@@ -1061,6 +1067,7 @@ impl TextBox {
             minimap_drag: false,
             minimap_box: (None, None, false),
             minimap_errors: Vec::new(),
+            minimap_diff: false,
             minimap_find: true,
             minimap_viewport_hover: false,
             minimap_click_text: false,
@@ -1156,6 +1163,11 @@ impl TextBox {
     }
 
     /// 찾기 결과(`set_find_marks`)를 미니맵에도 띠로.
+    /// ★ 저장 뒤 수정 줄을 미니맵에(docs/46 2-4 · 10-30): 켜면 기준선 대비 `diff_marks`를 왼쪽 가장자리 점으로 그린다(기준선 없으면 아무것도).
+    pub fn set_minimap_diff(&mut self, on: bool) {
+        self.minimap_diff = on;
+    }
+
     pub fn set_minimap_find(&mut self, on: bool) {
         self.minimap_find = on;
     }
@@ -1174,6 +1186,12 @@ impl TextBox {
     #[must_use]
     pub fn minimap_width(&self) -> i32 {
         self.minimap_w
+    }
+
+    /// ★ 좁은 창 자동 숨김 열 수(nexa-sql `editor.minimap_min_cols` · T-110 2-5 · 10-30): 본문이 이 열 수보다 좁으면 미니맵을
+    /// 그리지 않는다(켬 설정은 유지 · 넓어지면 다시 나온다) · 0 = 늘 그린다.
+    pub fn set_minimap_min_cols(&mut self, cols: usize) {
+        self.minimap_min_cols = cols;
     }
 
     /// 미니맵 띠 영역(마지막 페인트 실측 · 꺼져 있거나 단일 행이면 빈 Rect) — 호스트 히트 테스트·테스트용.
@@ -3367,6 +3385,77 @@ impl TextBox {
         self.edit.selection()
     }
 
+    /// ★ 글자 인덱스 `pos`의 **구문 토큰 종류**(nexa-sql T-14 키맵 `selector` context · 10-30) — 줄 시작 상태 캐시([`Self::line_hl_cache`])를
+    /// 그 줄까지만 잇고(변경 기록으로 바뀐 줄부터 · 두 번째 호출부터는 바뀐 줄만) **그 줄 하나만** 토큰화한다. 강조기 없음 = `Plain` ·
+    /// 줄 끝(개행 자리) = 그 줄 마지막 스팬의 종류(빈 줄 = `Plain`). 본문 전체를 뜨지 않는다(편집기 불변식).
+    #[must_use]
+    pub fn token_kind_at(&self, pos: usize) -> crate::highlight::TokenKind {
+        use crate::highlight::TokenKind;
+        let Some(h) = &self.highlighter else {
+            return TokenKind::Plain;
+        };
+        let buf = self.edit.buf();
+        let pos = pos.min(buf.len());
+        let li = buf.line_of(pos);
+        let mut state = self.line_hl_state(h, li);
+        let start = buf.line_start(li);
+        let line = buf.slice_string(start, buf.line_end(li));
+        let mut spans: Vec<(usize, TokenKind)> = Vec::new();
+        h.line_spans(&line, &mut state, &mut spans);
+        let off = pos.saturating_sub(start);
+        let mut acc = 0usize;
+        let mut last = TokenKind::Plain;
+        for (n, k) in spans {
+            if off < acc + n {
+                return k;
+            }
+            acc += n;
+            last = k;
+        }
+        last
+    }
+
+    /// 줄 `li`를 시작할 때의 구문 상태 — [`Self::hl_states_lines`]와 같은 캐시를 **버퍼의 줄**로 잇는다(접기 모드와 무관 ·
+    /// 조합 중 글자는 끼우지 않는다 = 다음 그리기가 `composed` 줄부터 다시 잰다).
+    fn line_hl_state(&self, h: &Rc<dyn crate::highlight::Highlighter>, li: usize) -> u32 {
+        let buf = self.edit.buf();
+        let mut c = self.line_hl_cache.borrow_mut();
+        let hl_id = Rc::as_ptr(h).cast::<()>() as usize;
+        let changes = (c.epoch == buf.epoch() && c.hl_id == hl_id && !c.states.is_empty())
+            .then(|| buf.changes_since(c.seq))
+            .flatten();
+        match changes {
+            Some(list) => {
+                for ch in list {
+                    c.states.truncate(ch.first + 1);
+                }
+            }
+            None => c.states.clear(),
+        }
+        if let Some(l) = c.composed {
+            c.states.truncate(l + 1);
+        }
+        if c.states.is_empty() {
+            c.states.push(0);
+        }
+        c.epoch = buf.epoch();
+        c.seq = buf.change_seq();
+        c.hl_id = hl_id;
+        let need = li.min(buf.line_count().saturating_sub(1));
+        if c.states.len() <= need {
+            let mut spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
+            let mut state = c.states.last().copied().unwrap_or(0);
+            for l in c.states.len() - 1..need {
+                spans.clear();
+                let line = buf.slice_string(buf.line_start(l), buf.line_end(l));
+                h.line_spans(&line, &mut state, &mut spans);
+                c.states.push(state);
+                c.scanned += 1;
+            }
+        }
+        c.states.get(need).copied().unwrap_or(0)
+    }
+
     /// 프로그램 선택(찾기 결과 강조 · nexa-sql 09-15) — 문자 인덱스 `from..to` · 캐럿은 `to` · 캐럿 추종 스크롤 재개.
     pub fn select_range(&mut self, from: usize, to: usize, inv: &mut Invalidations) {
         self.edit.set_selection(from, to);
@@ -3786,7 +3875,13 @@ impl TextBox {
         let tx = b.x + self.s(10) + gw + self.s(self.text_inset);
         let top0 = b.y + self.s(self.ml_pad_y);
         // ★ 미니맵 띠(멀티라인 + 켬) — 스크롤바(THICK 11 + MARGIN 2 = 13) 안쪽 · 본문은 띠 왼쪽 4px 앞에서 끝난다.
-        let band = if self.minimap && self.multiline {
+        // ★ 좁은 창 자동 숨김(T-110 2-5): 띠를 뺀 본문 폭이 `minimap_min_cols`열에 못 미치면 이번 프레임은 띠 없음(설정은 그대로).
+        let fits = self.minimap_min_cols == 0 || {
+            let cw = ctx.text_width("M").max(1);
+            let body = b.right() - self.s(13) - self.s(self.minimap_w) - self.s(4) - tx;
+            (body / cw) as usize >= self.minimap_min_cols
+        };
+        let band = if self.minimap && self.multiline && fits {
             let mw = self.s(self.minimap_w);
             Rect::new(b.right() - self.s(13) - mw, b.y + 1, mw, b.h - 2)
         } else {
@@ -4578,6 +4673,14 @@ impl TextBox {
             let mm_x = |col: usize| band.x + (col.min(cols) as i32) * mm_cw;
             let mm_y = |row: usize| band.y + (row as i32) * mm_row_h - mm_off;
             let ts = usize::from(self.tab_size.max(1));
+            // ★ 저장 뒤 수정 줄(docs/46 2-4): 기준선이 있고 켜져 있을 때만 한 번 계산(줄 번호 오름차순 정렬 → 행마다 이진 탐색).
+            let diffs: Vec<(usize, DiffKind)> = if self.minimap_diff && self.baseline.is_some() {
+                let mut d = self.diff_marks();
+                d.sort_by_key(|(l, _)| *l);
+                d
+            } else {
+                Vec::new()
+            };
             for (wi, (start_idx, line_str)) in window.iter().enumerate() {
                 let row = mm_start + wi;
                 let y = mm_y(row);
@@ -4616,7 +4719,29 @@ impl TextBox {
                         .find(|(l, _)| *l == li)
                         .map(|(_, c)| *c)
                 };
-                if !has_sel && needle.is_none() && !has_find && !is_err && mark.is_none() {
+                // 저장 뒤 수정 줄(2-4): 이 행의 논리 줄에 diff 표식이 있는가(이진 탐색).
+                let diff = if diffs.is_empty() {
+                    None
+                } else {
+                    let li = if self.wrap {
+                        logical_starts
+                            .partition_point(|&st| st <= *start_idx)
+                            .saturating_sub(1)
+                    } else {
+                        row
+                    };
+                    diffs
+                        .binary_search_by_key(&li, |(l, _)| *l)
+                        .ok()
+                        .map(|i| diffs[i].1)
+                };
+                if !has_sel
+                    && needle.is_none()
+                    && !has_find
+                    && !is_err
+                    && mark.is_none()
+                    && diff.is_none()
+                {
                     continue;
                 }
                 let lchars: Vec<char> = line_str.chars().collect();
@@ -4658,6 +4783,30 @@ impl TextBox {
                             .intersection(&band);
                     if !edge.is_empty() {
                         ctx.fill_rect(edge, c);
+                    }
+                }
+                // ★ 저장 뒤 수정 줄(docs/46 2-4): 왼쪽 가장자리 — 추가 = ok · 수정 = warn(2px 점) · 위에서 삭제 = danger 가는 선(행 위 경계).
+                //   오른쪽 가장자리(오류·북마크)와 겹치지 않는다.
+                if let Some(k) = diff {
+                    let w = mm_cw.max(2);
+                    match k {
+                        DiffKind::Added | DiffKind::Modified => {
+                            let c = if matches!(k, DiffKind::Added) {
+                                theme.ok
+                            } else {
+                                theme.warn
+                            };
+                            let edge = Rect::new(band.x + 1, y, w, mm_row_h).intersection(&band);
+                            if !edge.is_empty() {
+                                ctx.fill_rect(edge, c);
+                            }
+                        }
+                        DiffKind::DeletedAbove => {
+                            let line = Rect::new(band.x + 1, y, w * 2, 1).intersection(&band);
+                            if !line.is_empty() {
+                                ctx.fill_rect(line, theme.danger);
+                            }
+                        }
                     }
                 }
                 if has_find {
@@ -7192,6 +7341,100 @@ mod minimap_tests {
         fn image(&mut self, x: i32, y: i32, img: &IconImage, clip: Rect) {
             self.images.push((x, y, img.w, img.h, clip));
         }
+    }
+
+    /// ★ `token_kind_at`(nexa-sql 키맵 `selector` · 10-30): 줄을 넘는 블록 주석 상태가 이어지고 · 문자열/키워드/숫자 ·
+    /// 편집 뒤에는 바뀐 줄부터만 다시 잰다(캐시 `scanned`) · 강조기 없음 = Plain.
+    #[test]
+    fn token_kind_at_tracks_strings_comments_and_edits() {
+        use crate::highlight::TokenKind as K;
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 400, 300), &mut inv);
+        t.set_text("select 'a' /* b\nc */ 42 x\nfrom t\n");
+        assert_eq!(t.token_kind_at(3), K::Plain, "강조기 없음 = Plain");
+        t.set_highlighter(Some(Rc::new(crate::highlight::SyntaxSpec::sql())));
+        assert_eq!(t.token_kind_at(0), K::Keyword, "select");
+        assert_eq!(t.token_kind_at(8), K::Str, "'a' 안");
+        assert_eq!(t.token_kind_at(12), K::Comment, "/* 첫 줄");
+        assert_eq!(
+            t.token_kind_at(16),
+            K::Comment,
+            "둘째 줄 'c' = 블록 주석 이어짐"
+        );
+        assert_eq!(t.token_kind_at(21), K::Number, "42");
+        assert_eq!(t.token_kind_at(24), K::Plain, "x");
+        assert_eq!(t.token_kind_at(26), K::Keyword, "from");
+        let scanned = t.line_hl_cache.borrow().scanned;
+        assert_eq!(t.token_kind_at(26), K::Keyword);
+        assert_eq!(
+            t.line_hl_cache.borrow().scanned,
+            scanned,
+            "같은 본문 두 번째 조회 = 다시 훑지 않음"
+        );
+        // 둘째 줄의 `*/`를 지우면 그 뒤가 전부 주석 — 변경 기록으로 둘째 줄부터만 다시 잰다.
+        t.edit.set_caret(18, false);
+        t.edit.set_selection(18, 20);
+        t.edit.insert_str("  ");
+        assert_eq!(
+            t.token_kind_at(26),
+            K::Comment,
+            "닫히지 않은 블록 주석이 셋째 줄까지"
+        );
+        assert!(t.line_hl_cache.borrow().scanned > scanned);
+        assert_eq!(t.token_kind_at(0), K::Keyword, "첫 줄은 그대로");
+        let n = t.buf().len();
+        assert_eq!(
+            t.token_kind_at(n - 1),
+            K::Comment,
+            "줄 끝(개행 자리) = 그 줄 마지막 스팬"
+        );
+        assert_eq!(t.token_kind_at(n), K::Plain, "끝의 빈 줄 = Plain");
+    }
+
+    /// ★ 좁은 창 자동 숨김(T-110 2-5 · 10-30): 열 수 규칙 0 = 늘 띠 · 큰 값 = 400px 창에서 숨김(설정 `minimap`은 켠 채) · 작은 값 = 다시 띠.
+    #[test]
+    fn minimap_hides_when_too_narrow() {
+        let mut t = editor(10);
+        t.set_minimap(true);
+        paint(&t);
+        assert!(t.minimap_rect().w > 0, "규칙 없음 = 띠");
+        t.set_minimap_min_cols(500);
+        paint(&t);
+        assert_eq!(t.minimap_rect().w, 0, "400px 창은 500열이 안 된다");
+        assert!(t.minimap(), "켬 설정은 그대로");
+        t.set_minimap_min_cols(5);
+        paint(&t);
+        assert!(t.minimap_rect().w > 0, "5열이면 다시 띠");
+    }
+
+    /// ★ 저장 뒤 수정 줄(docs/46 2-4 · 10-30): 기준선 대비 diff가 미니맵 그리기 경로를 지나도 패닉 없음 · 끄면 영향 없음 · 기준선 없으면 빈 목록.
+    #[test]
+    fn minimap_diff_marks_paint_without_panic() {
+        let mut t = editor(12);
+        t.set_minimap(true);
+        t.set_minimap_diff(true);
+        assert!(t.diff_marks().is_empty(), "기준선 없음");
+        let base = t.text();
+        t.set_baseline(Some(&base));
+        // 둘째 줄 끝에 글자 추가 = Modified · 끝에 줄 추가 = Added.
+        let l1_end = t.buf().line_end(1);
+        t.edit.set_caret(l1_end, false);
+        t.edit.insert_str(" -- x");
+        let n = t.buf().len();
+        t.edit.set_caret(n, false);
+        t.edit.insert_str("select 1\n");
+        let d = t.diff_marks();
+        assert!(
+            d.iter()
+                .any(|(l, k)| *l == 1 && matches!(k, DiffKind::Modified)),
+            "{d:?}"
+        );
+        assert!(d.iter().any(|(_, k)| matches!(k, DiffKind::Added)), "{d:?}");
+        paint(&t);
+        assert!(t.minimap_rect().w > 0);
+        t.set_minimap_diff(false);
+        paint(&t);
     }
 
     fn editor(lines: usize) -> TextBox {

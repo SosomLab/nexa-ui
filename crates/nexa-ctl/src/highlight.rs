@@ -109,6 +109,13 @@ impl SyntaxSpec {
         Self::parse(SQL_SPEC).unwrap_or_else(|_| Self::plain())
     }
 
+    /// ★ 내장 JSON(nexa-sql T-76 settings.json 내장 편집기 · `.sublime-keymap`·`.sublime-settings` 같은 JSON-with-comments 포함 · 10-30):
+    /// 문자열 `"…"`(역슬래시 이스케이프) · `//`·`/* */` 주석 · 숫자 · 키워드 = `true`·`false`·`null`.
+    #[must_use]
+    pub fn json() -> Self {
+        Self::parse(JSON_SPEC).unwrap_or_else(|_| Self::plain())
+    }
+
     /// `.nexa-syntax` 텍스트 파싱.
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut s = SyntaxSpec {
@@ -448,9 +455,46 @@ keywords = INT INTEGER BIGINT SMALLINT NUMBER NUMERIC DECIMAL FLOAT REAL DOUBLE 
 keywords = TRUE FALSE EXEC EXECUTE IMMEDIATE CURSOR OPEN CLOSE INTO OUT INOUT ROWTYPE PRAGMA AUTONOMOUS_TRANSACTION GO
 "#;
 
+/// ★ 내장 JSON 규격(10-30 · nexa-sql T-76): 설정 파일·Sublime 패키지 파일(주석 허용 JSON).
+pub const JSON_SPEC: &str = r#"
+name = JSON
+extensions = json, jsonc, sublime-keymap, sublime-settings, sublime-menu, sublime-commands, nexa-settings
+case_insensitive = false
+line_comment = //
+block_comment = /* */
+string = "
+escape_backslash = true
+ident_extra = _
+numbers = true
+keywords = true false null
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ★ JSON 규격(10-30 · nexa-sql T-76): 문자열(역슬래시 이스케이프) · `//` 주석 · 숫자 · true/false/null · 대소문자 구분.
+    #[test]
+    fn json_spec_tokens() {
+        let j = SyntaxSpec::json();
+        assert_eq!(j.name, "JSON");
+        assert!(j.extensions.iter().any(|e| e == "sublime-keymap"));
+        let mut st = 0;
+        let v = spans(&j, r#"{"a\"b": true, "n": 12} // c"#, &mut st);
+        let kinds: Vec<TokenKind> = v.iter().map(|(_, k)| *k).collect();
+        assert!(kinds.contains(&TokenKind::Str));
+        assert!(kinds.contains(&TokenKind::Keyword), "true");
+        assert!(kinds.contains(&TokenKind::Number), "12");
+        assert_eq!(kinds.last(), Some(&TokenKind::Comment), "// c");
+        // 이스케이프된 따옴표는 문자열을 끝내지 않는다 → 첫 문자열 스팬이 `"a\"b"` 전체(6글자).
+        let first_str = v
+            .iter()
+            .find(|(_, k)| *k == TokenKind::Str)
+            .map(|(n, _)| *n);
+        assert_eq!(first_str, Some(6));
+        let v = spans(&j, "TRUE", &mut st);
+        assert_eq!(v[0].1, TokenKind::Plain, "대소문자 구분");
+    }
 
     fn spans(spec: &SyntaxSpec, line: &str, state: &mut u32) -> Vec<(usize, TokenKind)> {
         let mut out = Vec::new();
