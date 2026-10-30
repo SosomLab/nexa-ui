@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/246-toolbar-reorder-group-hide | 2026-10-31 | 2026-10-31 → main rebase(맥 246차 뒤) · **e9c6e88** | 1 | 247차 nexa-ctl `Toolbar::reorder` · `ToolDock::set_group_visible`(nexa-sql 188차 T-278) · 브랜치 이름은 246이나 차수 = 247(맥 246차와 겹쳐 조정) |
 | feat/246-mac-shell-icons | 2026-10-31 | 2026-10-31 → main ff(삭제) · **0a18346** | 1 | 246차 nexa-fs macOS OS 아이콘·종류 이름(nexa-dir3 T-114 ①) · 0a18346 |
 | feat/245-git-baseline | 2026-10-30 | 2026-10-30 → main ff(삭제) · **d2092b7** | 1 | 245차 nexa-ctl `set_git_baseline` · `git_marks` · `set_minimap_git`(nexa-sql 182차) + 문서 4 · d2092b7 |
 | feat/244-tokenkind-levels | 2026-10-30 | 2026-10-30 → main ff(삭제) · **0ce13a3** | 1 | 244차 nexa-ctl `TokenKind::Error`/`Warn`(nexa-sql 181차 Output 줄 색) + 문서 4 · 0ce13a3 |

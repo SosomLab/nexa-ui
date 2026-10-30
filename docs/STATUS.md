@@ -2,8 +2,8 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
-- **2026-10-31 (246차 · mac · nexa-dir3 10-31)** — nexa-fs macOS OS 아이콘·종류 이름(`shell.rs` macOS `imp` · **동작 변경 macOS만** — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **0a18346** · [journal 10-31 §1](journal/2026-10-31.md).
 - **2026-10-31 (247차 · win · nexa-sql 188차)** — nexa-ctl `Toolbar::reorder` · `ToolDock::set_group_visible`(추가 · 기본 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · [journal 10-30 §4](journal/2026-10-30.md).
+- **2026-10-31 (246차 · mac · nexa-dir3 10-31)** — nexa-fs macOS OS 아이콘·종류 이름(`shell.rs` macOS `imp` · **동작 변경 macOS만** — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **0a18346** · [journal 10-31 §1](journal/2026-10-31.md).
 - **2026-10-30 (245차 · win · nexa-sql 181차)** — nexa-ctl `TextBox::set_git_baseline`/`git_marks`/`set_minimap_git`(추가 · 기본 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · [journal 10-30 §3](journal/2026-10-30.md).
 - **2026-10-30 (244차 · win · nexa-sql 181차)** — nexa-ctl `TokenKind::Error`/`Warn`(추가 · 기본 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · [journal 10-30 §2](journal/2026-10-30.md).
 - **2026-10-30 (243차 · win · nexa-sql 180차)** — nexa-ctl `TextBox::token_kind_at` · `SyntaxSpec::json()` · 미니맵 `set_minimap_min_cols`/`set_minimap_diff`(추가 · 기본 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **b5afb6e** · [journal 10-30 §1](journal/2026-10-30.md).
