@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-31 (246차 · macOS)** — nexa-fs macOS OS 아이콘·종류 이름(NSWorkspace · UTType · objc 수동 extern · autorelease 풀 · **동작 변경 macOS만**) · nexa-dir3 T-114 ① · 0a18346 — [journal 10-31 §1](journal/2026-10-31.md).
 - **2026-10-30 (245차 · Windows)** — nexa-ctl `TextBox::set_git_baseline`/`git_marks`/`set_minimap_git`(둘째 기준선 · 미니맵 안쪽 열 · 추가 · 기본 off) · nexa-sql 181차 T-110 2-3 — [journal 10-30 §3](journal/2026-10-30.md).
 - **2026-10-30 (244차 · Windows)** — nexa-ctl `TokenKind::Error`/`Warn`(추가 · SQL 규격 미사용) · nexa-sql 181차 Output 줄 색 — [journal 10-30 §2](journal/2026-10-30.md).
 - **2026-10-30 (243차 · Windows)** — nexa-ctl `TextBox::token_kind_at`(키맵 selector) · `SyntaxSpec::json()`(JSON-with-comments) · 미니맵 `set_minimap_min_cols`(좁은 창 숨김) · `set_minimap_diff`(저장 뒤 수정 줄 왼쪽 가장자리) · 모두 추가(기본 동작 불변) · nexa-sql 180차 · b5afb6e — [journal 10-30 §1](journal/2026-10-30.md).

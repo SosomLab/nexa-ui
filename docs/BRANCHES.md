@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/246-mac-shell-icons | 2026-10-31 | 2026-10-31 → main ff(삭제) · **0a18346** | 1 | 246차 nexa-fs macOS OS 아이콘·종류 이름(nexa-dir3 T-114 ①) · 0a18346 |
 | feat/245-git-baseline | 2026-10-30 | 2026-10-30 → main ff(삭제) · **d2092b7** | 1 | 245차 nexa-ctl `set_git_baseline` · `git_marks` · `set_minimap_git`(nexa-sql 182차) + 문서 4 · d2092b7 |
 | feat/244-tokenkind-levels | 2026-10-30 | 2026-10-30 → main ff(삭제) · **0ce13a3** | 1 | 244차 nexa-ctl `TokenKind::Error`/`Warn`(nexa-sql 181차 Output 줄 색) + 문서 4 · 0ce13a3 |
 | feat/243-tokenkind-json-minimap | 2026-10-30 | 2026-10-30 → main ff(삭제) · **b5afb6e** | 1 | 243차 nexa-ctl `TextBox::token_kind_at` · `SyntaxSpec::json()` · 미니맵 `set_minimap_min_cols`/`set_minimap_diff`(nexa-sql 180차) · b5afb6e |
