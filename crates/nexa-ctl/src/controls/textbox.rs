@@ -651,6 +651,9 @@ pub struct TextBox {
     minimap_scale: u8,
     /// ★ T-110 3-3: 띠를 거터 **오른쪽·본문 왼쪽**에(기본 = 오른쪽 가장자리).
     minimap_left: bool,
+    /// ★ T-110 3-1(nexa-sql 10-31): 자동 숨김 — 마우스 이동·휠 뒤 [`MINIMAP_AUTOHIDE_MS`] 동안만 띠를 그린다(자리는 유지 = 본문이 흔들리지 않음).
+    minimap_autohide: bool,
+    minimap_activity: std::cell::Cell<Option<std::time::Instant>>,
     /// 미니맵 드래그 중(클릭 위치를 뷰포트 가운데로 · 따라감).
     minimap_drag: bool,
     /// 뷰포트 상자 — 색(None = Sublime식 회색 `0x808080`) · 알파(None = 0.18 · hover +0.10) · 테두리(기본 없음 · 사용자 09-17).
@@ -668,6 +671,9 @@ pub struct TextBox {
     /// 본문 텍스트 가용 폭(마지막 페인트 실측 · 테스트).
     ml_avail: std::cell::Cell<i32>,
 }
+
+/// ★ T-110 3-1: 자동 숨김 표시 시간(ms · 마지막 마우스 이동·휠 뒤).
+pub const MINIMAP_AUTOHIDE_MS: u64 = 1200;
 
 /// 미니맵 기본 폭(논리 px).
 /// 09-17 nexa-sql 사용자 "미니맵 크기를 지금의 2배로" → 80 → 160.
@@ -1082,6 +1088,8 @@ impl TextBox {
             minimap_hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Fast),
             minimap_scale: 2,
             minimap_left: false,
+            minimap_autohide: false,
+            minimap_activity: std::cell::Cell::new(None),
             minimap_drag: false,
             minimap_box: (None, None, false),
             minimap_errors: Vec::new(),
@@ -1102,7 +1110,12 @@ impl TextBox {
         let c = self.minimap_hover.tick(now_ms);
         let d = self.drag_autoscroll_tick(now_ms);
         let e = self.busy.tick(now_ms);
-        a || b || c || d || e
+        // ★ 자동 숨김 창 안이면 계속 그린다(사라지는 순간까지 · 그 뒤 한 번 더).
+        let f = self.minimap_autohide
+            && self.minimap_activity.get().is_some_and(|t| {
+                t.elapsed() < std::time::Duration::from_millis(MINIMAP_AUTOHIDE_MS + 100)
+            });
+        a || b || c || d || e || f
     }
 
     /// 마우스를 누른 채 끄는 중인가(선택 드래그 · 열 선택 · 미니맵 드래그) — 호스트의 포인터 캡처·시험용(09-30).
@@ -1226,6 +1239,20 @@ impl TextBox {
     #[must_use]
     pub fn minimap_left(&self) -> bool {
         self.minimap_left
+    }
+
+    /// ★ T-110 3-1: 자동 숨김(VS Code autohide) — 켜면 마우스 이동·휠 뒤 [`MINIMAP_AUTOHIDE_MS`] 동안만 띠를 그린다(자리는 남긴다).
+    pub fn set_minimap_autohide(&mut self, on: bool) {
+        self.minimap_autohide = on;
+    }
+
+    /// 지금 띠를 그리는가(자동 숨김 판정 · 시험·호스트용).
+    #[must_use]
+    pub fn minimap_shown(&self) -> bool {
+        !self.minimap_autohide
+            || self.minimap_activity.get().is_some_and(|t| {
+                t.elapsed() < std::time::Duration::from_millis(MINIMAP_AUTOHIDE_MS)
+            })
     }
 
     /// 미니맵 띠 영역(마지막 페인트 실측 · 꺼져 있거나 단일 행이면 빈 Rect) — 호스트 히트 테스트·테스트용.
@@ -4708,8 +4735,8 @@ impl TextBox {
         }
         drop(lay);
         self.lay_rev.set(self.edit.rev());
-        // ★ 미니맵(스크롤바 아래 · 팝업 아래) — 캐시 비트맵 블릿 + 선택/동일 출현 점 + 뷰포트 상자.
-        if band.w > 0 {
+        // ★ 미니맵(스크롤바 아래 · 팝업 아래) — 캐시 비트맵 블릿 + 선택/동일 출현 점 + 뷰포트 상자 · 자동 숨김이면 활동 뒤 잠깐만(자리는 남김).
+        if band.w > 0 && self.minimap_shown() {
             let mm_cw = self.s(1).max(1);
             let colors = [
                 theme.text.0,
@@ -5816,6 +5843,15 @@ impl Widget for TextBox {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // ★ T-110 3-1 자동 숨김: 마우스 이동·휠 = 활동(띠를 다시 보인다).
+        if self.minimap_autohide
+            && matches!(
+                ev,
+                InputEvent::MouseMove { .. } | InputEvent::Wheel { .. } | InputEvent::HWheel { .. }
+            )
+        {
+            self.minimap_activity.set(Some(std::time::Instant::now()));
+        }
         // 한글 앱 조합(켜져 있을 때만 · 자모/Backspace는 조합기가 먹고, 그 밖의 입력은 조합을 확정한 뒤 평소대로).
         // ★ 읽기 전용 상자는 조합도 안 한다(nexa-sql 09-26 실기: 객체 상세 창에 초성 "ㅇ"이 preedit로 보였다).
         if hangul_app_compose()

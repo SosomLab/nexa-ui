@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| feat/248-minimap-scale-side | 2026-10-31 | 2026-10-31 → main rebase(맥 248·249차 뒤 · 250차로 번호 변경) · **7b8bb36** | 1 | 250차 nexa-ctl 미니맵 `set_minimap_scale`(auto/1~3 · 기본 2) · `set_minimap_left`(왼쪽 배치 · 거터 옆) · nexa-sql 192차 23차 T-110 3-2·3-3 |
 | feat/246-toolbar-reorder-group-hide | 2026-10-31 | 2026-10-31 → main rebase(맥 246차 뒤) · **e9c6e88** | 1 | 247차 nexa-ctl `Toolbar::reorder` · `ToolDock::set_group_visible`(nexa-sql 188차 T-278) · 브랜치 이름은 246이나 차수 = 247(맥 246차와 겹쳐 조정) |
 | feat/246-mac-shell-icons | 2026-10-31 | 2026-10-31 → main ff(삭제) · **0a18346** | 1 | 246차 nexa-fs macOS OS 아이콘·종류 이름(nexa-dir3 T-114 ①) · 0a18346 |
 | feat/245-git-baseline | 2026-10-30 | 2026-10-30 → main ff(삭제) · **d2092b7** | 1 | 245차 nexa-ctl `set_git_baseline` · `git_marks` · `set_minimap_git`(nexa-sql 182차) + 문서 4 · d2092b7 |
