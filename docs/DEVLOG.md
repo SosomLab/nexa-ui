@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-31 (254차 · macOS)** — nexa-sys `Frame::present_damage(rects)`(알파 채우기를 그린 사각형만 · 추가 · `present()` 불변) · nexa-dir3 T-201 ⓐ · e9107a8 — [journal 10-31 §8](journal/2026-10-31.md).
 - **2026-10-31 (253차 · Windows)** — nexa-ctl 미니맵 섹션 헤더 `set_minimap_sections`(추가 · 빈 목록 = 불변) · nexa-sql 192차 31차 T-110 3-4 · 55fe8d1 — [journal 10-31 §7](journal/2026-10-31.md).
 - **2026-10-31 (252차 · macOS)** — nexa-ctl `StatusPart::left()` / `align_left`(폭 견본은 쓰되 글은 왼쪽 정렬 · 추가 · 기본 불변) · nexa-dir3 패널 상태 줄 폴더 칸 · cb0e374 — [journal 10-31 §6](journal/2026-10-31.md).
 - **2026-10-31 (249차 · macOS)** — nexa-ctl `SearchBox::tooltip_visible()` · `toggle_rect(which)`(토글 툴팁 = 틀 밖 팝업 · 호스트 전체 프레임 판정 · 추가) · nexa-dir3 macOS 툴팁 깜빡임 · 2ffbbbc — [journal 10-31 §3](journal/2026-10-31.md).
