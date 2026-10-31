@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-31 (248차 · macOS)** — nexa-sys `LayerPresenter` `Frame::age()`(표면 나이 · `surface_age`/`staging_age` 순수 함수 · 추가) · nexa-dir3 macOS 부분 그리기 · af368ff — [journal 10-31 §2](journal/2026-10-31.md).
 - **2026-10-31 (247차 · Windows)** — nexa-ctl `Toolbar::reorder`(그룹 안 순서) · `ToolDock::set_group_visible`/`is_group_visible`(그룹 숨김 · `skip_idx`) · 추가 · nexa-sql 188차 T-278 — [journal 10-30 §4](journal/2026-10-30.md).
 - **2026-10-31 (246차 · macOS)** — nexa-fs macOS OS 아이콘·종류 이름(NSWorkspace · UTType · objc 수동 extern · autorelease 풀 · **동작 변경 macOS만**) · nexa-dir3 T-114 ① · 0a18346 — [journal 10-31 §1](journal/2026-10-31.md).
 - **2026-10-30 (245차 · Windows)** — nexa-ctl `TextBox::set_git_baseline`/`git_marks`/`set_minimap_git`(둘째 기준선 · 미니맵 안쪽 열 · 추가 · 기본 off) · nexa-sql 181차 T-110 2-3 — [journal 10-30 §3](journal/2026-10-30.md).
