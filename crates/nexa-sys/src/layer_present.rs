@@ -43,11 +43,39 @@ impl Frame<'_> {
         self.pixels
     }
 
-    /// 화면에 낸다(암묵 애니메이션 없음).
+    /// 화면에 낸다(암묵 애니메이션 없음) — 알파 채우기는 표면 전체.
     pub fn present(self) {
         #[cfg(target_os = "macos")]
-        self.owner.present_locked();
+        self.owner.present_locked(None);
     }
+
+    /// 화면에 낸다 — **이번 프레임에 그린 사각형**(`(x, y, w, h)` 픽셀 · 표면 밖은 잘림)만 알파를 채운다(254차 · nexa-dir3 T-201 ⓐ:
+    /// 종전 = 표면 전체 ~1.6 ms/프레임). 부분 프레임은 그 사각형만 새 픽셀(알파 0)이고 나머지는 지난 present 때 이미 0xFF다.
+    /// 중간 버퍼 경로(행 간격 ≠ 폭 × 4)는 통째 복사(종전) · 빈 목록 = 채우지 않고 낸다(그린 게 없을 때).
+    pub fn present_damage(self, rects: &[(i32, i32, i32, i32)]) {
+        #[cfg(target_os = "macos")]
+        self.owner.present_locked(Some(rects));
+        #[cfg(not(target_os = "macos"))]
+        let _ = rects;
+    }
+}
+
+/// 사각형을 `w × h` 표면 안으로 자른다(순수 · 254차): `(x, y, w, h)` → `(x0, y0, x1, y1)` 반열림 · 빈 것 = None.
+#[must_use]
+pub fn clip_rect(
+    r: (i32, i32, i32, i32),
+    w: usize,
+    h: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    let (x, y, rw, rh) = r;
+    let x0 = x.max(0);
+    let y0 = y.max(0);
+    let x1 = x.saturating_add(rw).min(w as i32);
+    let y1 = y.saturating_add(rh).min(h as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some((x0 as usize, y0 as usize, x1 as usize, y1 as usize))
 }
 
 /// 표면 나이(순수 · 10-31): `now` = 지금까지 present한 프레임 수 · `surf` = 그 표면이 마지막으로 present된 프레임 번호(0 = 아직 없음).
@@ -69,6 +97,31 @@ pub fn staging_age(now: u64) -> u8 {
 #[cfg(test)]
 mod age_tests {
     use super::*;
+
+    #[test]
+    fn clip_rect_clamps_to_surface_and_drops_empty() {
+        assert_eq!(
+            clip_rect((10, 20, 30, 40), 100, 100),
+            Some((10, 20, 40, 60))
+        );
+        assert_eq!(
+            clip_rect((-5, -5, 10, 10), 100, 100),
+            Some((0, 0, 5, 5)),
+            "음수 원점"
+        );
+        assert_eq!(
+            clip_rect((90, 90, 50, 50), 100, 100),
+            Some((90, 90, 100, 100)),
+            "표면 밖 잘림"
+        );
+        assert_eq!(clip_rect((100, 0, 10, 10), 100, 100), None, "오른쪽 밖");
+        assert_eq!(clip_rect((0, 0, 0, 10), 100, 100), None, "폭 0");
+        assert_eq!(
+            clip_rect((0, 0, i32::MAX, i32::MAX), 100, 100),
+            Some((0, 0, 100, 100)),
+            "넘침 없음"
+        );
+    }
 
     #[test]
     fn surface_age_counts_frames_since_last_present() {
@@ -592,7 +645,8 @@ mod mac {
             }
         }
 
-        pub(super) fn present_locked(&mut self) {
+        /// `damage` = 이번 프레임에 그린 사각형(알파 채우기 범위 · 254차) · `None` = 표면 전체.
+        pub(super) fn present_locked(&mut self, damage: Option<&[(i32, i32, i32, i32)]>) {
             let Some(i) = self.locked.take() else {
                 return;
             };
@@ -600,12 +654,30 @@ mod mac {
             // SAFETY: 우리가 잠근 표면 · 중간 버퍼는 `w × h` · 표면은 `row_bytes × h` 바이트.
             unsafe {
                 // ★ 알파 채우기: 그리는 쪽은 `0x00RRGGBB`를 쓰는데 'BGRA' 표면의 알파 0은 **투명**으로 합성된다
-                //   (`opaque`는 힌트일 뿐 — 실측: 창이 하얗게 나온다). 한 번 훑어 0xFF를 채운다(자동 벡터화 · 레티나 메인 창 ≈ 1~2 ms).
+                //   (`opaque`는 힌트일 뿐 — 실측: 창이 하얗게 나온다). 한 번 훑어 0xFF를 채운다(자동 벡터화 · 레티나 메인 창 ≈ 1~2 ms)
+                //   — 254차: 부분 프레임은 그린 사각형만(T-201 ⓐ · 나머지는 지난 present 때 이미 0xFF).
                 let base = IOSurfaceGetBaseAddress(raw);
                 if row_bytes == self.w * 4 {
                     let px = std::slice::from_raw_parts_mut(base.cast::<u32>(), self.w * self.h);
-                    for p in px.iter_mut() {
-                        *p |= 0xFF00_0000;
+                    match damage {
+                        None => {
+                            for p in px.iter_mut() {
+                                *p |= 0xFF00_0000;
+                            }
+                        }
+                        Some(rects) => {
+                            for &r in rects {
+                                let Some((x0, y0, x1, y1)) = super::clip_rect(r, self.w, self.h)
+                                else {
+                                    continue;
+                                };
+                                for y in y0..y1 {
+                                    for p in &mut px[y * self.w + x0..y * self.w + x1] {
+                                        *p |= 0xFF00_0000;
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
                     for y in 0..self.h {
