@@ -42,6 +42,9 @@ pub struct StatusPart {
     /// 표식 깜빡임 단계(0 = 깜빡이지 않음 · 흐리게 / 1 = 느리게 … 9 = 빠르게 — [`StatusBar::blink_half_ms`]). 호스트가
     /// [`StatusBar::tick`]을 불러야 움직인다.
     pub blink: u8,
+    /// 견본이 있어도 글을 **왼쪽** 정렬(252차 · nexa-dir3 10-31 패널 상태 줄 "n개 항목" — 폭은 견본으로 고정하되 글은 글머리에 ·
+    /// 기본 false = 견본 있으면 오른쪽(숫자 자리 맞춤)).
+    pub align_left: bool,
 }
 
 /// 줄 표식 모양(147차).
@@ -90,6 +93,13 @@ impl StatusPart {
     #[must_use]
     pub fn hints(mut self, hints: Vec<String>) -> Self {
         self.hints = hints;
+        self
+    }
+
+    /// 견본이 있어도 글을 왼쪽 정렬(체이닝 · 252차) — 글머리가 제자리에 있어야 하는 문장형 칸(항목 수 등).
+    #[must_use]
+    pub fn left(mut self) -> Self {
+        self.align_left = true;
         self
     }
 
@@ -605,8 +615,8 @@ impl Widget for StatusBar {
                     } else {
                         ty + ((seg_h - ctx.text_height()) as f32 * 0.75).round() as i32
                     };
-                    // 견본이 있는 조각(숫자) = 오른쪽 정렬 · 없으면 왼쪽.
-                    let tx = if p.hints.is_empty() {
+                    // 견본이 있는 조각(숫자) = 오른쪽 정렬 · 없거나 `align_left`면 왼쪽.
+                    let tx = if p.hints.is_empty() || p.align_left {
                         x
                     } else {
                         x + w - ctx.text_width(&p.text)
@@ -946,5 +956,36 @@ mod tests {
         sb.paint(&mut rec, &Theme::dark());
         let rx = rec.texts[0].0;
         assert_eq!(rx, 8);
+    }
+
+    /// 견본 왼쪽 정렬(252차 · nexa-dir3 패널 상태 줄): 같은 견본·글이라도 `left()`면 글이 조각 왼끝 · 아니면 오른끝 — 칸 자리는 둘 다
+    /// 견본 폭으로 같다(폭 고정은 유지하면서 문장형 칸의 글머리를 제자리에).
+    #[test]
+    fn hinted_part_aligns_left_when_asked() {
+        let paint = |left: bool| {
+            let mut p =
+                StatusPart::new("3 items").hints(vec!["999 of 999 items (filtered)".into()]);
+            if left {
+                p = p.left();
+            }
+            let mut sb = StatusBar::new();
+            let mut inv = Invalidations::default();
+            sb.set_bounds(Rect::new(0, 0, 400, 22), &mut inv);
+            sb.set_segments(vec![StatusSeg::with_parts("folder", vec![p])], &mut inv);
+            let mut rec = RecordCtx::with_surface(400, 60);
+            sb.paint(&mut rec, &Theme::dark());
+            let x = rec
+                .texts
+                .iter()
+                .find(|t| t.3 == "3 items")
+                .map(|t| t.0)
+                .expect("글");
+            (x, sb.seg_rect("folder").expect("칸"))
+        };
+        let (lx, lr) = paint(true);
+        let (rx, rr) = paint(false);
+        assert_eq!(lr, rr, "칸 자리는 견본 폭으로 같다");
+        assert!(lx < rx, "왼쪽 정렬 글이 더 왼쪽: {lx} < {rx}");
+        assert!(!StatusPart::new("a").align_left && StatusPart::new("a").left().align_left);
     }
 }
