@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-10-31 (252차 · macOS)** — nexa-ctl `StatusPart::left()` / `align_left`(폭 견본은 쓰되 글은 왼쪽 정렬 · 추가 · 기본 불변) · nexa-dir3 패널 상태 줄 폴더 칸 · cb0e374 — [journal 10-31 §6](journal/2026-10-31.md).
 - **2026-10-31 (249차 · macOS)** — nexa-ctl `SearchBox::tooltip_visible()` · `toggle_rect(which)`(토글 툴팁 = 틀 밖 팝업 · 호스트 전체 프레임 판정 · 추가) · nexa-dir3 macOS 툴팁 깜빡임 · 2ffbbbc — [journal 10-31 §3](journal/2026-10-31.md).
 - **2026-10-31 (251차 · Windows)** — nexa-ctl 미니맵 자동 숨김 `set_minimap_autohide` · `minimap_shown` · `MINIMAP_AUTOHIDE_MS`(추가 · 기본 off) · nexa-sql 192차 25차 T-110 3-1 — [journal 10-31 §5](journal/2026-10-31.md).
 - **2026-10-31 (248차 · macOS)** — nexa-sys `LayerPresenter` `Frame::age()`(표면 나이 · `surface_age`/`staging_age` 순수 함수 · 추가) · nexa-dir3 macOS 부분 그리기 · af368ff — [journal 10-31 §2](journal/2026-10-31.md).
