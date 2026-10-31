@@ -347,6 +347,22 @@ impl SearchBox {
         self.tb.popup_open()
     }
 
+    /// 토글 툴팁이 지금 보이는가(= `paint_popup`이 틀 **밖**에 그린다) — 호스트의 부분 다시 그리기가 전체로 바꾸는 판정
+    /// (nexa-dir3 10-31 macOS "툴팁이 안 보이거나 깜빡임": 이 판정이 빠져 부분 프레임의 클립에 잘렸다).
+    #[must_use]
+    pub fn tooltip_visible(&self) -> bool {
+        self.tooltip.visible()
+    }
+
+    /// 토글 버튼의 사각형(배치 뒤 · 없는 토글 = None) — 호스트 시험·키보드 포커스 표시용.
+    #[must_use]
+    pub fn toggle_rect(&self, which: SearchToggle) -> Option<Rect> {
+        self.toggles
+            .iter()
+            .find(|t| t.kind == which)
+            .map(|t| t.rect)
+    }
+
     /// 틱 — 텍스트박스(혜성 · hover) · 토글 페이드 · 툴팁 지연. 모양이 바뀌었으면 true.
     pub fn tick(&mut self, now_ms: u64) -> bool {
         let mut changed = self.tb.tick(now_ms);
@@ -598,6 +614,34 @@ mod tests {
         assert!(
             sb.textbox().bounds().right() <= rects[0].x,
             "상자는 토글 왼쪽"
+        );
+    }
+
+    /// 토글 툴팁(10-31): 토글 위에 머물고 지연이 지나 틱이 돌면 `tooltip_visible` · 벗어나면 꺼짐 · 머무는 동안 틀 무효화.
+    #[test]
+    fn toggle_tooltip_visible_after_hover_tick_and_hides_on_leave() {
+        let mut sb = SearchBox::new("find");
+        let mut inv = Invalidations::default();
+        sb.set_bounds(Rect::new(10, 5, 300, 25), &mut inv);
+        sb.set_tips("case", "word", "regex");
+        sb.set_tooltip_delay_ms(0);
+        let r = sb.toggle_rect(SearchToggle::Case).expect("토글");
+        assert!(!sb.tooltip_visible());
+        let _ = sb.handle(
+            &InputEvent::MouseMove {
+                x: r.x + r.w / 2,
+                y: r.y + r.h / 2,
+            },
+            &mut inv,
+        );
+        assert!(!sb.tooltip_visible(), "지연 전(틱 전)엔 아직");
+        assert!(sb.tick(0), "지연 0 → 첫 틱에 보임 = 모양 바뀜");
+        assert!(sb.tooltip_visible());
+        let _ = sb.handle(&InputEvent::MouseMove { x: 0, y: 0 }, &mut inv);
+        assert!(!sb.tooltip_visible(), "벗어남 = 사라짐");
+        assert!(
+            sb.toggle_rect(SearchToggle::Scope).is_none(),
+            "범위 토글은 기본 없음"
         );
     }
 
