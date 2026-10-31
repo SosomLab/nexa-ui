@@ -19,12 +19,22 @@ pub struct Frame<'a> {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     owner: &'a mut LayerPresenter,
     pixels: &'a mut [u32],
+    /// 이 버퍼 내용의 나이([`Frame::age`]).
+    age: u8,
 }
 
 impl Frame<'_> {
-    /// `폭 × 높이` 픽셀(행 우선 · 위에서 아래). 내용은 **이전 프레임을 보존하지 않는다**(전부 다시 그린다).
+    /// `폭 × 높이` 픽셀(행 우선 · 위에서 아래). 내용 = 이 표면에 **마지막으로 그렸던 프레임**(몇 프레임 전인지는 [`Frame::age`]) —
+    /// `age` 0이면 미정(전부 다시 그린다).
     pub fn pixels_mut(&mut self) -> &mut [u32] {
         self.pixels
+    }
+
+    /// 버퍼 나이(softbuffer `Buffer::age`와 같은 뜻 · 10-31 nexa-dir3 macOS 부분 그리기): 0 = 내용 미정(새 표면 · 크기 변경 뒤) ·
+    /// 1 = 바로 지난 프레임 · n = n프레임 전 내용(삼중 버퍼 회전이면 보통 3). 소비자는 지난 n−1 프레임의 damage를 합쳐 부분 그리기한다.
+    #[must_use]
+    pub fn age(&self) -> u8 {
+        self.age
     }
 
     /// 읽기 전용 보기.
@@ -37,6 +47,47 @@ impl Frame<'_> {
     pub fn present(self) {
         #[cfg(target_os = "macos")]
         self.owner.present_locked();
+    }
+}
+
+/// 표면 나이(순수 · 10-31): `now` = 지금까지 present한 프레임 수 · `surf` = 그 표면이 마지막으로 present된 프레임 번호(0 = 아직 없음).
+/// 결과 = 이번 프레임(`now + 1`) 기준으로 표면 내용이 몇 프레임 전 것인가 — 1 = 바로 지난 프레임 · 0 = 모름(새 표면) · 255 상한.
+#[must_use]
+pub fn surface_age(now: u64, surf: u64) -> u8 {
+    if surf == 0 || surf > now {
+        return 0;
+    }
+    (now + 1 - surf).min(255) as u8
+}
+
+/// 중간 버퍼 경로(행 간격 ≠ 폭 × 4)의 나이(순수): 모든 프레임이 같은 버퍼를 거치므로 한 번이라도 냈으면 1 · 아니면 0.
+#[must_use]
+pub fn staging_age(now: u64) -> u8 {
+    u8::from(now > 0)
+}
+
+#[cfg(test)]
+mod age_tests {
+    use super::*;
+
+    #[test]
+    fn surface_age_counts_frames_since_last_present() {
+        assert_eq!(surface_age(0, 0), 0, "아직 아무 프레임도 없다");
+        assert_eq!(surface_age(5, 0), 0, "새 표면");
+        assert_eq!(surface_age(5, 5), 1, "앞 장(이론상) = 바로 지난 프레임");
+        assert_eq!(
+            surface_age(3, 1),
+            3,
+            "삼중 회전: 1·2·3 뒤 4번째는 1번 표면 = 3프레임 전"
+        );
+        assert_eq!(
+            surface_age(2, 5),
+            0,
+            "미래 번호(크기 변경 뒤 초기화 누락)도 모름으로"
+        );
+        assert_eq!(surface_age(1_000, 1), 255, "상한");
+        assert_eq!(staging_age(0), 0);
+        assert_eq!(staging_age(7), 1);
     }
 }
 
@@ -259,6 +310,8 @@ mod mac {
         raw: *mut c_void,
         /// 행 바이트(정렬 때문에 `폭 × 4`보다 클 수 있다).
         row_bytes: usize,
+        /// 이 표면을 마지막으로 present한 프레임 번호(0 = 아직) — [`Frame::age`] 계산.
+        seq: u64,
     }
 
     impl Drop for Surf {
@@ -290,6 +343,8 @@ mod mac {
         skips: u8,
         /// 진단: 상한을 넘어 **바쁜 장에 강제로 그린** 횟수(이때만 빈 프레임이 보일 수 있다 · 0이어야 정상).
         forced: u64,
+        /// 지금까지 present한 프레임 수(표면 나이 · 크기 변경 때 0으로).
+        seq: u64,
         /// 행 간격이 폭과 다를 때만 쓰는 중간 버퍼.
         staging: Vec<u32>,
         /// sRGB 색 공간의 직렬화(표면마다 태그로 단다).
@@ -363,6 +418,7 @@ mod mac {
                 prev: None,
                 locked: None,
                 busy_reuse: 0,
+                seq: 0,
                 skips: 0,
                 forced: 0,
                 staging: Vec::new(),
@@ -387,6 +443,7 @@ mod mac {
             self.pool.clear();
             self.front = None;
             self.locked = None;
+            self.seq = 0;
             // SAFETY: 우리 레이어 · 메인 스레드.
             unsafe {
                 self.begin();
@@ -433,6 +490,11 @@ mod mac {
             self.locked = Some(i);
             let n = self.w * self.h;
             let direct = row_bytes == self.w * 4;
+            let age = if direct {
+                super::surface_age(self.seq, self.pool[i].seq)
+            } else {
+                super::staging_age(self.seq)
+            };
             let pixels: &mut [u32] = if direct {
                 // SAFETY: 표면 메모리는 `row_bytes × h` = `w × 4 × h` 바이트 · 페이지 정렬(u32 정렬 충족) · 잠겨 있는 동안 우리만 쓴다.
                 unsafe { std::slice::from_raw_parts_mut(base.cast::<u32>(), n) }
@@ -444,6 +506,7 @@ mod mac {
             Some(Frame {
                 owner: self,
                 pixels,
+                age,
             })
         }
 
@@ -521,7 +584,11 @@ mod mac {
                     CFRelease(raw);
                     return None;
                 }
-                Some(Surf { raw, row_bytes })
+                Some(Surf {
+                    raw,
+                    row_bytes,
+                    seq: 0,
+                })
             }
         }
 
@@ -559,6 +626,8 @@ mod mac {
             }
             self.prev = self.front;
             self.front = Some(i);
+            self.seq += 1;
+            self.pool[i].seq = self.seq;
         }
 
         /// 암묵 애니메이션 없는 트랜잭션.
