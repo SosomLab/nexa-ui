@@ -647,6 +647,10 @@ pub struct TextBox {
     minimap_lay: std::cell::Cell<(i32, i32, usize, usize)>,
     /// 미니맵 뷰포트 상자 hover 페이드(버튼과 같은 `Fast` · 기존 부품).
     minimap_hover: crate::tokens::Fade,
+    /// ★ T-110 3-2(nexa-sql 10-31 · docs/46): 행당 px(1~3 · 0 = 자동 = 문서 전체가 띠에 들어가는 가장 큰 배율 · 기본 2).
+    minimap_scale: u8,
+    /// ★ T-110 3-3: 띠를 거터 **오른쪽·본문 왼쪽**에(기본 = 오른쪽 가장자리).
+    minimap_left: bool,
     /// 미니맵 드래그 중(클릭 위치를 뷰포트 가운데로 · 따라감).
     minimap_drag: bool,
     /// 뷰포트 상자 — 색(None = Sublime식 회색 `0x808080`) · 알파(None = 0.18 · hover +0.10) · 테두리(기본 없음 · 사용자 09-17).
@@ -1076,6 +1080,8 @@ impl TextBox {
             minimap_rect: std::cell::Cell::new(Rect::default()),
             minimap_lay: std::cell::Cell::new((0, 1, 0, 1)),
             minimap_hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Fast),
+            minimap_scale: 2,
+            minimap_left: false,
             minimap_drag: false,
             minimap_box: (None, None, false),
             minimap_errors: Vec::new(),
@@ -1205,6 +1211,21 @@ impl TextBox {
     /// 그리지 않는다(켬 설정은 유지 · 넓어지면 다시 나온다) · 0 = 늘 그린다.
     pub fn set_minimap_min_cols(&mut self, cols: usize) {
         self.minimap_min_cols = cols;
+    }
+
+    /// ★ T-110 3-2: 미니맵 배율(행당 px) — `0` = 자동(문서 전체가 띠 높이에 들어가는 가장 큰 배율 · 긴 파일 1 · 짧은 파일 3) · 1~3 고정.
+    pub fn set_minimap_scale(&mut self, scale: u8) {
+        self.minimap_scale = scale.min(3);
+    }
+
+    /// ★ T-110 3-3: 미니맵을 왼쪽(거터와 본문 사이)에 둘지 — 기본 오른쪽(스크롤바 안쪽).
+    pub fn set_minimap_left(&mut self, left: bool) {
+        self.minimap_left = left;
+    }
+
+    #[must_use]
+    pub fn minimap_left(&self) -> bool {
+        self.minimap_left
     }
 
     /// 미니맵 띠 영역(마지막 페인트 실측 · 꺼져 있거나 단일 행이면 빈 Rect) — 호스트 히트 테스트·테스트용.
@@ -3929,14 +3950,23 @@ impl TextBox {
             let body = b.right() - self.s(13) - self.s(self.minimap_w) - self.s(4) - tx;
             (body / cw) as usize >= self.minimap_min_cols
         };
-        let band = if self.minimap && self.multiline && fits {
+        // ★ T-110 3-3: 왼쪽 배치 = 거터 바로 오른쪽(본문은 띠 뒤 4px부터) · 오른쪽 = 종전(스크롤바 안쪽).
+        let (band, tx) = if self.minimap && self.multiline && fits {
             let mw = self.s(self.minimap_w);
-            Rect::new(b.right() - self.s(13) - mw, b.y + 1, mw, b.h - 2)
+            if self.minimap_left {
+                let band = Rect::new(tx, b.y + 1, mw, b.h - 2);
+                (band, tx + mw + self.s(4))
+            } else {
+                (
+                    Rect::new(b.right() - self.s(13) - mw, b.y + 1, mw, b.h - 2),
+                    tx,
+                )
+            }
         } else {
-            Rect::default()
+            (Rect::default(), tx)
         };
         self.minimap_rect.set(band);
-        let right_edge = if band.w > 0 {
+        let right_edge = if band.w > 0 && !self.minimap_left {
             band.x - self.s(4)
         } else {
             b.right() - self.s(10)
@@ -4230,7 +4260,15 @@ impl TextBox {
         let rem = if self.scroll_snap { 0 } else { rem };
         // ★ 미니맵 배치 — 행당 s(2)px · 문서가 띠보다 길면 띠 자체가 비례 스크롤(본문 스크롤 px : 최대 = 띠 오프셋 : 여유).
         //   창 첫 행(`mm_start`)의 강조 상태는 아래 hl 루프가 지나가며 잡는다(mm_start ≤ top이라 추가 비용 0).
-        let mm_row_h = self.s(2).max(1);
+        // ★ T-110 3-2: 행당 px = 배율(1~3) · 자동(0) = 문서 전체가 띠 높이에 들어가는 가장 큰 값(없으면 1).
+        let mm_unit = match self.minimap_scale {
+            0 => (1..=3u8)
+                .rev()
+                .find(|&k| n_rows as i64 * i64::from(self.s(i32::from(k))) <= i64::from(band.h))
+                .unwrap_or(1),
+            k => k,
+        };
+        let mm_row_h = self.s(i32::from(mm_unit)).max(1);
         let (mm_off, mm_start, mm_rows) = if band.w > 0 {
             let total = n_rows as i64 * i64::from(mm_row_h);
             let travel = (total - i64::from(band.h)).max(0);

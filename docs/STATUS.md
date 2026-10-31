@@ -4,6 +4,7 @@
 
 - **2026-10-31 (249차 · mac · nexa-dir3 10-31)** — nexa-ctl `SearchBox::tooltip_visible`/`toggle_rect`(추가 · 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **2ffbbbc** · [journal 10-31 §3](journal/2026-10-31.md).
 - **2026-10-31 (248차 · mac · nexa-dir3 10-31)** — nexa-sys `LayerPresenter` `Frame::age()`(추가 · 호출 안 하면 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **af368ff** · [journal 10-31 §2](journal/2026-10-31.md).
+- **2026-10-31 (250차 · win · nexa-sql 192차 23차)** — nexa-ctl 미니맵 배율 `set_minimap_scale` · 왼쪽 배치 `set_minimap_left`(추가 · 기본 = 종전 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · [journal 10-31 §2](journal/2026-10-31.md).
 - **2026-10-31 (247차 · win · nexa-sql 188차)** — nexa-ctl `Toolbar::reorder` · `ToolDock::set_group_visible`(추가 · 기본 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · [journal 10-30 §4](journal/2026-10-30.md).
 - **2026-10-31 (246차 · mac · nexa-dir3 10-31)** — nexa-fs macOS OS 아이콘·종류 이름(`shell.rs` macOS `imp` · **동작 변경 macOS만** — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **0a18346** · [journal 10-31 §1](journal/2026-10-31.md).
 - **2026-10-30 (245차 · win · nexa-sql 181차)** — nexa-ctl `TextBox::set_git_baseline`/`git_marks`/`set_minimap_git`(추가 · 기본 동작 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · [journal 10-30 §3](journal/2026-10-30.md).
