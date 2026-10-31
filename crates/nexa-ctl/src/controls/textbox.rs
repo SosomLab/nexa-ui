@@ -539,6 +539,8 @@ pub struct TextBox {
     gutter_labels: Vec<(usize, String)>,
     /// 미니맵 표식(논리 줄 → 색) — 오류 줄(`minimap_errors`)과 같은 방식으로 오른쪽 가장자리 점(북마크 · nexa-sql docs/69 U-2).
     minimap_marks: Vec<(usize, Color)>,
+    /// ★ T-110 3-4(nexa-sql 10-31): 섹션 헤더(논리 줄 → 라벨) — 띠의 그 줄 자리에 작은 글자(VS Code 1.85 section headers).
+    minimap_sections: Vec<(usize, String)>,
     /// 줄 끝 인라인 라벨(논리 줄 → 흐린 글) — 본문 뒤에 여백을 두고 `text_dim`으로(북마크 라벨 · 편집 대상 아님).
     inline_labels: Vec<(usize, String)>,
     /// ★ 저장 기준선(마지막 저장/열기 시점의 줄들) — 있으면 거터 띠에 줄 변경 유형을 그린다(nexa-sql 사용자 09-17 · Sublime mini_diff/VS Code).
@@ -1031,6 +1033,7 @@ impl TextBox {
             line_marks: Vec::new(),
             gutter_labels: Vec::new(),
             minimap_marks: Vec::new(),
+            minimap_sections: Vec::new(),
             inline_labels: Vec::new(),
             baseline: None,
             diff_cur: std::cell::RefCell::new(LineHashCache::default()),
@@ -2371,6 +2374,11 @@ impl TextBox {
     /// 미니맵 표식(논리 줄 0 기준 → 색) — 행 전체 옅게 + 오른쪽 가장자리 점(오류 줄과 같은 자리 · 오류가 우선).
     pub fn set_minimap_marks(&mut self, marks: Vec<(usize, Color)>) {
         self.minimap_marks = marks;
+    }
+
+    /// ★ T-110 3-4: 섹션 헤더(논리 줄 0 기준 → 짧은 라벨) — 띠의 그 줄 자리에 작은 글자 + 옅은 배경(호스트가 주석 구분선을 훑어 준다).
+    pub fn set_minimap_sections(&mut self, sections: Vec<(usize, String)>) {
+        self.minimap_sections = sections;
     }
 
     /// 줄 끝 인라인 라벨(논리 줄 0 기준 → 글) — 그 논리 줄의 마지막 행 뒤에 흐리게 그린다(캐럿·선택에 영향 없음).
@@ -5006,6 +5014,40 @@ impl TextBox {
                         }
                     }
                 }
+            }
+            // ★ T-110 3-4(nexa-sql 10-31): 섹션 헤더 라벨 — 그 논리 줄의 첫 행 자리에 작은 글자(Status 글꼴 -1px · 옅은 배경 띠 ·
+            //   줄 위 가는 선 · 띠 안 clip · 뷰포트 상자 아래).
+            if !self.minimap_sections.is_empty() {
+                ctx.select_font_sized(FontSlot::Status, false, -1.0);
+                let th = ctx.text_height();
+                for (li, label) in &self.minimap_sections {
+                    let row = if self.wrap {
+                        let Some(&st) = logical_starts.get(*li) else {
+                            continue;
+                        };
+                        match window.iter().position(|(s, _)| *s == st) {
+                            Some(wi) => mm_start + wi,
+                            None => continue,
+                        }
+                    } else {
+                        *li
+                    };
+                    if row < mm_start || row >= mm_start + window.len() {
+                        continue;
+                    }
+                    let y = mm_y(row);
+                    let h = th.max(mm_row_h);
+                    let r = Rect::new(band.x + 1, y - (h - mm_row_h) / 2, band.w - 1, h)
+                        .intersection(&band);
+                    if r.is_empty() {
+                        continue;
+                    }
+                    // 코드 줄무늬 위에 겹치므로 배경은 거의 불투명 · 글자는 본문색(협업 31차 관찰 · 가독성).
+                    ctx.fill_rect_alpha(r, theme.field_bg, 0.92);
+                    ctx.fill_rect(Rect::new(r.x, y.max(r.y), r.w, 1), theme.text_dim);
+                    ctx.text(r.x + self.s(3), r.y, r, label, theme.text);
+                }
+                ctx.select_font(FontSlot::Base, false);
             }
             // 뷰포트 상자 — 지금 보이는 행 범위(픽셀 잔여 반영) · 반투명 채움 + 테두리 · hover 시 진하게.
             let hov = self.minimap_hover.value().clamp(0.0, 1.0);
