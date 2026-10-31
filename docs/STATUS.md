@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-10-31 (253차 · win · nexa-sql 192차 31차)** — nexa-ctl 미니맵 섹션 헤더 `set_minimap_sections`(추가 · 빈 목록 = 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **55fe8d1** · [journal 10-31 §7](journal/2026-10-31.md).
 - **2026-10-31 (252차 · mac · nexa-dir3 10-31)** — nexa-ctl `StatusPart::left()`/`align_left`(추가 · 기본 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **cb0e374** · [journal 10-31 §6](journal/2026-10-31.md).
 - **2026-10-31 (249차 · mac · nexa-dir3 10-31)** — nexa-ctl `SearchBox::tooltip_visible`/`toggle_rect`(추가 · 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **2ffbbbc** · [journal 10-31 §3](journal/2026-10-31.md).
 - **2026-10-31 (251차 · win · nexa-sql 192차 25차)** — nexa-ctl 미니맵 자동 숨김 `set_minimap_autohide`(추가 · 기본 off — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · [journal 10-31 §5](journal/2026-10-31.md).
