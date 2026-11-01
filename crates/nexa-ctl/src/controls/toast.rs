@@ -168,6 +168,11 @@ impl Toasts {
 
     /// 남아 있는 카드 수(214차 · 호스트 시험 · 영역별 토스트 배분 확인).
     #[must_use]
+    /// 살아 있는 토스트의 본문(오래된 것부터) — 시험이 문구를 단언할 때(nexa-dir GAP-029 · 11-01 · 그리기와 무관).
+    pub fn bodies(&self) -> Vec<String> {
+        self.items.iter().map(|t| t.body.clone()).collect()
+    }
+
     pub fn len(&self) -> usize {
         self.items.len()
     }
