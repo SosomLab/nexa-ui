@@ -1444,13 +1444,15 @@ impl FilePicker {
             nexa_fs::sort_by(&mut self.entries, &self.sort_keys);
         }
         let exts = self.current_filter().exts.clone();
-        let top: Vec<Entry> = self
-            .entries
+        // ★ T-85(nexa-sql docs/37 P-4 잔여 · 11-01): 보이는 항목 전량을 깊은 복사(`.cloned()`)하던 것을 **사본 0**으로 — `make_row`가
+        //   아이콘 캐시(&mut self)를 쓰므로 목록을 잠시 꺼내(`mem::take`) 참조로 행을 만들고 되돌린다(정렬·필터·행 구성은 종전과 같음).
+        let entries = std::mem::take(&mut self.entries);
+        let nodes: Vec<TreeNode> = entries
             .iter()
             .filter(|e| e.is_dir || exts.is_empty() || exts.contains(&e.ext()))
-            .cloned()
+            .map(|e| self.make_row(e))
             .collect();
-        let nodes: Vec<TreeNode> = top.iter().map(|e| self.make_row(e)).collect();
+        self.entries = entries;
         let n_rows = nodes.len();
         // 정렬 배지 — ▲/▼ + 결합 순번(키가 둘 이상일 때) · 키가 비면 이름 ▲.
         let keys = &self.sort_keys;
