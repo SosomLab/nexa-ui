@@ -5,6 +5,7 @@
 //! 편집기 밖(UI 없음)이라 테스트가 쉽다.
 
 use crate::highlight::{Highlighter, TokenKind};
+use std::borrow::Cow;
 
 /// 쌍 종류.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -151,6 +152,23 @@ const CK_EVERY: usize = 64;
 /// 닫힌 쌍 한 건(스캔 순서 · open, close, kind, parent_open).
 type Done = (usize, usize, PairKind, Option<usize>);
 
+/// ★ T-91 수렴 재스캔의 입력 — 편집이 닿은 줄 구간(새 줄 번호 · `[lo, hi)`)과 `hi`번째 줄의 시작 글자 인덱스(끝이면 본문 길이).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Region {
+    pub lo: usize,
+    pub hi: usize,
+    pub end_char: usize,
+}
+
+/// 옛 표 → 새 본문으로 결과를 밀 때의 차이(줄 수 · 글자 수)와 새 본문의 길이·줄 수.
+#[derive(Clone, Copy, Debug)]
+struct Shift {
+    line_delta: isize,
+    char_delta: isize,
+    len: usize,
+    lines: usize,
+}
+
 /// 스캐너 상태 스냅숏 — `line`번째 줄을 읽기 **직전**의 상태.
 #[derive(Clone, Debug)]
 struct Checkpoint {
@@ -180,6 +198,11 @@ pub struct PairTable {
     checkpoints: Vec<Checkpoint>,
     /// 표를 만든 조건(강조기 이름 · 옵션) — 다르면 `rebuild`는 전체 스캔으로.
     sig: (Option<String>, PairOpts),
+    /// ★ T-91(11-03) 수렴 재스캔 재료: 끝까지 안 닫힌 코드 층 열림(스캔 순서 · `finish`가 짝 없음에 더하는 것) ·
+    ///   표를 만든 본문의 글자 수와 줄 수(편집 뒤 위치·줄 번호를 미는 데 씀 · [`PairTable::rebuild_lines`]).
+    tail_unmatched: Vec<(usize, PairKind)>,
+    len: usize,
+    lines: usize,
 }
 
 /// 한 줄씩 걷는 스캐너 — [`PairTable::build`](전체)와 [`PairTable::rebuild`](체크포인트 재개)가 같은 코드를 쓴다.
@@ -389,14 +412,92 @@ impl<'a> Scanner<'a> {
         if let Some(&f) = self.floors.first() {
             self.stack.truncate(f);
         }
+        let len = if self.line == 0 { 0 } else { self.base - 1 };
+        let lines = self.line;
+        let sig = (self.hl.map(|h| h.name().to_string()), self.opts);
+        PairTable::assemble(
+            self.done,
+            self.unmatched,
+            std::mem::take(&mut self.stack),
+            self.checkpoints,
+            sig,
+            len,
+            lines,
+        )
+    }
+
+    /// ★ T-91(11-03) 수렴 이어 붙이기: 지금 상태가 옛 표의 체크포인트 `j`(옛 줄 번호)와 같아졌다 — 그 뒤 옛 결과(닫힌 쌍 ·
+    ///   짝 없음 · 체크포인트 · 꼬리 열림)를 위치(`map`)·줄 번호(`line_delta`)만 밀어 그대로 쓴다. 결과는 끝까지 읽은 것과 같다.
+    fn splice(
+        mut self,
+        old: &PairTable,
+        j: usize,
+        sh: Shift,
+        map: &dyn Fn(usize) -> usize,
+    ) -> PairTable {
+        let Shift {
+            line_delta,
+            char_delta,
+            len,
+            lines,
+        } = sh;
+        let ck = &old.checkpoints[j];
+        let done_off = self.done.len() as isize - ck.done_len as isize;
+        let unm_off = self.unmatched.len() as isize - ck.unmatched_len as isize;
+        self.done.extend(
+            old.done_raw[ck.done_len..]
+                .iter()
+                .map(|d| (map(d.0), map(d.1), d.2, d.3.map(map))),
+        );
+        self.unmatched.extend(
+            old.unmatched_raw[ck.unmatched_len..]
+                .iter()
+                .map(|&(p, k)| (map(p), k)),
+        );
+        self.checkpoints
+            .extend(old.checkpoints[j..].iter().map(|c| Checkpoint {
+                line: (c.line as isize + line_delta) as usize,
+                base: (c.base as isize + char_delta) as usize,
+                state: c.state,
+                stack: c.stack.iter().map(|&(p, k)| (map(p), k)).collect(),
+                floors: c.floors.clone(),
+                done_len: (c.done_len as isize + done_off) as usize,
+                unmatched_len: (c.unmatched_len as isize + unm_off) as usize,
+            }));
+        let tail: Vec<(usize, PairKind)> = old
+            .tail_unmatched
+            .iter()
+            .map(|&(p, k)| (map(p), k))
+            .collect();
+        let sig = (self.hl.map(|h| h.name().to_string()), self.opts);
+        PairTable::assemble(
+            self.done,
+            self.unmatched,
+            tail,
+            self.checkpoints,
+            sig,
+            len,
+            lines,
+        )
+    }
+}
+
+impl PairTable {
+    /// 스캔 결과 → 표(쌍 · 닫힘 순 · 짝 없음 · 표시 열) — `finish`(끝까지 읽음)와 `splice`(수렴)가 같은 조립을 쓴다.
+    fn assemble(
+        done: Vec<Done>,
+        unmatched_raw: Vec<(usize, PairKind)>,
+        tail: Vec<(usize, PairKind)>,
+        checkpoints: Vec<Checkpoint>,
+        sig: (Option<String>, PairOpts),
+        len: usize,
+        lines: usize,
+    ) -> PairTable {
         // 꼬리의 짝 없음은 스캔 순서 기록(`unmatched_raw`)에 넣지 않는다 — 재개 때 스택에서 다시 나온다.
-        let mut unmatched = self.unmatched.clone();
-        for (o, k) in &self.stack {
-            unmatched.push((*o, *k));
-        }
+        let mut unmatched = unmatched_raw.clone();
+        unmatched.extend(tail.iter().copied());
         unmatched.sort_unstable();
         // `done`은 **닫힘 위치 순**(닫힐 때 기록) → 열림 순 인덱스 하나만 정렬하면 `close_order`는 그 역치환이다.
-        let done = &self.done;
         let mut by_open: Vec<u32> = (0..done.len() as u32).collect();
         by_open.sort_unstable_by_key(|&i| done[i as usize].0);
         let mut close_order: Vec<u32> = vec![0; done.len()];
@@ -455,28 +556,40 @@ impl<'a> Scanner<'a> {
             close_order,
             unmatched,
             marks,
-            done_raw: self.done,
-            unmatched_raw: self.unmatched,
-            checkpoints: self.checkpoints,
-            sig: (self.hl.map(|h| h.name().to_string()), self.opts),
+            done_raw: done,
+            unmatched_raw,
+            checkpoints,
+            sig,
+            tail_unmatched: tail,
+            len,
+            lines,
         }
     }
-}
 
-impl PairTable {
     /// 텍스트 전체 스캔. `hl`이 없으면 전부 평문으로 본다(인용부호는 문자열 시작/끝으로 직접 판정).
     #[must_use]
     pub fn build(text: &str, hl: Option<&dyn Highlighter>, opts: PairOpts) -> PairTable {
+        Self::build_lines(text.split('\n'), hl, opts)
+    }
+
+    /// 줄 단위 전체 스캔(개행 제외한 줄들) — 본문 전체 문자열을 만들지 않아도 된다(T-91 · 편집 버퍼의 줄 슬라이스).
+    #[must_use]
+    pub fn build_lines<'t>(
+        lines: impl IntoIterator<Item = impl AsRef<str> + 't>,
+        hl: Option<&dyn Highlighter>,
+        opts: PairOpts,
+    ) -> PairTable {
         let mut sc = Scanner::new(hl, opts);
-        for line in text.split('\n') {
-            sc.scan_line(line);
+        for line in lines {
+            sc.scan_line(line.as_ref());
         }
         sc.finish()
     }
 
-    /// ★ 증분 재스캔(T-145 · 10-26): `text`의 `first_changed_line` **앞 줄들이 이 표를 만든 본문과 같다**는 전제로, 그 앞의
-    /// 가장 가까운 체크포인트(64줄 단위)부터만 다시 읽는다. 강조기·옵션이 다르거나 체크포인트가 없으면 전체 스캔과 같다.
-    /// 결과는 [`PairTable::build`]와 **동일**(무작위 대조 시험).
+    /// ★ 증분 재스캔(T-145 · 10-26): `text`의 `first_changed_line` **앞 줄들이 이 표를 만든 본문과 같다**는 전제로, 그 줄 앞의
+    /// 가장 가까운 체크포인트(64줄 단위)부터만 다시 읽는다. 강조기·옵션이 다르거나 체크포인트가 없으면 전체 스캔.
+    /// 결과는 [`PairTable::build`]와 **동일**(무작위 대조 시험). 바뀐 구간의 끝을 모르므로 끝까지 읽는다 — 끝을 알면
+    /// [`PairTable::rebuild_lines`](수렴 · T-91)가 훨씬 싸다.
     #[must_use]
     pub fn rebuild(
         &self,
@@ -485,20 +598,97 @@ impl PairTable {
         opts: PairOpts,
         first_changed_line: usize,
     ) -> PairTable {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let n = lines.len();
+        let len = text.chars().count();
+        self.rebuild_lines(
+            |l| Cow::Borrowed(lines[l]),
+            n,
+            len,
+            hl,
+            opts,
+            Region {
+                lo: first_changed_line,
+                hi: n,
+                end_char: len,
+            },
+        )
+    }
+
+    /// ★ T-91(11-03) **수렴 재스캔**: 편집이 새 줄 번호 `[changed.0, changed.1)` 안에만 있었다는 전제(그 앞·뒤 줄은 옛 본문과
+    /// 같다)로 — ① 바뀐 첫 줄 앞 체크포인트에서 재개 ② `changed.1`부터는 줄을 읽기 전에 옛 표의 같은 자리 체크포인트(옛 줄 =
+    /// 새 줄 − 줄 수 차이)와 상태(강조 상태 · 괄호 스택 · 문자열 바닥 · 글자 위치)가 같은지 보고, 같아지는 **첫 자리에서 멈춘다**
+    /// ③ 나머지는 옛 결과를 글자 수 차이만큼 밀어 붙인다([`Scanner::splice`]). 보통 바뀐 줄 + 64줄 안에서 끝난다 —
+    /// 종전 `rebuild`는 바뀐 줄부터 **끝까지** 읽어 2 MB 본문 앞쪽에서 글자 하나 칠 때마다 50 ms가 들었다(journal 11-03 §9).
+    /// `line_at(l)` = 새 본문의 `l`번째 줄(개행 제외) · `line_count`/`len` = 새 본문의 줄 수·글자 수 ·
+    /// `changed` = [`Region`](바뀐 줄 구간 `[lo, hi)` + `hi`번째 줄 시작 글자 인덱스 · 끝이면 `len`).
+    /// 상태가 끝까지 안 맞으면(괄호를 열어 두는 편집 등) 끝까지 읽는다 = `build`와 같다. 결과는 늘 `build`와 **동일**.
+    #[must_use]
+    pub fn rebuild_lines<'b, F>(
+        &self,
+        line_at: F,
+        line_count: usize,
+        len: usize,
+        hl: Option<&dyn Highlighter>,
+        opts: PairOpts,
+        changed: Region,
+    ) -> PairTable
+    where
+        F: Fn(usize) -> Cow<'b, str>,
+    {
         let same = self.sig.1 == opts && self.sig.0.as_deref() == hl.map(Highlighter::name);
+        let (lo, hi) = (changed.lo.min(line_count), changed.hi.min(line_count));
         let ck_idx = same
-            .then(|| {
-                self.checkpoints
-                    .partition_point(|c| c.line <= first_changed_line)
-            })
+            .then(|| self.checkpoints.partition_point(|c| c.line <= lo))
             .and_then(|n| n.checked_sub(1));
         let Some(ck_idx) = ck_idx else {
-            return PairTable::build(text, hl, opts);
+            return Self::build_lines((0..line_count).map(&line_at), hl, opts);
+        };
+        let line_delta = line_count as isize - self.lines as isize;
+        let char_delta = len as isize - self.len as isize;
+        // 옛 본문에서 "바뀌지 않은 꼬리"가 시작하는 글자 인덱스 — 그 앞 위치는 그대로, 그 뒤는 `char_delta`만큼 민다.
+        let old_end = changed.end_char as isize - char_delta;
+        let map = move |p: usize| -> usize {
+            if (p as isize) < old_end {
+                p
+            } else {
+                (p as isize + char_delta) as usize
+            }
         };
         let from = self.checkpoints[ck_idx].line;
         let mut sc = Scanner::resume(hl, opts, self, ck_idx);
-        for line in text.split('\n').skip(from) {
-            sc.scan_line(line);
+        // 수렴 후보 = 옛 줄 번호가 `hi - line_delta` 이상인 첫 체크포인트부터 차례로.
+        let mut j = self
+            .checkpoints
+            .partition_point(|c| (c.line as isize) < hi as isize - line_delta);
+        for l in from..line_count {
+            if l >= hi {
+                let ol = l as isize - line_delta;
+                while j < self.checkpoints.len() && (self.checkpoints[j].line as isize) < ol {
+                    j += 1;
+                }
+                if let Some(ck) = self.checkpoints.get(j).filter(|c| c.line as isize == ol) {
+                    let same_state = sc.state == ck.state
+                        && sc.floors == ck.floors
+                        && sc.base as isize == ck.base as isize + char_delta
+                        && sc.stack.len() == ck.stack.len()
+                        && sc
+                            .stack
+                            .iter()
+                            .zip(&ck.stack)
+                            .all(|(a, b)| a.1 == b.1 && a.0 == map(b.0));
+                    if same_state {
+                        let sh = Shift {
+                            line_delta,
+                            char_delta,
+                            len,
+                            lines: line_count,
+                        };
+                        return sc.splice(self, j, sh, &map);
+                    }
+                }
+            }
+            sc.scan_line(&line_at(l));
         }
         sc.finish()
     }
@@ -584,6 +774,8 @@ impl PairTable {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
 
     /// 표의 관찰 가능한 내용(증분 ↔ 전체 대조용).
@@ -694,6 +886,176 @@ mod tests {
             observable(&inc2),
             observable(&PairTable::build(text, None, narrow))
         );
+    }
+
+    /// ★ T-91 수렴 재스캔(`rebuild_lines`) = 전체 스캔과 동일(무작위 대조 · 평문 + SQL · 500줄 · 편집 200회 · 구간 = 실제 바뀐 줄) ·
+    /// 체크포인트 줄은 늘 증가 · 길이·줄 수 기록 일치 · 수렴(끝까지 안 읽음)이 실제로 일어난다.
+    #[test]
+    fn rebuild_lines_converges_and_matches_build() {
+        let alphabet: Vec<char> = "ab (([[{{}}]])) '\"` x\\\n\n,;--".chars().collect();
+        for (hl, seed0) in [
+            (None, 0x1234_5678_9ABC_DEF1u64),
+            (
+                Some(crate::highlight::SyntaxSpec::sql()),
+                0x0F1E_2D3C_4B5A_6978u64,
+            ),
+        ] {
+            let hl: Option<&dyn Highlighter> = hl.as_ref().map(|h| h as &dyn Highlighter);
+            let mut seed = seed0;
+            let mut cur: Vec<char> = Vec::new();
+            for _ in 0..500 {
+                for _ in 0..(rng(&mut seed) % 40) {
+                    cur.push(alphabet[(rng(&mut seed) as usize) % alphabet.len()]);
+                }
+                cur.push('\n');
+            }
+            let opts = PairOpts::default();
+            let mut table = PairTable::build(&cur.iter().collect::<String>(), hl, opts);
+            let mut converged = 0usize;
+            for step in 0..200 {
+                let at = (rng(&mut seed) as usize) % (cur.len() + 1);
+                let del = ((rng(&mut seed) as usize) % 6).min(cur.len() - at);
+                let ins: Vec<char> = (0..(rng(&mut seed) % 6))
+                    .map(|_| alphabet[(rng(&mut seed) as usize) % alphabet.len()])
+                    .collect();
+                let lo = cur[..at].iter().filter(|&&c| c == '\n').count();
+                let ins_n = ins.len();
+                cur.splice(at..at + del, ins);
+                // 바뀐 구간 끝 = 삽입 끝이 속한 줄 + 1(새 줄 번호 · 보수적).
+                let hi = cur[..at + ins_n].iter().filter(|&&c| c == '\n').count() + 1;
+                let s: String = cur.iter().collect();
+                let lines: Vec<&str> = s.split('\n').collect();
+                let n = lines.len();
+                let len = cur.len();
+                let hi = hi.min(n);
+                let end_char: usize = lines[..hi].iter().map(|l| l.chars().count() + 1).sum();
+                let end_char = end_char.min(len);
+                let scanned = std::cell::Cell::new(0usize);
+                let inc = table.rebuild_lines(
+                    |l| {
+                        scanned.set(scanned.get() + 1);
+                        Cow::Borrowed(lines[l])
+                    },
+                    n,
+                    len,
+                    hl,
+                    opts,
+                    Region { lo, hi, end_char },
+                );
+                let full = PairTable::build(&s, hl, opts);
+                assert_eq!(
+                    observable(&inc),
+                    observable(&full),
+                    "step {step} · [{lo}, {hi}) · hl {}",
+                    hl.is_some()
+                );
+                assert!(
+                    inc.checkpoints.windows(2).all(|w| w[0].line < w[1].line),
+                    "step {step} 체크포인트 줄 증가"
+                );
+                assert_eq!((inc.len, inc.lines), (len, n), "step {step} 길이·줄 수");
+                if scanned.get() < n.saturating_sub(lo) {
+                    converged += 1;
+                }
+                table = inc;
+            }
+            assert!(converged > 0, "수렴 0/200 (hl {})", hl.is_some());
+        }
+    }
+
+    /// ★ T-91 결정적: 1000줄 SQL에서 1행에 글자 하나 → 다음 체크포인트(64행)에서 멈춘다 · 줄 삽입(개행 · 줄 수 차이 1)도
+    /// 수렴한다 · 결과는 전체 스캔과 같다.
+    #[test]
+    fn rebuild_lines_stops_at_next_checkpoint_after_edit() {
+        let line = "SELECT f(a, [b], {c}) FROM t WHERE x = 'y(' AND z = (1 + (2));";
+        let hl = crate::highlight::SyntaxSpec::sql();
+        let opts = PairOpts::default();
+        let text = std::iter::repeat_n(line, 1000)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let table = PairTable::build(&text, Some(&hl), opts);
+        let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+        lines[0].push('a');
+        let n = lines.len();
+        let len = text.chars().count() + 1;
+        let scanned = std::cell::Cell::new(0usize);
+        let inc = table.rebuild_lines(
+            |l| {
+                scanned.set(scanned.get() + 1);
+                Cow::Borrowed(lines[l].as_str())
+            },
+            n,
+            len,
+            Some(&hl),
+            opts,
+            Region {
+                lo: 0,
+                hi: 1,
+                end_char: lines[0].chars().count() + 1,
+            },
+        );
+        let full = PairTable::build(&lines.join("\n"), Some(&hl), opts);
+        assert_eq!(observable(&inc), observable(&full));
+        assert!(
+            scanned.get() <= CK_EVERY,
+            "읽은 줄 {}(≤ {CK_EVERY})",
+            scanned.get()
+        );
+        // 줄 삽입(개행) → 줄 수 차이 1에서도 옛 체크포인트(옛 64행 = 새 65행)에서 수렴.
+        lines.insert(1, "-- new".to_string());
+        let n2 = lines.len();
+        let len2 = len + "-- new".len() + 1;
+        let end2: usize = lines[..2].iter().map(|l| l.chars().count() + 1).sum();
+        let scanned2 = std::cell::Cell::new(0usize);
+        let inc2 = inc.rebuild_lines(
+            |l| {
+                scanned2.set(scanned2.get() + 1);
+                Cow::Borrowed(lines[l].as_str())
+            },
+            n2,
+            len2,
+            Some(&hl),
+            opts,
+            Region {
+                lo: 1,
+                hi: 2,
+                end_char: end2,
+            },
+        );
+        let full2 = PairTable::build(&lines.join("\n"), Some(&hl), opts);
+        assert_eq!(observable(&inc2), observable(&full2));
+        assert!(
+            scanned2.get() <= CK_EVERY + 2,
+            "읽은 줄 {}(≤ {})",
+            scanned2.get(),
+            CK_EVERY + 2
+        );
+        assert!(inc2.checkpoints.windows(2).all(|w| w[0].line < w[1].line));
+        // 그 뒤 편집(3행 끝 글자)도 밀린 체크포인트에서 수렴.
+        lines[3].push('b');
+        let len3 = len2 + 1;
+        let end3: usize = lines[..4].iter().map(|l| l.chars().count() + 1).sum();
+        let scanned3 = std::cell::Cell::new(0usize);
+        let inc3 = inc2.rebuild_lines(
+            |l| {
+                scanned3.set(scanned3.get() + 1);
+                Cow::Borrowed(lines[l].as_str())
+            },
+            n2,
+            len3,
+            Some(&hl),
+            opts,
+            Region {
+                lo: 3,
+                hi: 4,
+                end_char: end3,
+            },
+        );
+        assert_eq!(
+            observable(&inc3),
+            observable(&PairTable::build(&lines.join("\n"), Some(&hl), opts))
+        );
+        assert!(scanned3.get() <= CK_EVERY + 2, "읽은 줄 {}", scanned3.get());
     }
 
     /// 평문 스캔: 깊이 · 인용부호 쌍 · 짝 없음 · 조회(옆/감싸는/부모/자식/형제).

@@ -2157,27 +2157,61 @@ impl TextBox {
         self.pairs_rev.set(self.edit.rev());
         let buf = self.edit.buf();
         let (epoch0, seq0) = self.pairs_journal.get();
-        // 바뀐 첫 줄 = 기록 속 `first`의 최솟값(모든 변경은 그 시점 번호로 `first` 이상만 건드리므로 그 앞은 옛 표와 같은 줄).
-        let first_changed = (epoch0 == buf.epoch())
+        // ★ T-91(11-03): 변경 기록으로 **바뀐 줄 구간 `[lo, hi)`**(새 줄 번호 · 보수적)를 만든다 — 기록 하나 = `first`부터 `removed`줄이
+        //   `inserted`줄로(그 뒤 줄은 번호만 밀림). 구간 앞은 옛 표 그대로, 구간 뒤는 옛 표와 **상태가 같아지는 첫 체크포인트에서
+        //   멈춘다**(`PairTable::rebuild_lines` · 종전 = 끝까지 재스캔 → 2 MB 앞쪽 타이핑 50 ms/글자 · journal 11-03 §9).
+        let region = (epoch0 == buf.epoch())
             .then(|| buf.changes_since(seq0))
             .flatten()
-            .map(|list| list.map(|c| c.first).min().unwrap_or(usize::MAX));
+            .map(|list| {
+                let (mut lo, mut hi, mut any) = (usize::MAX, 0usize, false);
+                for c in list {
+                    any = true;
+                    lo = lo.min(c.first);
+                    if hi > c.first + c.removed {
+                        hi = (hi as isize + c.inserted as isize - c.removed as isize).max(0)
+                            as usize;
+                    } else if hi > c.first {
+                        hi = c.first + c.inserted;
+                    }
+                    hi = hi.max(c.first + c.inserted);
+                }
+                (any, lo, hi)
+            });
         self.pairs_journal.set((buf.epoch(), buf.change_seq()));
+        if let Some((false, _, _)) = region {
+            // 기록은 이어지는데 본문 변경이 없다(세대만 바뀜) — 표 그대로.
+            if self.pair_table.borrow().is_some() {
+                return;
+            }
+        }
         let table = if self.edit.len() > self.bracket_opts.max_chars {
             None
         } else {
-            // T-145: 그리기와 같은 리비전 스냅샷을 빌린다(본문 String 사본 하나 덜 · 조합 중엔 종전대로).
-            let text: Rc<String> = self
-                .ml_text_snapshot()
-                .unwrap_or_else(|| Rc::new(self.edit.text()));
+            // 본문 전체 문자열을 만들지 않는다 — 줄은 버퍼 슬라이스로 수렴 지점까지만 읽는다(T-91).
             let hl = self.highlighter.as_deref();
+            let n = buf.line_count();
+            let len = buf.len();
+            let line_at = |l: usize| buf.slice(buf.line_start(l), buf.line_end(l));
             let prev = self.pair_table.borrow();
-            match (&*prev, first_changed) {
-                (Some(old), Some(line)) => {
-                    Some(old.rebuild(&text, hl, self.bracket_opts.pairs, line))
+            match (&*prev, region) {
+                (Some(old), Some((true, lo, hi))) => {
+                    let hi = hi.min(n);
+                    Some(old.rebuild_lines(
+                        line_at,
+                        n,
+                        len,
+                        hl,
+                        self.bracket_opts.pairs,
+                        super::pairs::Region {
+                            lo,
+                            hi,
+                            end_char: buf.line_start(hi),
+                        },
+                    ))
                 }
-                _ => Some(super::pairs::PairTable::build(
-                    &text,
+                _ => Some(super::pairs::PairTable::build_lines(
+                    (0..n).map(line_at),
                     hl,
                     self.bracket_opts.pairs,
                 )),
