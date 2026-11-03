@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| export-filter-sync | 2026-11-04 | 2026-11-04 → main ff(삭제) · **1a0a3a3** | 2 | 255차 nexa-dlg 저장 창 형식 콤보 ↔ 이름 확장자 동기화(nexa-sql D-448 · 동작 변경 · CONSUMER-CHANGES 255) |
 | (main 직접) | 2026-10-31 | 2026-10-31 → main rebase(맥 252차 뒤 · 253차로 번호) · **55fe8d1** | 1 | 253차 nexa-ctl 미니맵 섹션 헤더 `set_minimap_sections` · nexa-sql 192차 31차 T-110 3-4 |
 | (main 직접) | 2026-10-31 | 2026-10-31 → main · **dd33ce5** | 1 | 251차 nexa-ctl 미니맵 자동 숨김 `set_minimap_autohide`·`minimap_shown`·`MINIMAP_AUTOHIDE_MS` · nexa-sql 192차 25차 T-110 3-1 · 250차 문서 손질 포함 |
 | feat/248-minimap-scale-side | 2026-10-31 | 2026-10-31 → main rebase(맥 248·249차 뒤 · 250차로 번호 변경) · **7b8bb36** | 1 | 250차 nexa-ctl 미니맵 `set_minimap_scale`(auto/1~3 · 기본 2) · `set_minimap_left`(왼쪽 배치 · 거터 옆) · nexa-sql 192차 23차 T-110 3-2·3-3 |
