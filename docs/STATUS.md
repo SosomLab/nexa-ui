@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-11-04 (256차 · Windows · nexa-sql T-79)** — nexa-dlg 둘째 하단 콤보 `set_extra2`(추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **(병합 뒤 해시)** · [journal 11-04](journal/2026-11-04.md)
 - **2026-11-04 (255차 · Windows · nexa-sql D-448)** — nexa-dlg `set_default_name` 필터 자동 선택 + 콤보 변경 시 이름 확장자 동기화(동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **1a0a3a3** · [journal 11-04](journal/2026-11-04.md)
 - **2026-10-31 (254차 · mac · nexa-dir3 10-31)** — nexa-sys `Frame::present_damage`(추가 · `present()` 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **e9107a8** · [journal 10-31 §8](journal/2026-10-31.md).
 - **2026-10-31 (253차 · win · nexa-sql 192차 31차)** — nexa-ctl 미니맵 섹션 헤더 `set_minimap_sections`(추가 · 빈 목록 = 불변 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **55fe8d1** · [journal 10-31 §7](journal/2026-10-31.md).

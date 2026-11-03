@@ -255,6 +255,8 @@ pub struct FilePicker {
     show_dot: bool,
     /// 하단 부가 콤보(앱이 주입 · 예: 인코딩 — Golden/DBeaver 하단 줄 · 사용자 09-15) — (라벨, 콤보).
     extra: Option<(String, Combo)>,
+    /// ★ 둘째 부가 콤보(예: 저장 줄끝 · nexa-sql T-79 · 11-04) — `extra` 왼쪽 · 같은 규칙.
+    extra2: Option<(String, Combo)>,
     ok_btn: Button,
     cancel_btn: Button,
     // 상태
@@ -413,6 +415,7 @@ impl FilePicker {
             dot_chk: Checkbox::new(labels.show_dot.clone(), true).with_label_side(LabelSide::Right),
             show_dot: true,
             extra: None,
+            extra2: None,
             ok_btn: {
                 let mut b = Button::new(ok_label);
                 b.set_tone(ButtonTone::Accent); // 기본 버튼(Enter) 표시 — 사용자 09-22
@@ -550,8 +553,29 @@ impl FilePicker {
         self.extra.as_ref().map(|(_, c)| c.value())
     }
 
+    /// ★ 둘째 부가 콤보(T-79 · 저장 줄끝) — `extra`와 같은 규칙 · 라벨은 콤보 왼쪽.
+    pub fn set_extra2(
+        &mut self,
+        label: impl Into<String>,
+        items: &[(&str, &str)],
+        selected: usize,
+    ) {
+        let items: Vec<ComboItem> = items.iter().map(|(v, l)| ComboItem::new(*v, *l)).collect();
+        let mut c = Combo::new(items, selected);
+        c.set_scale(self.base.scale);
+        self.extra2 = Some((label.into(), c));
+        self.layout();
+    }
+
+    /// 둘째 부가 콤보의 현재 값(없으면 None).
+    #[must_use]
+    pub fn extra2_value(&self) -> Option<String> {
+        self.extra2.as_ref().map(|(_, c)| c.value())
+    }
+
     fn extra_open(&self) -> bool {
         self.extra.as_ref().is_some_and(|(_, c)| c.is_open())
+            || self.extra2.as_ref().is_some_and(|(_, c)| c.is_open())
     }
 
     /// 현재 폴더.
@@ -638,6 +662,10 @@ impl FilePicker {
                 .extra
                 .as_mut()
                 .is_some_and(|(_, c)| c.tick_hover(now_ms))
+            | self
+                .extra2
+                .as_mut()
+                .is_some_and(|(_, c)| c.tick_hover(now_ms))
     }
 
     /// 아이콘/종류 이름 조회가 아직 진행 중인가(도착을 받으려면 호스트 타이머가 살아 있어야 한다).
@@ -668,6 +696,10 @@ impl FilePicker {
             || self.filter_combo.hover_animating()
             || self
                 .extra
+                .as_ref()
+                .is_some_and(|(_, c)| c.hover_animating())
+            || self
+                .extra2
                 .as_ref()
                 .is_some_and(|(_, c)| c.hover_animating())
     }
@@ -2565,6 +2597,17 @@ impl FilePicker {
                 &mut inv,
             );
         }
+        // 둘째 콤보 = 첫째 왼쪽(라벨 자리 90 논리 px 비움 · 첫째가 없으면 그 자리).
+        let ew2 = self.s(130);
+        let x_ex = if self.extra.is_some() {
+            x1 - bw * 2 - gap * 2 - ew - self.s(90) - gap - ew2
+        } else {
+            x1 - bw * 2 - gap * 2 - ew2
+        };
+        if let Some((_, c)) = &mut self.extra2 {
+            c.set_scale(s);
+            c.set_bounds(Rect::new(x_ex, y_btn, ew2, row), &mut inv);
+        }
         let lw = self.s(LABEL_W);
         let fw = self.s(FILTER_W);
         self.filter_combo
@@ -2572,6 +2615,9 @@ impl FilePicker {
         // ★ 드롭다운은 창 바닥을 넘지 않는다(넘치면 위로 펼침 · 사용자 09-15 "확장자 콤보가 숨겨져 선택 불가").
         self.filter_combo.set_viewport_bottom(b.bottom());
         if let Some((_, c)) = &mut self.extra {
+            c.set_viewport_bottom(b.bottom());
+        }
+        if let Some((_, c)) = &mut self.extra2 {
             c.set_viewport_bottom(b.bottom());
         }
         self.name_box.set_bounds(
@@ -2612,6 +2658,13 @@ impl FilePicker {
         if let Some((_, c)) = &mut self.extra {
             c.set_focused(ex);
         }
+        let ex2 = self
+            .extra2
+            .as_ref()
+            .is_some_and(|(_, c)| c.bounds().contains(p));
+        if let Some((_, c)) = &mut self.extra2 {
+            c.set_focused(ex2);
+        }
         self.up_btn.set_focused(up);
         let home = self.home_btn.bounds().contains(p);
         let back = self.back_btn.bounds().contains(p);
@@ -2637,6 +2690,7 @@ impl FilePicker {
             || self.grid.is_focused()
             || self.filter_combo.is_focused()
             || self.extra.as_ref().is_some_and(|(_, c)| c.is_focused())
+            || self.extra2.as_ref().is_some_and(|(_, c)| c.is_focused())
     }
 
     /// 사건 뒤 1회성 신호 수거(버튼 클릭 · 콤보 변경 · 체크 · Enter).
@@ -2873,7 +2927,14 @@ impl Widget for FilePicker {
         }
         if self.extra_open() {
             if let Some((_, c)) = &mut self.extra {
-                c.on_event(ev, inv);
+                if c.is_open() {
+                    c.on_event(ev, inv);
+                }
+            }
+            if let Some((_, c)) = &mut self.extra2 {
+                if c.is_open() {
+                    c.on_event(ev, inv);
+                }
             }
             if self.extra_open() || !matches!(ev, InputEvent::MouseDown { .. }) {
                 inv.push(self.base.bounds);
@@ -2985,8 +3046,15 @@ impl Widget for FilePicker {
             if let Some((_, c)) = &mut self.extra {
                 c.on_event(ev, inv);
             }
+            if let Some((_, c)) = &mut self.extra2 {
+                c.on_event(ev, inv);
+            }
         } else if self.extra.as_ref().is_some_and(|(_, c)| c.is_focused()) {
             if let Some((_, c)) = &mut self.extra {
+                c.on_event(ev, inv);
+            }
+        } else if self.extra2.as_ref().is_some_and(|(_, c)| c.is_focused()) {
+            if let Some((_, c)) = &mut self.extra2 {
                 c.on_event(ev, inv);
             }
         } else if self.dot_chk.is_focused() {
@@ -3352,8 +3420,9 @@ impl Widget for FilePicker {
             let cb = self.dot_chk.bounds();
             let x = cb.right() + self.s(GAP);
             let left_edge = self
-                .extra
+                .extra2
                 .as_ref()
+                .or(self.extra.as_ref())
                 .map_or(self.ok_btn.bounds().x, |(label, c)| {
                     c.bounds().x - self.s(GAP) * 2 - ctx.text_width(label)
                 });
@@ -3367,15 +3436,25 @@ impl Widget for FilePicker {
                 if *err { theme.danger } else { theme.warn },
             );
         }
-        if let Some((label, c)) = &self.extra {
+        for (label, c) in self.extra.iter().chain(self.extra2.iter()) {
             let cb = c.bounds();
             let lw = ctx.text_width(label);
             let ty = ctx.text_center_y(cb.y, cb.h);
             ctx.text(cb.x - self.s(GAP) - lw, ty, b, label, theme.text);
         }
-        // 팝업은 맨 마지막(콤보 드롭다운 · 텍스트박스 편집 메뉴).
+        // 팝업은 맨 마지막(콤보 드롭다운 · 텍스트박스 편집 메뉴) — 열린 쪽이 위.
+        if let Some((_, c)) = &self.extra2 {
+            if !c.is_open() {
+                c.paint(ctx, theme);
+            }
+        }
         if let Some((_, c)) = &self.extra {
             c.paint(ctx, theme);
+        }
+        if let Some((_, c)) = &self.extra2 {
+            if c.is_open() {
+                c.paint(ctx, theme);
+            }
         }
         self.filter_combo.paint(ctx, theme);
         if self.path_editing {
@@ -3602,6 +3681,40 @@ mod tests {
     }
 
     /// ★ D-448: 기본 이름의 확장자 → 콤보 선택 · 콤보 변경 → 이름 확장자 교체(아는 확장자만 · 전체 줄은 그대로).
+    /// ★ T-79: 둘째 부가 콤보(줄끝) — 값 읽기 · 첫째와 독립 · 둘 다 없으면 None.
+    #[test]
+    fn second_extra_combo_reports_its_value() {
+        let d = temp_dir("extra2");
+        let mut p = FilePicker::new(
+            PickerMode::Save,
+            Some(&d),
+            vec![FileFilter::new("SQL", &["sql"])],
+            labels(),
+        );
+        assert_eq!(p.extra2_value(), None);
+        p.set_extra("Encoding:", &[("utf8", "UTF-8"), ("euc-kr", "EUC-KR")], 1);
+        p.set_extra2(
+            "Line ending:",
+            &[("keep", "Keep"), ("lf", "LF"), ("crlf", "CRLF")],
+            2,
+        );
+        assert_eq!(p.extra_value().as_deref(), Some("euc-kr"));
+        assert_eq!(p.extra2_value().as_deref(), Some("crlf"));
+        settle(&mut p);
+        let (e1, e2) = (
+            p.extra
+                .as_ref()
+                .map(|(_, c)| c.bounds())
+                .unwrap_or_default(),
+            p.extra2
+                .as_ref()
+                .map(|(_, c)| c.bounds())
+                .unwrap_or_default(),
+        );
+        assert!(e2.right() < e1.x, "둘째는 첫째 왼쪽: {e2:?} {e1:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn save_filter_follows_name_ext_and_swaps_known_ext() {
         let d = temp_dir("fmt");
