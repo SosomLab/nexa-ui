@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| save-eol-extra2 | 2026-11-04 | 2026-11-04 → main ff(삭제) · **f741aea** | 2 | 256차 nexa-dlg 둘째 하단 콤보 `set_extra2`(nexa-sql T-79 · 추가 · CONSUMER-CHANGES 256) |
 | export-filter-sync | 2026-11-04 | 2026-11-04 → main ff(삭제) · **1a0a3a3** | 2 | 255차 nexa-dlg 저장 창 형식 콤보 ↔ 이름 확장자 동기화(nexa-sql D-448 · 동작 변경 · CONSUMER-CHANGES 255) |
 | (main 직접) | 2026-10-31 | 2026-10-31 → main rebase(맥 252차 뒤 · 253차로 번호) · **55fe8d1** | 1 | 253차 nexa-ctl 미니맵 섹션 헤더 `set_minimap_sections` · nexa-sql 192차 31차 T-110 3-4 |
 | (main 직접) | 2026-10-31 | 2026-10-31 → main · **dd33ce5** | 1 | 251차 nexa-ctl 미니맵 자동 숨김 `set_minimap_autohide`·`minimap_shown`·`MINIMAP_AUTOHIDE_MS` · nexa-sql 192차 25차 T-110 3-1 · 250차 문서 손질 포함 |
