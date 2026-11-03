@@ -454,9 +454,44 @@ impl FilePicker {
         p
     }
 
-    /// 저장 기본 파일명(저장 모드).
+    /// 저장 기본 파일명(저장 모드). ★ 이름의 확장자를 가진 형식 필터가 있으면 그 줄을 고른다(nexa-sql D-448 · 결과 내보내기
+    ///   `report_….xlsx` → 콤보 "Excel (.xlsx)") — 호스트가 형식을 이름으로만 전해도 콤보가 맞는다.
     pub fn set_default_name(&mut self, name: &str) {
         self.name_box.set_text(name);
+        if let Some(i) = self.filter_index_for(name) {
+            self.filter_combo.select_value(&i.to_string());
+        }
+    }
+
+    /// 이름의 확장자를 가진 첫 필터 — 없으면 None(전체 `*.*` 줄은 확장자가 없어 맞지 않는다).
+    fn filter_index_for(&self, name: &str) -> Option<usize> {
+        let ext = Path::new(name)
+            .extension()?
+            .to_string_lossy()
+            .to_lowercase();
+        self.filters.iter().position(|f| f.exts.contains(&ext))
+    }
+
+    /// ★ 저장 모드에서 형식 콤보를 바꾸면 이름의 확장자가 따라간다(D-448 · "파일 형식 = 콤보" · 확장자를 몰라도 된다):
+    ///   지금 확장자가 **필터 목록 안의 확장자**일 때만(사용자가 적은 낯선 확장자 `a.bak`은 건드리지 않음) · 새 필터가
+    ///   전체(`*.*`)면 그대로 · 확장자가 없으면 종전대로 확정 때 붙인다(`confirm`).
+    fn sync_name_ext_to_filter(&mut self) {
+        if self.mode != PickerMode::Save {
+            return;
+        }
+        let Some(new_ext) = self.current_filter().exts.first().cloned() else {
+            return;
+        };
+        let name = self.name_box.text();
+        let Some((stem, ext)) = name.rsplit_once('.') else {
+            return;
+        };
+        let ext_l = ext.to_lowercase();
+        let known = self.filters.iter().any(|f| f.exts.contains(&ext_l));
+        if !known || stem.is_empty() || ext_l == new_ext {
+            return;
+        }
+        self.name_box.set_text(&format!("{stem}.{new_ext}"));
     }
 
     /// 최근 폴더(앱이 기억 · 사이드바 아래에 표시).
@@ -2652,6 +2687,7 @@ impl FilePicker {
             }
         }
         if self.filter_combo.take_changed().is_some() {
+            self.sync_name_ext_to_filter();
             // ★ 확장자 필터는 **열거 단계**(nexa-fs `lister` · 배경 스레드)에서 걸러진다 → 캐시된 항목을 다시 거르는
             //   것만으로는 넓어진 필터의 파일이 나타나지 않는다(사용자 09-16 "콤보를 바꿔도 바로 반영 안 됨") → 다시 열거.
             self.reload();
@@ -3562,6 +3598,42 @@ mod tests {
         settle(&mut p);
         let names: Vec<String> = p.grid.rows().iter().map(|r| r.label.clone()).collect();
         assert_eq!(names, vec!["sub", "a.sql"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// ★ D-448: 기본 이름의 확장자 → 콤보 선택 · 콤보 변경 → 이름 확장자 교체(아는 확장자만 · 전체 줄은 그대로).
+    #[test]
+    fn save_filter_follows_name_ext_and_swaps_known_ext() {
+        let d = temp_dir("fmt");
+        let mut p = FilePicker::new(
+            PickerMode::Save,
+            Some(&d),
+            vec![
+                FileFilter::new("Excel", &["xlsx"]),
+                FileFilter::new("CSV", &["csv"]),
+                FileFilter::new("All", &[]),
+            ],
+            labels(),
+        );
+        p.set_default_name("report_1.csv");
+        assert_eq!(p.current_filter().label, "CSV");
+        p.filter_combo.select_value("0");
+        p.sync_name_ext_to_filter();
+        assert_eq!(p.name_box.text(), "report_1.xlsx");
+        // 전체(*.*)로 바꾸면 이름은 그대로.
+        p.filter_combo.select_value("2");
+        p.sync_name_ext_to_filter();
+        assert_eq!(p.name_box.text(), "report_1.xlsx");
+        // 모르는 확장자는 건드리지 않는다 · 확장자 없는 이름도 그대로(확정 때 붙음).
+        p.set_default_name("notes.bak");
+        assert_eq!(p.current_filter().label, "All");
+        p.filter_combo.select_value("1");
+        p.sync_name_ext_to_filter();
+        assert_eq!(p.name_box.text(), "notes.bak");
+        p.set_default_name("plain");
+        p.filter_combo.select_value("0");
+        p.sync_name_ext_to_filter();
+        assert_eq!(p.name_box.text(), "plain");
         let _ = std::fs::remove_dir_all(&d);
     }
 
