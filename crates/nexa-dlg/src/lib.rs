@@ -5,7 +5,7 @@
 //! - 문자열은 전부 앱이 [`PickerLabels`]로 주입(i18n) · 색·간격은 테마/배율만.
 //! - 호스트(앱)가 창을 만들고 `set_bounds`/`on_event`/`paint`를 부른다 — 창 안 오버레이든 별도 창이든 같은 코드.
 //!
-//! 동작(docs/20 §3 교집합): 경로 상자 편집(Enter = 이동/확정 · `~`·환경변수·상대 경로) · ↑ 상위 · 장소 사이드바 ·
+//! 동작(docs/20 §3 교집합): 경로 상자 편집(빈 곳 클릭/우클릭 = 편집 · Enter = 폴더 이동 · 파일 경로 = 그 폴더로 이동 + 선택 · `~`·환경변수·상대 경로) · ↑ 상위 · 장소 사이드바 ·
 //! 목록 헤더 클릭 정렬(자연 정렬 · 폴더 먼저) · 더블클릭/Enter = 폴더 진입·파일 확정 · Backspace = 상위 ·
 //! 파일명 상자 Enter = 확정 · 확장자 필터 · 숨김 표시 · 새 폴더 · 저장은 **덮어쓰기 2단 확인**(같은 이름으로 한 번 더) ·
 //! 확장자 자동 부여 · 파일명 규칙 즉시 검증.
@@ -702,6 +702,15 @@ impl FilePicker {
                 .extra2
                 .as_ref()
                 .is_some_and(|(_, c)| c.hover_animating())
+    }
+
+    /// ★ 클립보드에 글이 있는가 — 호스트가 **우클릭 직전** 1회 주입(입력 상자 편집 메뉴 "붙여넣기" 활성 근거 · 사용자 11-04).
+    pub fn set_clipboard_has_text(&mut self, yes: bool) {
+        self.path_box.set_clipboard_has_text(yes);
+        self.name_box.set_clipboard_has_text(yes);
+        if let Some((_, _, tb)) = self.rename.as_mut() {
+            tb.set_clipboard_has_text(yes);
+        }
     }
 
     /// 포커스 텍스트 박스(IME 배선).
@@ -1845,19 +1854,23 @@ impl FilePicker {
         }
     }
 
-    /// 경로 상자 Enter — 폴더면 이동 · 파일이면 확정 · 없으면 오류.
+    /// 경로 상자 Enter — 폴더면 이동 · **파일이면 그 파일이 든 폴더로 이동 + 이름 상자·목록 선택**(확정은 이름 상자/열기 버튼 몫 ·
+    /// 사용자 11-04 "입력한 값이 파일이면 상위 폴더를 열어 달라" · 종전 = 바로 확정) · 없으면 오류.
     fn commit_path(&mut self, text: &str) {
         let p = nexa_fs::path::resolve(text, &self.dir);
         if nexa_fs::is_virtual_root(&p) || p.is_dir() {
             self.go(&p);
         } else if p.is_file() {
+            let leaf = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            // 필터를 먼저(확장자에 맞는 필터 → 열거에 그 파일이 보인다) → 이동 → 열거가 끝나면 선택.
+            self.set_default_name(&leaf);
             if let Some(parent) = p.parent() {
                 self.go(parent);
             }
-            if let Some(n) = p.file_name() {
-                self.name_box.set_text(&n.to_string_lossy());
-            }
-            self.confirm();
+            self.select_after = Some(leaf);
         } else {
             self.message = Some((self.labels.err_not_found.clone(), true));
         }
@@ -3096,8 +3109,13 @@ impl Widget for FilePicker {
                             let target = crumbs[i].1.clone();
                             self.go(&target);
                         }
-                        // 좌클릭은 이동만 — 빈 곳/현재 조각 클릭은 아무것도 하지 않는다(편집은 우클릭 전용 · 사용자 09-15).
-                        Some(_) | None => {}
+                        // ★ 빈 곳·현재 조각 좌클릭 = 편집(탐색기 주소 표시줄 관례 · 사용자 11-04 "클릭해서 수정" — 09-15
+                        //   "우클릭 전용"을 대체 · 조각 클릭 = 이동은 그대로 · 우클릭도 그대로 편집).
+                        Some(_) | None => {
+                            self.begin_path_edit(inv);
+                            inv.push(pb);
+                            return;
+                        }
                     }
                 }
                 InputEvent::RightDown { .. } => {
@@ -3980,6 +3998,76 @@ mod tests {
             p.focused_textbox().map(|tb| tb.text()).as_deref(),
             Some("keep.cfg")
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// ★ 경로 상자에 파일 경로(사용자 11-04): 확정하지 않고 **그 파일이 든 폴더로 이동 + 이름 상자·목록 선택** · 폴더 경로 = 이동 · 없으면 오류.
+    #[test]
+    fn path_box_file_path_opens_parent_and_selects() {
+        let d = temp_dir("pathfile");
+        let mut p = FilePicker::new(PickerMode::Open, Some(&d.join("sub")), Vec::new(), labels());
+        p.commit_path(&d.join("a.sql").to_string_lossy());
+        assert_eq!(p.current_dir(), d);
+        assert_eq!(p.take_action(), PickerAction::None);
+        assert_eq!(p.name_box.text(), "a.sql");
+        settle(&mut p);
+        let sel = p
+            .selected_item()
+            .and_then(|(path, _)| path.file_name().map(|s| s.to_string_lossy().into_owned()));
+        assert_eq!(sel.as_deref(), Some("a.sql"));
+        p.commit_path(&d.join("sub").to_string_lossy());
+        assert_eq!(p.current_dir(), d.join("sub"));
+        p.commit_path("no-such-dir-xyz");
+        assert!(matches!(p.message, Some((_, true))));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// ★ 브레드크럼 빈 곳 좌클릭 = 편집(사용자 11-04) · Enter = 이동 · 편집 끝.
+    #[test]
+    fn crumb_empty_click_begins_edit_and_enter_navigates() {
+        let d = temp_dir("crumbclick");
+        let mut p = FilePicker::new(PickerMode::Open, Some(&d), Vec::new(), labels());
+        let mut inv = Invalidations::default();
+        p.set_bounds(Rect::new(0, 0, 900, 600), &mut inv);
+        let b = p.path_box.bounds();
+        let (x, y) = (b.x + b.w - 4, b.y + b.h / 2);
+        p.on_event(
+            &InputEvent::MouseDown {
+                x,
+                y,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(p.path_editing && p.path_box.is_focused());
+        p.path_box.set_text(&d.join("sub").to_string_lossy());
+        p.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(!p.path_editing);
+        assert_eq!(p.current_dir(), d.join("sub"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 이름 상자에 **절대 경로**: 파일 = 그 폴더로 이동 + 확정 · 폴더 = 이동(탐색기 관례 · 사용자 11-04).
+    #[test]
+    fn name_box_absolute_path_opens_file_or_enters_folder() {
+        let d = temp_dir("nameabs");
+        let mut p = FilePicker::new(PickerMode::Open, Some(&d.join("sub")), Vec::new(), labels());
+        p.set_default_name(&d.join("a.sql").to_string_lossy());
+        p.confirm();
+        assert_eq!(p.take_action(), PickerAction::Confirm(d.join("a.sql")));
+        assert_eq!(p.current_dir(), d);
+        p.set_default_name(&d.join("sub").to_string_lossy());
+        p.confirm();
+        assert_eq!(p.current_dir(), d.join("sub"));
+        assert_eq!(p.name_box.text(), "");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
