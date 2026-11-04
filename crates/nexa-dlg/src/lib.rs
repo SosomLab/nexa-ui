@@ -263,6 +263,11 @@ pub struct FilePicker {
     cursor: (i32, i32),
     message: Option<(String, bool)>, // (본문, 오류인가)
     pending_overwrite: Option<PathBuf>,
+    /// ★ 우클릭 편집 메뉴 영역 간 배타(nexa-sql `ui.ctxmenu_exclusive`/`ui.ctxmenu_passthrough` · 호스트가 `set_ctxmenu_policy`로 전달 ·
+    ///   사용자 11-04 "팝업 창에는 반영이 안 됐다 — 경로·이름 상자 메뉴가 둘 다 떠 있음"): 열린 메뉴 밖의 좌/우 클릭 = 그 메뉴들을 먼저 닫고
+    ///   (passthrough 끔 = 그 클릭은 거기서 끝) · 메뉴가 안 쓰는 키·글자·붙여넣기 = 전부 닫는다 · 새로 연 메뉴가 있으면 나머지는 닫는다.
+    ctx_exclusive: bool,
+    ctx_passthrough: bool,
     /// 덮어쓰기 확인 카드(열려 있으면 모달 · Enter = 덮어쓰기 · Esc = 취소).
     overwrite_ask: Option<PathBuf>,
     overwrite_yes_btn: Button,
@@ -449,6 +454,8 @@ impl FilePicker {
             probe: None,
             probes: HashMap::new(),
             select_after: None,
+            ctx_exclusive: true,
+            ctx_passthrough: true,
             last_rebuild: None,
             labels,
         };
@@ -598,7 +605,11 @@ impl FilePicker {
     /// 콤보 드롭다운·편집 메뉴가 열려 있는가(호스트 Esc 가드).
     #[must_use]
     pub fn popup_open(&self) -> bool {
-        self.filter_combo.is_open() || self.extra_open() || self.path_editing || self.menu.is_open()
+        self.filter_combo.is_open()
+            || self.extra_open()
+            || self.path_editing
+            || self.menu.is_open()
+            || self.ctx_open_bits() != 0
     }
 
     /// 프레임 틱 — 다시 그려야 하면 true(아이콘/종류 이름 도착 포함).
@@ -702,6 +713,53 @@ impl FilePicker {
                 .extra2
                 .as_ref()
                 .is_some_and(|(_, c)| c.hover_animating())
+    }
+
+    /// 우클릭 편집 메뉴 배타 정책(호스트 설정 `ui.ctxmenu_exclusive` · `ui.ctxmenu_passthrough` · 기본 둘 다 켬 = 본창과 같다).
+    pub fn set_ctxmenu_policy(&mut self, exclusive: bool, passthrough: bool) {
+        self.ctx_exclusive = exclusive;
+        self.ctx_passthrough = passthrough;
+    }
+
+    /// 열린 편집 메뉴 전부 닫기(호스트의 Ctrl+C/X/V 뒤 · 사용자 11-04 "붙여넣기를 하면 우클릭 상태가 해제되도록").
+    pub fn close_edit_menus(&mut self) {
+        self.close_ctx_bits(u32::MAX);
+    }
+
+    /// 열린 편집 메뉴 비트(1 = 경로 상자 · 2 = 이름 상자 · 4 = 이름 바꾸기 상자).
+    fn ctx_open_bits(&self) -> u32 {
+        u32::from(self.path_box.popup_open())
+            | (u32::from(self.name_box.popup_open()) << 1)
+            | (u32::from(
+                self.rename
+                    .as_ref()
+                    .is_some_and(|(_, _, tb)| tb.popup_open()),
+            ) << 2)
+    }
+
+    /// 점이 든 편집 메뉴 비트(메뉴 사각형 안 = 그 메뉴의 것).
+    fn ctx_hit_bits(&self, p: Point) -> u32 {
+        u32::from(self.path_box.popup_bounds().contains(p))
+            | (u32::from(self.name_box.popup_bounds().contains(p)) << 1)
+            | (u32::from(
+                self.rename
+                    .as_ref()
+                    .is_some_and(|(_, _, tb)| tb.popup_bounds().contains(p)),
+            ) << 2)
+    }
+
+    fn close_ctx_bits(&mut self, bits: u32) {
+        if bits & 1 != 0 {
+            self.path_box.close_menu();
+        }
+        if bits & 2 != 0 {
+            self.name_box.close_menu();
+        }
+        if bits & 4 != 0 {
+            if let Some((_, _, tb)) = self.rename.as_mut() {
+                tb.close_menu();
+            }
+        }
     }
 
     /// ★ 클립보드에 글이 있는가 — 호스트가 **우클릭 직전** 1회 주입(입력 상자 편집 메뉴 "붙여넣기" 활성 근거 · 사용자 11-04).
@@ -2010,6 +2068,7 @@ impl FilePicker {
         }
         let mut tb = TextBox::new(String::new()).with_text(&name);
         tb.set_scale(self.base.scale);
+        tb.set_menu_host(Some(self.base.bounds));
         tb.set_focused(true);
         let mut inv = Invalidations::default();
         let stem = if is_dir {
@@ -2541,6 +2600,9 @@ impl FilePicker {
         let b = self.base.bounds;
         let s = self.base.scale;
         let mut inv = Invalidations::default();
+        // 편집 메뉴는 창 안에서 배치(아래 공간이 없으면 위로 · 사용자 11-04 "하단 우클릭 메뉴가 잘려서 표현").
+        self.path_box.set_menu_host(Some(b));
+        self.name_box.set_menu_host(Some(b));
         for c in [
             &mut self.home_btn,
             &mut self.back_btn,
@@ -2906,6 +2968,42 @@ impl Widget for FilePicker {
             }
             inv.push(self.base.bounds);
             return;
+        }
+        // ★ 편집 메뉴 영역 간 배타(본창 `ctxmenu_exclusive_step`과 같은 규칙 · 사용자 11-04).
+        let ctx_before = self.ctx_open_bits();
+        if self.ctx_exclusive && ctx_before != 0 {
+            let step: Option<(u32, bool)> = match *ev {
+                InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y } => {
+                    let foreign = ctx_before & !self.ctx_hit_bits(Point { x, y });
+                    (foreign != 0).then_some((foreign, !self.ctx_passthrough))
+                }
+                InputEvent::Key { key, .. } => {
+                    let menu_key = matches!(
+                        key,
+                        Key::Up
+                            | Key::Down
+                            | Key::Left
+                            | Key::Right
+                            | Key::Home
+                            | Key::End
+                            | Key::Enter
+                            | Key::Escape
+                    );
+                    (!menu_key).then_some((ctx_before, false))
+                }
+                InputEvent::Char { .. }
+                | InputEvent::SelectAll
+                | InputEvent::Undo
+                | InputEvent::Redo => Some((ctx_before, false)),
+                _ => None,
+            };
+            if let Some((close, stop)) = step {
+                self.close_ctx_bits(close);
+                inv.push(self.base.bounds);
+                if stop {
+                    return;
+                }
+            }
         }
         let is_mouse = matches!(
             ev,
@@ -3358,6 +3456,12 @@ impl Widget for FilePicker {
             self.confirm();
         }
         self.collect();
+        // 이번 사건으로 새로 연 편집 메뉴가 있으면 먼저 열려 있던 것은 닫는다(한 번에 하나).
+        let ctx_after = self.ctx_open_bits();
+        let fresh = ctx_after & !ctx_before;
+        if fresh != 0 && ctx_after != fresh {
+            self.close_ctx_bits(ctx_after & !fresh);
+        }
         inv.push(self.base.bounds);
     }
 
@@ -4068,6 +4172,96 @@ mod tests {
         p.confirm();
         assert_eq!(p.current_dir(), d.join("sub"));
         assert_eq!(p.name_box.text(), "");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// ★ 편집 메뉴 배타(사용자 11-04): 경로·이름 상자 메뉴는 한 번에 하나 · 메뉴 밖 클릭 = 닫고 진행(passthrough) · 글자 입력 = 닫힘 · 메뉴 호스트 = 창.
+    #[test]
+    fn edit_menus_are_exclusive_and_close_on_typing() {
+        let d = temp_dir("ctxmenu");
+        let mut p = FilePicker::new(PickerMode::Open, Some(&d), Vec::new(), labels());
+        let mut inv = Invalidations::default();
+        p.set_bounds(Rect::new(0, 0, 900, 600), &mut inv);
+        let nb = p.name_box.bounds();
+        p.on_event(
+            &InputEvent::RightDown {
+                x: nb.x + nb.w / 2,
+                y: nb.y + nb.h / 2,
+            },
+            &mut inv,
+        );
+        assert!(
+            p.name_box.popup_open() && p.popup_open(),
+            "이름 상자 메뉴 열림"
+        );
+        // 메뉴가 창 밖으로 나가지 않는다(하단 상자 = 위로 펼침).
+        let mb = p.name_box.popup_bounds();
+        assert!(
+            mb.bottom() <= 600 && mb.y >= 0,
+            "메뉴 사각형 {mb:?}가 창 안"
+        );
+        // 경로 상자 빈 곳 좌클릭(메뉴 밖) = 이름 메뉴 닫고 그 클릭은 진행(편집 시작).
+        let pb = p.path_box.bounds();
+        p.on_event(
+            &InputEvent::MouseDown {
+                x: pb.x + pb.w - 4,
+                y: pb.y + pb.h / 2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(!p.name_box.popup_open() && p.path_editing);
+        p.on_event(
+            &InputEvent::RightDown {
+                x: pb.x + pb.w / 2,
+                y: pb.y + pb.h / 2,
+            },
+            &mut inv,
+        );
+        assert!(
+            p.path_box.popup_open() && !p.name_box.popup_open(),
+            "한 번에 하나"
+        );
+        // 이름 상자 우클릭 = 경로 메뉴 닫힘 · (passthrough) 이름 메뉴 열림 → 역시 하나.
+        p.on_event(
+            &InputEvent::RightDown {
+                x: nb.x + nb.w / 2,
+                y: nb.y + nb.h / 2,
+            },
+            &mut inv,
+        );
+        assert!(
+            !p.path_box.popup_open() && p.name_box.popup_open(),
+            "둘 다 떠 있지 않다"
+        );
+        // 글자 입력 = 메뉴 닫힘.
+        p.on_event(&InputEvent::Char { c: 'a', now_ms: 0 }, &mut inv);
+        assert!(!p.name_box.popup_open());
+        // passthrough 끔 = 메뉴 밖 클릭은 닫기만.
+        p.set_ctxmenu_policy(true, false);
+        p.on_event(
+            &InputEvent::RightDown {
+                x: nb.x + nb.w / 2,
+                y: nb.y + nb.h / 2,
+            },
+            &mut inv,
+        );
+        assert!(p.name_box.popup_open());
+        let gb = p.grid.bounds();
+        p.on_event(
+            &InputEvent::MouseDown {
+                x: gb.x + 10,
+                y: gb.y + 10,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(
+            !p.name_box.popup_open() && !p.grid.is_focused(),
+            "닫기만 하고 그 클릭은 끝"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 }
