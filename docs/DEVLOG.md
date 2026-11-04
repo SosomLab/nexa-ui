@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-11-04 (257차 · Windows · nexa-sql 아침 피드백)** — nexa-dlg 경로 입력 탐색기 관례(좌클릭 편집 · 파일 경로 = 폴더 이동+선택 · `set_clipboard_has_text` · 동작 변경 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 시험 3 — [journal 11-04](journal/2026-11-04.md)
 - **2026-11-04 (256차 · Windows · nexa-sql T-79)** — nexa-dlg `set_extra2`/`extra2_value`(둘째 하단 콤보 · 추가 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 시험 1 — [journal 11-04](journal/2026-11-04.md)
 - **2026-11-04 (255차 · Windows · nexa-sql D-448)** — nexa-dlg 저장 창: 기본 이름 확장자 → 형식 필터 자동 선택 · 형식 콤보 변경 → 이름 확장자 교체(동작 변경 · 열기 모드 불변 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 시험 1 — [journal 11-04](journal/2026-11-04.md)
 - **2026-10-31 (254차 · macOS)** — nexa-sys `Frame::present_damage(rects)`(알파 채우기를 그린 사각형만 · 추가 · `present()` 불변) · nexa-dir3 T-201 ⓐ · e9107a8 — [journal 10-31 §8](journal/2026-10-31.md).
