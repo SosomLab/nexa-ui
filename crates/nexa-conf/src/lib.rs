@@ -269,13 +269,16 @@ impl Store {
     /// **모르는 키는 [`Store::keep_unknown`]으로 되돌려준다**(F-1 보존 계약).
     #[must_use]
     pub fn open(path: PathBuf, quiet_ms: u64, max_delay_ms: u64) -> (Self, Doc) {
-        let doc = parse(&fs::read_to_string(&path).unwrap_or_default());
+        let raw = fs::read_to_string(&path).unwrap_or_default();
+        let doc = parse(&raw);
         tighten(&path);
         (
             Self {
                 path,
                 unknown: Vec::new(),
-                last_saved: None,
+                // ★ 직전 저장분을 **파일 원문**으로 시드(RL-8 ⓓ · 11-04): 부팅 뒤 첫 저장이 파일과 글자까지 같으면 쓰지
+                //   않는다(종전 None = 매 실행 무의미 쓰기 1회). 형식이 다르면(CRLF·구본 이관) 그 1회는 정상적으로 쓴다.
+                last_saved: (!raw.is_empty()).then_some(raw),
                 sched: SaveScheduler::new(quiet_ms, max_delay_ms),
             },
             doc,
@@ -460,6 +463,33 @@ mod tests {
         assert!(st.save(&known).unwrap(), "첫 저장은 쓴다");
         assert!(!st.save(&known).unwrap(), "동일 스냅샷은 건너뛴다");
         assert!(st.save(&[("a", "2"), ("b", "x")]).unwrap());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// T-4b(RL-8 ⓓ · 11-04): 다시 열어 같은 스냅샷을 저장하면 쓰지 않는다 — 부팅 무의미 쓰기 0.
+    #[test]
+    fn reopen_seeds_last_saved_from_file() {
+        let d = tmpdir("t4b");
+        let p = d.join("s.cfg");
+        let known = [("a", "1"), ("b", "x")];
+        {
+            let (mut st, _) = Store::open(p.clone(), 1000, 10_000);
+            assert!(st.save(&known).unwrap());
+        }
+        let (mut st, doc) = Store::open(p.clone(), 1000, 10_000);
+        assert_eq!(doc.pairs.len(), 2);
+        assert!(
+            !st.save(&known).unwrap(),
+            "파일과 같은 스냅샷 = 재기동 뒤에도 건너뛴다"
+        );
+        assert!(st.save(&[("a", "2"), ("b", "x")]).unwrap(), "바뀌면 쓴다");
+        // 형식이 다른 파일(CRLF)은 첫 저장이 정규화해 쓴다.
+        fs::write(&p, "_schema=1\r\na=2\r\nb=x\r\n").unwrap();
+        let (mut st, _) = Store::open(p, 1000, 10_000);
+        assert!(
+            st.save(&[("a", "2"), ("b", "x")]).unwrap(),
+            "원문이 다르면 1회 쓴다"
+        );
         let _ = fs::remove_dir_all(&d);
     }
 
