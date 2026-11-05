@@ -36,6 +36,16 @@ pub enum TokenKind {
     Error,
     /// 경고 줄(테마 `warn`).
     Warn,
+    /// ★ 260차(nexa-sql T-78): 자료형(`VARCHAR2` · `INT`).
+    Datatype,
+    /// 내장 함수·패키지(`COUNT` · `TO_CHAR`).
+    Function,
+    /// 바인드 변수·파라미터(`:name` · `?` · `@var` · `&var`).
+    Bind,
+    /// 문장 구분자(`;` · 줄에 홀로 있는 `/`·`GO`).
+    Delimiter,
+    /// 클라이언트/실행 명령(`EXEC` · `PRAGMA`).
+    Command,
 }
 
 impl TokenKind {
@@ -50,6 +60,11 @@ impl TokenKind {
             TokenKind::Number => th.syn_number,
             TokenKind::Error => th.danger,
             TokenKind::Warn => th.warn,
+            TokenKind::Datatype => th.syn_datatype,
+            TokenKind::Function => th.syn_function,
+            TokenKind::Bind => th.syn_bind,
+            TokenKind::Delimiter => th.syn_delimiter,
+            TokenKind::Command => th.syn_command,
         }
     }
 }
@@ -90,6 +105,16 @@ pub struct SyntaxSpec {
     /// 숫자 리터럴을 칠하는가(`.nexa-syntax`의 `numbers = off`로 끔 · Plain Text = 끔 — 읽을거리의 버전 번호·날짜가
     /// 초록으로 칠해지던 것 · nexa-sql 사용자 09-19).
     pub numbers: bool,
+    /// ★ 260차(nexa-sql T-78): 분류별 낱말 집합(키워드와 같은 대소문자 규칙) — 자료형 · 함수 · 명령(`datatypes =` · `functions =` · `commands =`).
+    pub datatypes: HashSet<String>,
+    pub functions: HashSet<String>,
+    pub commands: HashSet<String>,
+    /// 어디서나 구분자로 칠하는 토큰(`delimiters = ;`).
+    pub delimiters: Vec<String>,
+    /// 줄에 홀로 있을 때만 구분자(`line_delimiters = / GO` · 대소문자 규칙 적용).
+    pub line_delimiters: Vec<String>,
+    /// 바인드 접두 문자(`bind_prefix = : ? @ &`) — 뒤에 식별자가 오면 함께 바인드 · `?`는 홀로도.
+    pub bind_prefix: Vec<char>,
 }
 
 impl SyntaxSpec {
@@ -107,6 +132,12 @@ impl SyntaxSpec {
             escape_backslash: false,
             ident_extra: "_".into(),
             numbers: false,
+            datatypes: HashSet::new(),
+            functions: HashSet::new(),
+            commands: HashSet::new(),
+            delimiters: Vec::new(),
+            line_delimiters: Vec::new(),
+            bind_prefix: Vec::new(),
         }
     }
 
@@ -136,8 +167,17 @@ impl SyntaxSpec {
             escape_backslash: false,
             ident_extra: "_".into(),
             numbers: true,
+            datatypes: HashSet::new(),
+            functions: HashSet::new(),
+            commands: HashSet::new(),
+            delimiters: Vec::new(),
+            line_delimiters: Vec::new(),
+            bind_prefix: Vec::new(),
         };
         let mut raw_keywords: Vec<String> = Vec::new();
+        let mut raw_datatypes: Vec<String> = Vec::new();
+        let mut raw_functions: Vec<String> = Vec::new();
+        let mut raw_commands: Vec<String> = Vec::new();
         for (ln, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -171,27 +211,40 @@ impl SyntaxSpec {
                     .extend(v.split_whitespace().filter_map(|t| t.chars().next())),
                 "ident_extra" => s.ident_extra = v.to_string(),
                 "numbers" => s.numbers = matches!(v, "true" | "on" | "yes" | "1"),
-                "keywords" => raw_keywords.extend(
-                    v.split(|c: char| c == ',' || c.is_whitespace())
-                        .filter(|e| !e.is_empty())
-                        .map(str::to_string),
-                ),
+                "keywords" => raw_keywords.extend(words(v)),
+                "datatypes" => raw_datatypes.extend(words(v)),
+                "functions" => raw_functions.extend(words(v)),
+                "commands" => raw_commands.extend(words(v)),
+                "delimiters" => s
+                    .delimiters
+                    .extend(v.split_whitespace().map(str::to_string)),
+                "line_delimiters" => s
+                    .line_delimiters
+                    .extend(v.split_whitespace().map(str::to_string)),
+                "bind_prefix" => s
+                    .bind_prefix
+                    .extend(v.split_whitespace().filter_map(|t| t.chars().next())),
                 other => return Err(format!("line {}: unknown key '{other}'", ln + 1)),
             }
         }
         if s.name.is_empty() {
             return Err("missing 'name'".into());
         }
-        s.keywords = raw_keywords
-            .into_iter()
-            .map(|k| {
-                if s.case_insensitive {
-                    k.to_uppercase()
-                } else {
-                    k
-                }
-            })
-            .collect();
+        let ci = s.case_insensitive;
+        let fold = |v: Vec<String>| -> HashSet<String> {
+            v.into_iter()
+                .map(|k| if ci { k.to_uppercase() } else { k })
+                .collect()
+        };
+        s.keywords = fold(raw_keywords);
+        s.datatypes = fold(raw_datatypes);
+        s.functions = fold(raw_functions);
+        s.commands = fold(raw_commands);
+        if ci {
+            for d in &mut s.line_delimiters {
+                *d = d.to_uppercase();
+            }
+        }
         Ok(s)
     }
 
@@ -213,6 +266,51 @@ impl SyntaxSpec {
             self.keywords.contains(word)
         }
     }
+
+    /// ★ 260차: 낱말 → 종류(키워드 > 자료형 > 함수 > 명령 > 보통 · 대소문자 규칙은 집합 쪽에 맞춰 둠).
+    fn word_kind(&self, word: &str) -> TokenKind {
+        if self.is_keyword(word) {
+            return TokenKind::Keyword;
+        }
+        let key = if self.case_insensitive {
+            word.to_uppercase()
+        } else {
+            word.to_string()
+        };
+        if self.datatypes.contains(&key) {
+            TokenKind::Datatype
+        } else if self.functions.contains(&key) {
+            TokenKind::Function
+        } else if self.commands.contains(&key) {
+            TokenKind::Command
+        } else {
+            TokenKind::Plain
+        }
+    }
+
+    /// 줄이 통째로 줄 구분자(`/` · `GO`)인가.
+    fn is_line_delimiter(&self, line: &str) -> bool {
+        if self.line_delimiters.is_empty() {
+            return false;
+        }
+        let t = line.trim();
+        if t.is_empty() {
+            return false;
+        }
+        let t = if self.case_insensitive {
+            t.to_uppercase()
+        } else {
+            t.to_string()
+        };
+        self.line_delimiters.contains(&t)
+    }
+}
+
+/// `keywords =` 류 값 → 낱말(쉼표·공백 구분).
+fn words(v: &str) -> impl Iterator<Item = String> + '_ {
+    v.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|e| !e.is_empty())
+        .map(str::to_string)
 }
 
 fn starts_with_at(chars: &[char], i: usize, pat: &str) -> bool {
@@ -281,6 +379,11 @@ impl Highlighter for SyntaxSpec {
                 return;
             }
         }
+        // ★ 260차: 줄에 홀로 있는 구분자(`/` · `GO`) = 줄 전체를 구분자로.
+        if i == 0 && self.is_line_delimiter(line) {
+            push_span(out, n, TokenKind::Delimiter);
+            return;
+        }
         'outer: while i < n {
             let c = chars[i];
             // 줄 주석
@@ -337,6 +440,36 @@ impl Highlighter for SyntaxSpec {
                 i = j;
                 continue;
             }
+            // ★ 260차: 구분자(`;`) — 어디서나.
+            for d in &self.delimiters {
+                if starts_with_at(&chars, i, d) {
+                    let len = d.chars().count();
+                    push_span(out, len, TokenKind::Delimiter);
+                    i += len;
+                    continue 'outer;
+                }
+            }
+            // ★ 260차: 바인드(`:name` · `@var` · `&var` · 홀로 `?`) — 식별자보다 먼저(`@`가 ident_extra여도 바인드로).
+            //   `::`(PostgreSQL 캐스트)·`:=`(PL/SQL 대입)는 바인드가 아니다.
+            let pg_cast =
+                c == ':' && (chars.get(i + 1) == Some(&':') || (i > 0 && chars[i - 1] == ':'));
+            if self.bind_prefix.contains(&c) && !pg_cast {
+                let next_ident = chars.get(i + 1).is_some_and(|&d| self.is_ident_start(d));
+                if next_ident {
+                    let mut j = i + 1;
+                    while j < n && self.is_ident(chars[j]) {
+                        j += 1;
+                    }
+                    push_span(out, j - i, TokenKind::Bind);
+                    i = j;
+                    continue;
+                }
+                if c == '?' {
+                    push_span(out, 1, TokenKind::Bind);
+                    i += 1;
+                    continue;
+                }
+            }
             // 숫자
             if self.numbers
                 && (c.is_ascii_digit()
@@ -359,11 +492,7 @@ impl Highlighter for SyntaxSpec {
                     j += 1;
                 }
                 let word: String = chars[i..j].iter().collect();
-                let k = if self.is_keyword(&word) {
-                    TokenKind::Keyword
-                } else {
-                    TokenKind::Plain
-                };
+                let k = self.word_kind(&word);
                 push_span(out, j - i, k);
                 i = j;
                 continue;
@@ -456,10 +585,14 @@ keywords = INSERT INTO VALUES UPDATE SET DELETE MERGE MATCHED THEN WHEN CASE ELS
 keywords = CREATE ALTER DROP TABLE VIEW INDEX SEQUENCE SYNONYM TRIGGER PROCEDURE FUNCTION PACKAGE BODY TYPE SCHEMA DATABASE USER ROLE GRANT REVOKE
 keywords = PRIMARY KEY FOREIGN REFERENCES UNIQUE CHECK DEFAULT CONSTRAINT CASCADE TRUNCATE RENAME TO ADD COLUMN MODIFY REPLACE TEMPORARY TEMP
 keywords = BEGIN DECLARE EXCEPTION RAISE COMMIT ROLLBACK SAVEPOINT TRANSACTION WITH RECURSIVE OVER PARTITION WINDOW ROWNUM ROWID
-keywords = CAST CONVERT COALESCE NVL NVL2 DECODE NULLIF IFNULL ISNULL COUNT SUM AVG MIN MAX ROUND TRUNC SUBSTR SUBSTRING INSTR LENGTH LEN TRIM LTRIM RTRIM UPPER LOWER
-keywords = TO_CHAR TO_DATE TO_NUMBER SYSDATE SYSTIMESTAMP GETDATE NOW CURRENT_DATE CURRENT_TIMESTAMP EXTRACT DATEADD DATEDIFF
-keywords = INT INTEGER BIGINT SMALLINT NUMBER NUMERIC DECIMAL FLOAT REAL DOUBLE PRECISION VARCHAR VARCHAR2 NVARCHAR NVARCHAR2 CHAR NCHAR TEXT CLOB BLOB DATE TIMESTAMP TIME BOOLEAN BOOL BIT SERIAL
-keywords = TRUE FALSE EXEC EXECUTE IMMEDIATE CURSOR OPEN CLOSE INTO OUT INOUT ROWTYPE PRAGMA AUTONOMOUS_TRANSACTION GO
+keywords = TRUE FALSE CURSOR OPEN CLOSE INTO OUT INOUT ROWTYPE AUTONOMOUS_TRANSACTION
+functions = CAST CONVERT COALESCE NVL NVL2 DECODE NULLIF IFNULL ISNULL COUNT SUM AVG MIN MAX ROUND TRUNC SUBSTR SUBSTRING INSTR LENGTH LEN TRIM LTRIM RTRIM UPPER LOWER
+functions = TO_CHAR TO_DATE TO_NUMBER SYSDATE SYSTIMESTAMP GETDATE NOW CURRENT_DATE CURRENT_TIMESTAMP EXTRACT DATEADD DATEDIFF
+datatypes = INT INTEGER BIGINT SMALLINT NUMBER NUMERIC DECIMAL FLOAT REAL DOUBLE PRECISION VARCHAR VARCHAR2 NVARCHAR NVARCHAR2 CHAR NCHAR TEXT CLOB BLOB DATE TIMESTAMP TIME BOOLEAN BOOL BIT SERIAL
+commands = EXEC EXECUTE IMMEDIATE PRAGMA GO
+delimiters = ;
+line_delimiters = / GO
+bind_prefix = : ? @ &
 "#;
 
 /// ★ 내장 JSON 규격(10-30 · nexa-sql T-76): 설정 파일·Sublime 패키지 파일(주석 허용 JSON).
@@ -530,6 +663,41 @@ mod tests {
         assert_eq!(s[2], (6, TokenKind::Str));
         assert_eq!(s.last().copied(), Some((5, TokenKind::Comment)));
         assert_eq!(st, 0);
+    }
+
+    /// ★ 260차(T-78): 분류 5종 — 함수 · 자료형 · 바인드(`:id` · `?` · `@v`) · 구분자(`;` · 줄 단독 `/`·`GO`) · 명령 · 키워드 우선.
+    #[test]
+    fn sql_token_classes() {
+        let sql = SyntaxSpec::sql();
+        let mut st = 0;
+        let kinds = |line: &str| -> Vec<(usize, TokenKind)> { spans(&sql, line, &mut 0) };
+        let s = kinds("SELECT COUNT(*) FROM t WHERE id = :id AND n = ? AND v = @v;");
+        assert_eq!(s[0], (6, TokenKind::Keyword));
+        assert_eq!(s[2], (5, TokenKind::Function), "{s:?}");
+        assert!(s.contains(&(3, TokenKind::Bind)), ":id · {s:?}");
+        assert!(s.contains(&(1, TokenKind::Bind)), "? · {s:?}");
+        assert!(s.contains(&(2, TokenKind::Bind)), "@v · {s:?}");
+        assert_eq!(s.last().copied(), Some((1, TokenKind::Delimiter)));
+        let s = kinds("CREATE TABLE t (a VARCHAR2(10), b INT)");
+        assert!(
+            s.contains(&(8, TokenKind::Datatype)) && s.contains(&(3, TokenKind::Datatype)),
+            "{s:?}"
+        );
+        assert_eq!(kinds("  /  "), vec![(5, TokenKind::Delimiter)]);
+        assert_eq!(kinds("go"), vec![(2, TokenKind::Delimiter)]);
+        let s = kinds("EXEC p(1)");
+        assert_eq!(s[0], (4, TokenKind::Command));
+        // 블록 주석 이어짐 속에서는 줄 구분자가 아니다.
+        let _ = spans(&sql, "x /* open", &mut st);
+        let s = spans(&sql, "/", &mut st);
+        assert_eq!(s[0].1, TokenKind::Comment);
+        // 스펙 키 파싱.
+        let p = SyntaxSpec::parse("name = X\ncase_insensitive = true\ndatatypes = int\nfunctions = f\ncommands = go\ndelimiters = ;\nline_delimiters = go\nbind_prefix = :").unwrap();
+        assert!(
+            p.datatypes.contains("INT") && p.functions.contains("F") && p.commands.contains("GO")
+        );
+        assert_eq!(p.line_delimiters, vec!["GO".to_string()]);
+        assert_eq!(p.bind_prefix, vec![':']);
     }
 
     #[test]

@@ -42,6 +42,12 @@ pub struct Theme {
     pub syn_string: Color,
     pub syn_comment: Color,
     pub syn_number: Color,
+    /// ★ 260차(nexa-sql T-78): 자료형 · 함수 · 바인드 · 구분자 · 명령([`crate::highlight::TokenKind`] 5종).
+    pub syn_datatype: Color,
+    pub syn_function: Color,
+    pub syn_bind: Color,
+    pub syn_delimiter: Color,
+    pub syn_command: Color,
     /// 레인보우 괄호 깊이 색 6(nexa-sql docs/51 · D-95 테마 기본).
     /// ★ 순서 = [`contrast_order`] 결과(이웃 깊이가 따뜻함↔차가움으로 번갈아 · 보색에 가깝게) — 색을 바꾸면 테스트
     /// `theme_rainbow_is_already_contrast_ordered`가 새 순서를 알려 준다.
@@ -78,6 +84,11 @@ impl Theme {
             syn_string: Color(0x00E3_A26A),
             syn_comment: Color(0x007C_8A5A),
             syn_number: Color(0x00B5_CEA8),
+            syn_datatype: Color(0x004E_C9B0),
+            syn_function: Color(0x00DC_DCAA),
+            syn_bind: Color(0x009C_DCFE),
+            syn_delimiter: Color(0x00D7_BA7D),
+            syn_command: Color(0x00C5_86C0),
             rainbow: [
                 Color(0x00F2_C94C),
                 Color(0x004F_C1FF),
@@ -114,6 +125,11 @@ impl Theme {
             syn_string: Color(0x00A3_1515),
             syn_comment: Color(0x0057_8A2A),
             syn_number: Color(0x0009_8658),
+            syn_datatype: Color(0x0026_7F99),
+            syn_function: Color(0x0079_5E26),
+            syn_bind: Color(0x0000_1080),
+            syn_delimiter: Color(0x00B5_200D),
+            syn_command: Color(0x00AF_00DB),
             rainbow: [
                 Color(0x00B5_8900),
                 Color(0x0026_8BD2),

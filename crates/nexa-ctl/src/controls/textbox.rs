@@ -656,6 +656,8 @@ pub struct TextBox {
     /// ★ T-110 3-1(nexa-sql 10-31): 자동 숨김 — 마우스 이동·휠 뒤 [`MINIMAP_AUTOHIDE_MS`] 동안만 띠를 그린다(자리는 유지 = 본문이 흔들리지 않음).
     minimap_autohide: bool,
     minimap_activity: std::cell::Cell<Option<std::time::Instant>>,
+    /// ★ 260차(nexa-sql T-78 · D-54): 선택 블록 투명도(1.0 = 불투명 종전 · 1 미만 = 반투명 워시 · 글자는 그대로 위에).
+    sel_alpha: f32,
     /// 미니맵 드래그 중(클릭 위치를 뷰포트 가운데로 · 따라감).
     minimap_drag: bool,
     /// 뷰포트 상자 — 색(None = Sublime식 회색 `0x808080`) · 알파(None = 0.18 · hover +0.10) · 테두리(기본 없음 · 사용자 09-17).
@@ -1093,6 +1095,7 @@ impl TextBox {
             minimap_left: false,
             minimap_autohide: false,
             minimap_activity: std::cell::Cell::new(None),
+            sel_alpha: 1.0,
             minimap_drag: false,
             minimap_box: (None, None, false),
             minimap_errors: Vec::new(),
@@ -1245,6 +1248,24 @@ impl TextBox {
     }
 
     /// ★ T-110 3-1: 자동 숨김(VS Code autohide) — 켜면 마우스 이동·휠 뒤 [`MINIMAP_AUTOHIDE_MS`] 동안만 띠를 그린다(자리는 남긴다).
+    /// ★ 260차(nexa-sql T-78 · D-54): 선택 블록 투명도 0.1~1.0(1.0 = 불투명 · Golden식 반투명 워시는 0.45 안팎).
+    pub fn set_selection_alpha(&mut self, a: f32) {
+        self.sel_alpha = if a.is_finite() {
+            a.clamp(0.1, 1.0)
+        } else {
+            1.0
+        };
+    }
+
+    /// 선택 블록 채우기(투명도 반영).
+    fn fill_sel(&self, ctx: &mut dyn DrawCtx, r: Rect, c: Color) {
+        if self.sel_alpha >= 0.999 {
+            ctx.fill_rect(r, c);
+        } else {
+            ctx.fill_rect_alpha(r, c, self.sel_alpha);
+        }
+    }
+
     pub fn set_minimap_autohide(&mut self, on: bool) {
         self.minimap_autohide = on;
     }
@@ -4515,7 +4536,8 @@ impl TextBox {
                         (dx + w.get(s1 - ls).copied().unwrap_or(0)).min(vx1)
                     };
                     if let (true, Some(r)) = (x1 > x0, clipv(Rect::new(x0, y, x1 - x0, lh))) {
-                        ctx.fill_rect(
+                        self.fill_sel(
+                            ctx,
                             r,
                             if self.base.focused {
                                 theme.sel_bg
