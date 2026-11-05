@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 journal.
 
+- **2026-11-05 (260차 · Windows · nexa-sql T-78)** — nexa-ctl 구문 토큰 종류 확장(`Datatype`·`Function`·`Bind`·`Delimiter`·`Command`) · `SyntaxSpec` 키 6 · `Theme` 필드 +5 · 선택 반투명 `set_selection_alpha`(동작 변경 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 시험 highlight 10/0 · nexa-ctl 477/0 — [journal 11-05](journal/2026-11-05.md).
 - **2026-11-04 (258차 · Windows · nexa-sql 아침 피드백 2)** — nexa-dlg 편집 메뉴 배타·창 안 배치(동작 변경 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 시험 1 — [journal 11-04](journal/2026-11-04.md)
 - **2026-11-04 (257차 · Windows · nexa-sql 아침 피드백)** — nexa-dlg 경로 입력 탐색기 관례(좌클릭 편집 · 파일 경로 = 폴더 이동+선택 · `set_clipboard_has_text` · 동작 변경 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 시험 3 — [journal 11-04](journal/2026-11-04.md)
 - **2026-11-04 (256차 · Windows · nexa-sql T-79)** — nexa-dlg `set_extra2`/`extra2_value`(둘째 하단 콤보 · 추가 · [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · 시험 1 — [journal 11-04](journal/2026-11-04.md)

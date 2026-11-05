@@ -4,6 +4,7 @@
 
 | 브랜치 | 생성 | 병합 | 커밋 | 요약 |
 |---|---|---|---|---|
+| syn-tokens | 2026-11-05 | 2026-11-05 → main ff(삭제) · **f72675f** | 2 | 260차 nexa-ctl 토큰 종류 +5 · `SyntaxSpec` 키 6 · `Theme` 필드 +5 · `set_selection_alpha`(nexa-sql T-78 · CONSUMER-CHANGES 260) |
 | dlg-ctxmenu-exclusive | 2026-11-04 | 2026-11-04 → main ff(삭제) · **7f5e311** | 2 | 258차 nexa-dlg 편집 메뉴 배타·창 안 배치(`set_ctxmenu_policy` · CONSUMER-CHANGES 258) |
 | dlg-path-entry | 2026-11-04 | 2026-11-04 → main ff(삭제) · **46adad6** | 2 | 257차 nexa-dlg 경로 입력 탐색기 관례(좌클릭 편집 · 파일 경로 = 폴더 이동+선택 · `set_clipboard_has_text` · 동작 변경 · CONSUMER-CHANGES 257) |
 | save-eol-extra2 | 2026-11-04 | 2026-11-04 → main ff(삭제) · **f741aea** | 2 | 256차 nexa-dlg 둘째 하단 콤보 `set_extra2`(nexa-sql T-79 · 추가 · CONSUMER-CHANGES 256) |

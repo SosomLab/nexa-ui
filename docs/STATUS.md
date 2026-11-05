@@ -2,6 +2,7 @@
 
 > 시간 역순. 상세는 [journal](journal/), 여기는 요약. **소비자 영향·검증 상태 = [CONSUMER-CHANGES](CONSUMER-CHANGES.md)**(nexa-ui 변경 커밋마다 한 줄 · 소비자는 `동작 변경`·`미검증` 행부터 확인).
 
+- **2026-11-05 (260차 · Windows · nexa-sql T-78)** — nexa-ctl 토큰 종류 +5 · `SyntaxSpec` 키 6 · `Theme` 필드 +5 · `TextBox::set_selection_alpha`(동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md) 260) · main **f72675f** · [journal 11-05](journal/2026-11-05.md).
 - **2026-11-04 (258차 · Windows · nexa-sql 아침 피드백 2)** — nexa-dlg 편집 메뉴 배타·창 안 배치(`set_ctxmenu_policy` · `close_edit_menus` · 동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **7f5e311** · [journal 11-04](journal/2026-11-04.md)
 - **2026-11-04 (257차 · Windows · nexa-sql 아침 피드백)** — nexa-dlg 브레드크럼 좌클릭 편집 · 파일 경로 = 폴더 이동+선택 · `set_clipboard_has_text`(동작 변경 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **46adad6** · [journal 11-04](journal/2026-11-04.md)
 - **2026-11-04 (256차 · Windows · nexa-sql T-79)** — nexa-dlg 둘째 하단 콤보 `set_extra2`(추가 — [CONSUMER-CHANGES](CONSUMER-CHANGES.md)) · main **f741aea** · [journal 11-04](journal/2026-11-04.md)
