@@ -14,7 +14,7 @@
 
 use super::{Control, ControlBase};
 use crate::draw::DrawCtx;
-use crate::event::{InputEvent, WheelAccum};
+use crate::event::{InputEvent, Key, WheelAccum};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
@@ -42,6 +42,9 @@ pub struct Carousel {
     /// 스크롤 방향 반전(08-14 사용자 확정 — 기본 false = 현행 방향). **컨트롤은
     /// OS를 모른다** — 플랫폼 기본(mac = 내추럴 = 반전)은 호스트가 주입한다.
     invert_scroll: bool,
+    /// 키보드 커서(nexa-beep M3-4 캐러셀 키보드 · 11-07) — 포커스일 때 ←/→/Home/End로 옮기고 Enter/Space가
+    /// [`Carousel::take_clicked`]로 확정한다(클릭과 같은 통로). 포커스 링은 이 항목에 그린다.
+    cursor: Option<usize>,
 }
 
 impl Carousel {
@@ -59,6 +62,7 @@ impl Carousel {
             hover: false,
             hwheel: WheelAccum::default(),
             invert_scroll: false,
+            cursor: None,
         }
     }
 
@@ -68,9 +72,44 @@ impl Carousel {
         self.invert_scroll = invert;
     }
 
-    /// 전체 아이템 수 갱신 — 줄어들면 스크롤을 안쪽으로 되민다.
+    /// 전체 아이템 수 갱신 — 줄어들면 스크롤을 안쪽으로 되민다(커서도 범위 안으로).
     pub fn set_count(&mut self, count: usize) {
         self.count = count;
+        self.clamp();
+        if count == 0 {
+            self.cursor = None;
+        } else if let Some(c) = self.cursor {
+            self.cursor = Some(c.min(count - 1));
+        }
+    }
+
+    /// 키보드 커서(포커스 항목 · 11-07).
+    #[must_use]
+    pub fn cursor(&self) -> Option<usize> {
+        self.cursor
+    }
+
+    /// 키보드 커서 지정(범위 밖·빈 띠 = None) + 보이게 스크롤 — 소유자가 포커스를 줄 때 현재 선택으로 맞춘다.
+    pub fn set_cursor(&mut self, i: Option<usize>, inv: &mut Invalidations) {
+        self.cursor = i.filter(|&i| i < self.count);
+        if let Some(i) = self.cursor {
+            self.ensure_visible(i);
+        }
+        inv.push(self.base.bounds);
+    }
+
+    /// i번째 아이템이 이동 버튼에 가리지 않고 온전히 보이게 스크롤(키보드 이동 · 11-07).
+    fn ensure_visible(&mut self, i: usize) {
+        let d = self.item_w();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let off = (d + self.gap_w()) * i as i32;
+        let margin = self.btn_w() + self.gap_w();
+        let w = self.base.bounds.w;
+        if off - self.scroll_px < margin {
+            self.scroll_px = (off - margin).max(0);
+        } else if off + d - self.scroll_px > w - margin {
+            self.scroll_px = off + d - (w - margin);
+        }
         self.clamp();
     }
 
@@ -180,6 +219,31 @@ impl Widget for Carousel {
                 self.hover = self.base.bounds.contains(Point { x, y });
                 return;
             }
+            // 키보드(11-07 · docs/14 "방향키 = 타겟 단계에서 소비"): 포커스일 때만 · ←/→ 한 칸 · Home/End 끝 ·
+            // Enter/Space = 커서 항목 확정(클릭과 같은 `clicked` 통로). 빈 띠는 아무것도 안 한다.
+            InputEvent::Key { key, .. } if self.base.focused && self.count > 0 => {
+                let last = self.count - 1;
+                let cur = self.cursor.unwrap_or(0);
+                let next = match key {
+                    Key::Left => Some(cur.saturating_sub(1)),
+                    Key::Right => Some((cur + 1).min(last)),
+                    Key::Home => Some(0),
+                    Key::End => Some(last),
+                    Key::Enter | Key::Space => {
+                        self.clicked = Some(cur);
+                        self.cursor = Some(cur);
+                        inv.push(self.base.bounds);
+                        return;
+                    }
+                    _ => None,
+                };
+                if let Some(n) = next {
+                    self.cursor = Some(n);
+                    self.ensure_visible(n);
+                    inv.push(self.base.bounds);
+                }
+                return;
+            }
             // 트랙패드 가로 스크롤 — 띠 위에서만 · 노치 = 아이템 한 칸(부드러운
             // 픽셀 단위는 delta 자체가 분수 노치라 칸 단위로도 충분히 미끄럽다).
             InputEvent::HWheel { delta } if self.hover => {
@@ -266,6 +330,10 @@ impl Widget for Carousel {
             ctx.stroke_round_rect(r, self.s(4), theme.border, 1.0);
             chevron(ctx, r, -1); // ▶
         }
+        // 키보드 포커스 링(11-07) — 커서 항목 둘레(컨트롤 공통 헤일로 · 선택 링(소유자 · accent)과 구분된다).
+        if let Some(r) = self.cursor.and_then(|i| self.item_rect(i)) {
+            self.draw_focus_ring(ctx, theme, r);
+        }
     }
 }
 
@@ -279,6 +347,47 @@ mod tests {
         c.set_count(count);
         c.set_bounds(Rect::new(0, 0, w, 36), &mut inv);
         c
+    }
+
+    /// 키보드(11-07): 포커스일 때만 · ←/→/Home/End 커서 + 보이게 스크롤 · Enter = 클릭과 같은 통로 · set_count가 커서를 접는다.
+    #[test]
+    fn keyboard_cursor_moves_and_enter_clicks() {
+        let mut c = car(120, 10); // 아이템 32+4 → 한 화면 ≈3개
+        let mut inv = Invalidations::default();
+        let k = |key| InputEvent::Key {
+            key,
+            shift: false,
+            primary: false,
+        };
+        c.on_event(&k(Key::Right), &mut inv);
+        assert_eq!(c.cursor(), None, "포커스 없으면 키를 먹지 않는다");
+        c.set_focused(true);
+        c.on_event(&k(Key::Right), &mut inv);
+        assert_eq!(c.cursor(), Some(1), "첫 →는 0에서 출발해 1");
+        c.on_event(&k(Key::End), &mut inv);
+        assert_eq!(c.cursor(), Some(9));
+        assert!(
+            c.item_rect(9).is_some(),
+            "끝으로 가면 끝 항목이 보인다(스크롤)"
+        );
+        assert!(c.item_rect(0).is_none(), "첫 항목은 화면 밖");
+        c.on_event(&k(Key::Right), &mut inv);
+        assert_eq!(c.cursor(), Some(9), "끝에서 →는 그대로(순환 없음)");
+        c.on_event(&k(Key::Home), &mut inv);
+        assert_eq!(c.cursor(), Some(0));
+        assert!(c.item_rect(0).is_some());
+        c.on_event(&k(Key::Left), &mut inv);
+        assert_eq!(c.cursor(), Some(0), "0에서 ←는 그대로");
+        c.on_event(&k(Key::Right), &mut inv);
+        c.on_event(&k(Key::Enter), &mut inv);
+        assert_eq!(c.take_clicked(), Some(1), "Enter = 커서 항목 클릭");
+        assert_eq!(c.take_clicked(), None, "1회성");
+        c.set_count(1);
+        assert_eq!(c.cursor(), Some(0), "개수가 줄면 커서가 접힌다");
+        c.set_count(0);
+        assert_eq!(c.cursor(), None);
+        c.set_cursor(Some(5), &mut inv);
+        assert_eq!(c.cursor(), None, "빈 띠 = None");
     }
 
     fn click(c: &mut Carousel, r: Rect) {
