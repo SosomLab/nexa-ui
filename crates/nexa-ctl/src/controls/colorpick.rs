@@ -95,7 +95,7 @@ impl ColorPicker {
 
     /// hex 입력의 현재 텍스트를 값으로 확정(붙여넣기 뒤 호스트가 부른다 — Enter와 같은 경로 · 형식 오류는 원복).
     pub fn commit_hex_input(&mut self, inv: &mut Invalidations) {
-        let s = self.hex.text().into_owned(); // Cow → 소유(commit이 &mut self라 빌림을 끊는다 · clippy redundant_clone 11-07)
+        let s = self.hex.text(); // 이미 소유 String(commit이 &mut self라 빌림을 끊는다 · clippy redundant_clone 11-07)
         self.commit(&s, inv);
     }
 
