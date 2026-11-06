@@ -670,6 +670,9 @@ pub struct TextBox {
     minimap_diff: bool,
     /// ★ git 변경 줄(docs/46 2-3 · 10-30): 둘째 기준선(`git_baseline`) 대비 변경을 미니맵 왼쪽 **안쪽** 열에(저장 diff 열 오른쪽) · 기본 끔.
     minimap_git: bool,
+    /// ★ git 변경 줄을 **거터 띠**에도(nexa-sql docs/19 §2 M3 · C-1 · 11-06): 저장 diff 띠 오른쪽에 둘째 띠(추가 = ok · 수정 = accent ·
+    /// 위에서 삭제 = danger 쐐기) · 켜면 띠 폭을 늘려 둔다(기준선이 생겨도 본문이 안 밀리게) · 기본 끔.
+    git_gutter: bool,
     minimap_viewport_hover: bool,
     minimap_click_text: bool,
     /// 본문 텍스트 가용 폭(마지막 페인트 실측 · 테스트).
@@ -1101,6 +1104,7 @@ impl TextBox {
             minimap_errors: Vec::new(),
             minimap_diff: false,
             minimap_git: false,
+            git_gutter: false,
             minimap_find: true,
             minimap_viewport_hover: false,
             minimap_click_text: false,
@@ -2127,6 +2131,27 @@ impl TextBox {
     /// ★ git 변경 줄을 미니맵에(docs/46 2-3): 켜면 둘째 기준선 대비 변경을 왼쪽 안쪽 열에 그린다(기준선 없으면 아무것도).
     pub fn set_minimap_git(&mut self, on: bool) {
         self.minimap_git = on;
+    }
+
+    /// ★ git 변경 줄을 거터 띠에(C-1): 켜면 둘째 기준선 대비 변경을 저장 diff 띠 오른쪽 둘째 띠에 그린다(기준선 없으면 빈 띠).
+    pub fn set_git_gutter(&mut self, on: bool) {
+        self.git_gutter = on;
+    }
+
+    /// git 변경 덩어리(둘째 기준선 대비 · 논리 줄 0부터 · `(첫 줄, 끝 줄 + 1)` 반열림 · 줄 순) — 연속한 추가/수정 줄은 한 덩어리 ·
+    /// 위에서 삭제 표식은 그 줄 하나짜리 덩어리. 기준선이 없으면 빈 목록(호스트의 다음/이전 변경 이동용).
+    #[must_use]
+    pub fn git_hunks(&self) -> Vec<(usize, usize)> {
+        let mut marks = self.git_marks();
+        marks.sort_by_key(|(l, _)| *l);
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        for (l, k) in marks {
+            match out.last_mut() {
+                Some((_, end)) if *end == l && k != DiffKind::DeletedAbove => *end = l + 1,
+                _ => out.push((l, l + 1)),
+            }
+        }
+        out
     }
 
     /// 기준선 vs 현재 줄 — 공통 앞/뒤를 잘라내고 가운데만 LCS(상한 안) · 넘치면 가운데 전부 `Modified`.
@@ -3538,6 +3563,12 @@ impl TextBox {
         self.edit.caret()
     }
 
+    /// 캐럿이 있는 논리 줄(0부터 · `goto_line`은 1부터).
+    #[must_use]
+    pub fn caret_line(&self) -> usize {
+        self.edit.buf().line_of(self.edit.caret())
+    }
+
     /// 선택 범위(문자 인덱스 · 정렬됨). 없으면 `None`.
     #[must_use]
     pub fn selection(&self) -> Option<(usize, usize)> {
@@ -4011,8 +4042,13 @@ impl TextBox {
         // ★ 거터 배치(사용자 09-23) = **[북마크 영역][줄번호 영역][편집 영역][미니맵]** — 북마크 띠(3px)·니모닉 상자(12px)는 맨 왼쪽
         //   영역에, 줄 변경 표시(Golden식 3px)는 종전대로 줄번호 오른쪽 띠(`mark_extra`)에. 줄번호를 꺼도 북마크 영역은 남는다
         //   (VS Code glyph margin처럼 줄번호와 독립 · 폭 고정 → 표식이 생겨도 본문이 안 밀린다).
+        // ★ git 거터 띠(C-1)를 켜면 둘째 띠 자리(4px)를 늘 둔다 — 기준선이 생기고 사라져도 본문이 안 밀린다.
         let mark_extra = if self.gutter_marks && self.multiline {
-            self.s(6)
+            if self.git_gutter {
+                self.s(10)
+            } else {
+                self.s(6)
+            }
         } else {
             0
         };
@@ -4282,6 +4318,15 @@ impl TextBox {
             self.recompute_diff();
         }
         let diff_marks = self.diff_marks.borrow();
+        // ★ git 거터 띠(C-1): 둘째 기준선이 있고 켜져 있을 때만 · 정렬 뒤 이진 탐색(미니맵 열과 같은 원천 `git_marks`).
+        let git_gutter_marks: Vec<(usize, DiffKind)> =
+            if self.git_gutter && mark_extra > 0 && self.git_baseline.is_some() {
+                let mut g = self.git_marks();
+                g.sort_by_key(|(l, _)| *l);
+                g
+            } else {
+                Vec::new()
+            };
         // 레인보우 괄호(docs/51): 표 준비 · 현재 쌍(캐럿 옆 → 옵션이면 감싸는 쌍).
         if self.bracket_opts.rainbow || self.bracket_opts.match_mode > 0 {
             self.ensure_pairs();
@@ -4469,6 +4514,29 @@ impl TextBox {
                                 DiffKind::DeletedAbove => {
                                     if let Some(r) =
                                         clipv(Rect::new(mx - self.s(1), y, self.s(5), self.s(2)))
+                                    {
+                                        ctx.fill_rect(r, theme.danger);
+                                    }
+                                }
+                            }
+                        }
+                        // ★ git 변경 띠(C-1): 저장 띠 오른쪽 둘째 띠 · 추가 = ok · 수정 = accent(미니맵 git 열과 같은 색) · 삭제 쐐기.
+                        if let Ok(k) = git_gutter_marks.binary_search_by_key(&n, |(l, _)| *l) {
+                            let gx2 = mx + self.s(4);
+                            match git_gutter_marks[k].1 {
+                                DiffKind::Added | DiffKind::Modified => {
+                                    let c = if git_gutter_marks[k].1 == DiffKind::Added {
+                                        theme.ok
+                                    } else {
+                                        theme.accent
+                                    };
+                                    if let Some(r) = clipv(Rect::new(gx2, y, self.s(3), lh)) {
+                                        ctx.fill_rect(r, c);
+                                    }
+                                }
+                                DiffKind::DeletedAbove => {
+                                    if let Some(r) =
+                                        clipv(Rect::new(gx2 - self.s(1), y, self.s(5), self.s(2)))
                                     {
                                         ctx.fill_rect(r, theme.danger);
                                     }
