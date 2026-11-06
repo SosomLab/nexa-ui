@@ -82,6 +82,23 @@ impl ColorPicker {
         self.hex.is_focused()
     }
 
+    /// 포커스된 hex 입력(가변) — 호스트의 클립보드 위임(복사·잘라내기·붙여넣기 · nexa-beep M3-1b ③ 11-06). 포커스가 아니면 None.
+    pub fn hex_input(&mut self) -> Option<&mut TextBox> {
+        self.hex.is_focused().then_some(&mut self.hex)
+    }
+
+    /// 포커스된 hex 입력(불변) — 복사 선택 판정용.
+    #[must_use]
+    pub fn hex_input_ref(&self) -> Option<&TextBox> {
+        self.hex.is_focused().then_some(&self.hex)
+    }
+
+    /// hex 입력의 현재 텍스트를 값으로 확정(붙여넣기 뒤 호스트가 부른다 — Enter와 같은 경로 · 형식 오류는 원복).
+    pub fn commit_hex_input(&mut self, inv: &mut Invalidations) {
+        let s = self.hex.text().to_string();
+        self.commit(&s, inv);
+    }
+
     /// 권장 폭(물리 px) — 호스트 레이아웃용.
     #[must_use]
     pub fn preferred_width(&self) -> i32 {
