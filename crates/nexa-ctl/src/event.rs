@@ -42,6 +42,8 @@ pub enum Key {
     SubwordLeft,
     /// 서브워드 오른쪽.
     SubwordRight,
+    /// Tab — 포커스 순회(Shift = 역순 · 호스트가 `shift`로 보낸다 · nexa-beep M3-4 11-06). 조합 중엔 IME가 먼저 소비한다.
+    Tab,
 }
 
 /// 위젯이 받는 입력 이벤트.
