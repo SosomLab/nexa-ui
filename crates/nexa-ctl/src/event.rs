@@ -44,6 +44,9 @@ pub enum Key {
     SubwordRight,
     /// Tab — 포커스 순회(Shift = 역순 · 호스트가 `shift`로 보낸다 · nexa-beep M3-4 11-06). 조합 중엔 IME가 먼저 소비한다.
     Tab,
+    /// 메뉴 키(Windows `VK_APPS` · Shift+F10 — nexa-beep M3-4 ③ 11-07): **포커스 대상**(캐럿 행 · 선택 풍선 · 입력란)의
+    /// 컨텍스트 메뉴를 연다. 대상의 사각형은 위젯이 안다(호스트는 좌표를 모른다) · mac은 호스트가 보내지 않는다.
+    ContextMenu,
 }
 
 /// 위젯이 받는 입력 이벤트.
