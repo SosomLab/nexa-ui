@@ -3120,17 +3120,30 @@ impl TextBox {
         best
     }
 
-    /// 단어 경계로 선택(더블클릭).
+    /// 단어 경계로 선택(더블클릭) — ★ **Sublime 규칙**(사용자 11-10 "공백·특수 문자도 선택"): 글자 부류 = 단어(영숫자 · 정책에
+    /// 따라 `_`) · 공백 · 특수 문자 셋이고, 클릭 지점 글자와 **같은 부류의 연속 묶음**을 고른다(공백 묶음 · `...` 같은 기호 묶음도
+    /// 선택 · 줄 바꿈은 넘지 않는다). 줄 끝 뒤(다음 글자가 `\n`/EOF)를 더블클릭하면 바로 앞 글자 기준 → 꼬리 공백 묶음 · 꼬리 공백이
+    /// 없으면 마지막 단어 · 빈 줄이면 아무것도 안 고른다. 종전 = 단어 글자 위에서만 선택(공백·기호·줄 끝 뒤 = 빈 선택).
     fn select_word_at(&mut self, idx: usize) {
         let buf = self.edit.buf();
         if buf.is_empty() {
             return;
         }
-        let i = idx.min(buf.len().saturating_sub(1));
         let us = word_underscore();
-        let is_word = move |c: char| c.is_alphanumeric() || (c == '_' && us);
-        let a = i - buf.iter_rev_from(i).take_while(|c| is_word(*c)).count();
-        let b = i + buf.iter_from(i).take_while(|c| is_word(*c)).count();
+        let class = move |c: char| word_class(c, us);
+        let mut i = idx.min(buf.len());
+        if !matches!(buf.get(i), Some(c) if c != '\n') {
+            // 줄 끝(또는 EOF) → 앞 글자 기준 · 앞도 줄 바꿈(빈 줄)이면 없음.
+            match i.checked_sub(1).and_then(|j| buf.get(j)) {
+                Some(c) if c != '\n' => i -= 1,
+                _ => return,
+            }
+        }
+        let Some(k) = buf.get(i).map(class) else {
+            return;
+        };
+        let a = i - buf.iter_rev_from(i).take_while(|c| class(*c) == k).count();
+        let b = i + buf.iter_from(i).take_while(|c| class(*c) == k).count();
         self.edit.set_selection(a, b);
     }
 
@@ -5381,6 +5394,27 @@ static CLICK_POLICY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32
 #[cfg(test)]
 thread_local! {
     static CLICK_POLICY_T: std::cell::Cell<u32> = const { std::cell::Cell::new(0x0001_0201) };
+}
+
+/// 더블클릭 선택의 글자 부류(Sublime 규칙 · [`TextBox::select_word_at`]) — 줄 바꿈은 어느 묶음에도 안 든다.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WordClass {
+    Word,
+    Space,
+    Punct,
+    Newline,
+}
+
+fn word_class(c: char, underscore: bool) -> WordClass {
+    if c == '\n' || c == '\r' {
+        WordClass::Newline
+    } else if c.is_whitespace() {
+        WordClass::Space
+    } else if c.is_alphanumeric() || (c == '_' && underscore) {
+        WordClass::Word
+    } else {
+        WordClass::Punct
+    }
 }
 
 /// 연속 클릭 정책 설정 — `dbl` = 더블클릭 · `triple` = 트리플클릭 · `underscore` = `_`를 단어 구성 문자로 볼지.
@@ -8530,6 +8564,58 @@ mod click_policy_tests {
         tb.on_event(&down(1), &mut inv);
         assert_eq!(tb.copy_selection(), None);
         set_click_policy(ClickAction::Word, ClickAction::Line, true);
+    }
+
+    /// ★ Sublime 규칙(사용자 11-10): 같은 부류 묶음 — 공백 묶음 · 기호 묶음 · 줄 끝 뒤 = 꼬리 공백/마지막 단어 · 빈 줄 = 없음 ·
+    ///   줄 바꿈은 넘지 않는다.
+    #[test]
+    fn double_click_sublime_classes() {
+        let mut inv = Invalidations::default();
+        let mut tb = TextBox::new("").with_multiline();
+        tb.set_bounds(Rect::new(0, 0, 400, 80), &mut inv);
+        tb.set_focused(true); // copy_selection은 포커스가 있을 때만
+        set_click_policy(ClickAction::Word, ClickAction::Line, true);
+        let pick = |tb: &mut TextBox, text: &str, idx: usize| -> Option<String> {
+            tb.set_text(text);
+            tb.select_word_at(idx);
+            tb.copy_selection()
+        };
+        assert_eq!(
+            pick(&mut tb, "abcd abcd ", 10).as_deref(),
+            Some(" "),
+            "EOF 뒤 = 꼬리 공백"
+        );
+        assert_eq!(
+            pick(&mut tb, "abcd  \nxyz", 6).as_deref(),
+            Some("  "),
+            "줄 끝 뒤 = 꼬리 공백 묶음"
+        );
+        assert_eq!(
+            pick(&mut tb, "abcd\nxyz", 4).as_deref(),
+            Some("abcd"),
+            "꼬리 공백 없음 = 마지막 단어"
+        );
+        assert_eq!(
+            pick(&mut tb, "a ... b", 3).as_deref(),
+            Some("..."),
+            "기호 묶음"
+        );
+        assert_eq!(
+            pick(&mut tb, "a   b", 2).as_deref(),
+            Some("   "),
+            "가운데 공백 묶음"
+        );
+        assert_eq!(pick(&mut tb, "ab\n\ncd", 3), None, "빈 줄 = 없음");
+        assert_eq!(
+            pick(&mut tb, "ab  \n  cd", 3).as_deref(),
+            Some("  "),
+            "공백 묶음은 줄 바꿈을 안 넘는다"
+        );
+        assert_eq!(
+            pick(&mut tb, "x A_B y", 2).as_deref(),
+            Some("A_B"),
+            "단어(_ 포함) 종전과 같다"
+        );
     }
 }
 
