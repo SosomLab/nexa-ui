@@ -442,6 +442,9 @@ pub struct TextBox {
     /// 멀티라인 드래그 중 마지막 포인터 자리 · 마지막 자동 걸음의 시각(ms) — 포인터가 **영역 위/아래 밖에 가만히 있어도**
     /// [`Self::tick`]이 같은 자리로 걸음을 되풀이한다(VS Code·Sublime · nexa-sql T-158). 새 타이머·스레드 0.
     drag_at: Option<(i32, i32)>,
+    /// ★ 더블/트리플 클릭 뒤 드래그의 단위(Sublime/VS Code · nexa-sql 사용자 11-10): 처음 고른 단어/줄 묶음 `(a, b)`를 앵커로 두고
+    ///   캐럿이 간 자리의 묶음까지 넓힌다(`apply_drag_unit`). 놓으면 `None`.
+    drag_unit: Option<(DragUnit, usize, usize)>,
     drag_step_ms: u64,
     /// 열(블록) 선택 모드 — 호스트가 Alt+Shift 상태를 밀어 준다(`set_column_mode`).
     column_mode: bool,
@@ -989,6 +992,7 @@ impl TextBox {
             caret_xs: std::cell::RefCell::new(Vec::new()),
             dragging: false,
             drag_at: None,
+            drag_unit: None,
             drag_step_ms: 0,
             column_mode: false,
             col_anchor: None,
@@ -3125,10 +3129,14 @@ impl TextBox {
     /// 선택 · 줄 바꿈은 넘지 않는다). 줄 끝 뒤(다음 글자가 `\n`/EOF)를 더블클릭하면 바로 앞 글자 기준 → 꼬리 공백 묶음 · 꼬리 공백이
     /// 없으면 마지막 단어 · 빈 줄이면 아무것도 안 고른다. 종전 = 단어 글자 위에서만 선택(공백·기호·줄 끝 뒤 = 빈 선택).
     fn select_word_at(&mut self, idx: usize) {
-        let buf = self.edit.buf();
-        if buf.is_empty() {
-            return;
+        if let Some((a, b)) = self.word_run_at(idx) {
+            self.edit.set_selection(a, b);
         }
+    }
+
+    /// `select_word_at`·단어 단위 드래그가 같이 쓰는 묶음 범위 — `None` = 고를 것이 없다(빈 본문 · 빈 줄).
+    fn word_run_at(&self, idx: usize) -> Option<(usize, usize)> {
+        let buf = self.edit.buf();
         let us = word_underscore();
         let class = move |c: char| word_class(c, us);
         let mut i = idx.min(buf.len());
@@ -3136,21 +3144,50 @@ impl TextBox {
             // 줄 끝(또는 EOF) → 앞 글자 기준 · 앞도 줄 바꿈(빈 줄)이면 없음.
             match i.checked_sub(1).and_then(|j| buf.get(j)) {
                 Some(c) if c != '\n' => i -= 1,
-                _ => return,
+                _ => return None,
             }
         }
-        let Some(k) = buf.get(i).map(class) else {
-            return;
-        };
+        let k = class(buf.get(i)?);
         let a = i - buf.iter_rev_from(i).take_while(|c| class(*c) == k).count();
         let b = i + buf.iter_from(i).take_while(|c| class(*c) == k).count();
-        self.edit.set_selection(a, b);
+        Some((a, b))
+    }
+
+    /// ★ 더블/트리플 클릭 뒤 드래그(Sublime/VS Code · nexa-sql 사용자 11-10 "더블 클릭 후 드래그"): 캐럿이 간 자리의 단어/줄 묶음과
+    ///   처음 고른 묶음을 **합쳐** 선택한다 — 앞으로 끌면 앵커 = 처음 묶음의 시작 · 뒤로 끌면 앵커 = 처음 묶음의 끝(캐럿은 늘 끄는 쪽).
+    ///   종전 = 더블클릭 뒤 드래그는 아무 일도 없었다(`dragging`이 서지 않음).
+    fn apply_drag_unit(&mut self) {
+        let Some((unit, a0, b0)) = self.drag_unit else {
+            return;
+        };
+        let c = self.edit.caret();
+        let (ra, rb) = match unit {
+            DragUnit::Word => self.word_run_at(c).unwrap_or((c, c)),
+            DragUnit::Line => {
+                let buf = self.edit.buf();
+                let l = buf.line_of(c.min(buf.len()));
+                (buf.line_start(l), buf.line_end(l))
+            }
+        };
+        if c < a0 {
+            self.edit.set_selection(b0, ra.min(a0));
+        } else {
+            self.edit.set_selection(a0, rb.max(b0));
+        }
     }
 
     /// 연속 클릭 동작 실행(정책 · 단일행 상자는 줄 = 전체).
     fn apply_click_action(&mut self, act: ClickAction, idx: usize, shift: bool) {
+        self.drag_unit = None;
         match act {
-            ClickAction::Word => self.select_word_at(idx),
+            ClickAction::Word => {
+                if let Some((a, b)) = self.word_run_at(idx) {
+                    self.edit.set_selection(a, b);
+                    // 누른 채 끌면 단어 단위로 넓힌다(Sublime/VS Code · 11-10).
+                    self.dragging = true;
+                    self.drag_unit = Some((DragUnit::Word, a, b));
+                }
+            }
             ClickAction::Line if self.multiline => {
                 // 줄 선택 — 버퍼의 줄 표로(종전 = 본문 전체를 문자열 + 글자 배열로 떴다 · 큰 파일에서 수백 MB).
                 let (start, end) = {
@@ -3160,6 +3197,9 @@ impl TextBox {
                 };
                 self.edit.set_caret(start, false);
                 self.edit.set_caret(end, true);
+                // 누른 채 끌면 줄 단위로 넓힌다(Sublime/VS Code · 11-10).
+                self.dragging = true;
+                self.drag_unit = Some((DragUnit::Line, start, end));
             }
             ClickAction::Line | ClickAction::All => self.edit.key(EditKey::SelectAll, false),
             ClickAction::None => {
@@ -5396,6 +5436,13 @@ thread_local! {
     static CLICK_POLICY_T: std::cell::Cell<u32> = const { std::cell::Cell::new(0x0001_0201) };
 }
 
+/// 더블/트리플 클릭 뒤 드래그 단위([`TextBox::apply_drag_unit`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DragUnit {
+    Word,
+    Line,
+}
+
 /// 더블클릭 선택의 글자 부류(Sublime 규칙 · [`TextBox::select_word_at`]) — 줄 바꿈은 어느 묶음에도 안 든다.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WordClass {
@@ -5823,6 +5870,7 @@ impl TextBox {
                         self.edit.set_caret(target, true);
                     }
                 }
+                self.apply_drag_unit();
                 inv.push(b);
             }
             InputEvent::MouseMove { x, .. } if self.dragging => {
@@ -5836,11 +5884,13 @@ impl TextBox {
                     self.caret_at_x(x)
                 };
                 self.edit.set_caret(idx, true); // 앵커 유지 = 범위 확장
+                self.apply_drag_unit();
                 inv.push(self.base.bounds);
             }
             InputEvent::MouseUp { x, y } => {
                 self.dragging = false;
                 self.drag_at = None;
+                self.drag_unit = None;
                 self.col_anchor = None;
                 if self.minimap_drag {
                     self.minimap_drag = false;
@@ -8616,6 +8666,50 @@ mod click_policy_tests {
             Some("A_B"),
             "단어(_ 포함) 종전과 같다"
         );
+    }
+
+    /// ★ 더블/트리플 클릭 뒤 드래그 = 단어/줄 단위 확장(Sublime/VS Code · 사용자 11-10): 앞으로 끌면 처음 단어 시작이 앵커 ·
+    ///   뒤로 끌면 처음 단어 끝이 앵커 · 줄 모드는 줄 전체 · 놓으면 단위가 풀린다.
+    #[test]
+    fn double_click_drag_extends_by_word_and_line() {
+        let mut inv = Invalidations::default();
+        let mut tb = TextBox::new("").with_multiline();
+        tb.set_bounds(Rect::new(0, 0, 400, 80), &mut inv);
+        tb.set_focused(true);
+        tb.set_text("foo bar baz\nqux quux");
+        // 더블클릭 "bar"(4..7) → 앞으로 끌어 "baz" 안(9)으로.
+        tb.apply_click_action(ClickAction::Word, 5, false);
+        assert!(tb.is_dragging() && tb.drag_unit.is_some());
+        tb.edit.set_caret(9, true);
+        tb.apply_drag_unit();
+        assert_eq!(
+            tb.copy_selection().as_deref(),
+            Some("bar baz"),
+            "앞으로 = 단어 끝까지"
+        );
+        assert_eq!(tb.edit.selection(), Some((4, 11)));
+        // 뒤로 끌어 "foo" 안(1)으로 → 앵커 = "bar" 끝(7) · 캐럿 = "foo" 시작(0).
+        tb.edit.set_caret(1, true);
+        tb.apply_drag_unit();
+        assert_eq!(
+            tb.copy_selection().as_deref(),
+            Some("foo bar"),
+            "뒤로 = 단어 시작까지"
+        );
+        assert_eq!(tb.edit.caret(), 0);
+        // 놓으면 단위가 풀린다.
+        tb.on_event(&InputEvent::MouseUp { x: 1, y: 1 }, &mut inv);
+        assert!(!tb.is_dragging() && tb.drag_unit.is_none());
+        // 트리플클릭(줄) → 아래 줄로 끌면 두 줄 전체.
+        tb.apply_click_action(ClickAction::Line, 0, false);
+        assert!(tb.drag_unit.is_some_and(|(u, ..)| u == DragUnit::Line));
+        tb.edit.set_caret(14, true);
+        tb.apply_drag_unit();
+        assert_eq!(tb.edit.selection().map(|(a, _)| a), Some(0));
+        assert!(tb
+            .copy_selection()
+            .as_deref()
+            .is_some_and(|s| s.starts_with("foo bar baz") && s.ends_with("qux quux")));
     }
 }
 
