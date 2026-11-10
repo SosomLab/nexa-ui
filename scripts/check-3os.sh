@@ -27,6 +27,15 @@ case "$HOST" in
     *)                OTHERS=(x86_64-pc-windows-msvc x86_64-apple-darwin) ;;
 esac
 
+# ★ T-328(nexa-sql 11-10 · 협업 처방): Windows 커밋은 100644로 올라가 맥·리눅스에서 ./ 실행이 안 된다 — 실행 비트는
+#   `git update-index --chmod=+x <파일>`로만 반영된다(core.filemode=false).
+step "scripts/*.sh 실행 비트(100755)"
+NOX="$(git ls-files -s -- 'scripts/*.sh' ':!scripts/lib/*' 2>/dev/null | awk '$1 != "100755" {print $4}')"
+if [[ -n "$NOX" ]]; then
+    echo "  ✗ 실행 비트 없음(Windows 커밋 = 100644 · 맥·리눅스에서 ./ 실행 불가):"; echo "$NOX" | sed 's/^/    /'
+    echo "    → git update-index --chmod=+x <파일>"; FAIL=$((FAIL+1))
+else echo "  ✓"; fi
+
 step "fmt --check"
 run cargo fmt --all -- --check
 step "clippy 호스트($HOST)"
