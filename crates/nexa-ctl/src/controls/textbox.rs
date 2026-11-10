@@ -2483,6 +2483,26 @@ impl TextBox {
         self.multiline && b.contains(p) && p.x < b.x + self.s(10) + self.gutter_px.get()
     }
 
+    /// ★ 점이 **git 변경 띠**(C-1 hunk 팝업 · nexa-sql 11-10) 위인가 → 그 논리 줄. 띠 = 줄번호 오른쪽 둘째 띠(`mark_extra` 10px
+    ///   중 뒤 4px · 그리기 `gx2`와 같은 계산) · git 거터가 꺼져 있거나 기준선이 없거나 마지막 줄 아래면 None(그 클릭은 편집기 몫).
+    #[must_use]
+    pub fn git_band_line_at(&self, p: Point) -> Option<usize> {
+        let b = self.base.bounds;
+        if !(self.multiline && self.git_gutter && self.gutter_marks && self.git_baseline.is_some())
+            || !b.contains(p)
+            || self.below_text(p)
+        {
+            return None;
+        }
+        let mark_extra = self.s(10);
+        let mx = b.x + self.s(10) + self.gutter_px.get() - self.s(4) - mark_extra + self.s(1);
+        let gx2 = mx + self.s(4);
+        if p.x < gx2 - self.s(1) || p.x >= gx2 + self.s(5) {
+            return None;
+        }
+        self.line_at_point(p)
+    }
+
     /// 본문 변경 세대(`EditState::rev` · 같은 값 = 같은 본문 · 호스트 캐시 열쇠).
     #[must_use]
     pub fn rev(&self) -> u64 {
