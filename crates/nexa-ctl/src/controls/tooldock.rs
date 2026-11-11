@@ -931,16 +931,7 @@ impl ToolDock {
         if let Some(i) = self.hover_grip.filter(|_| self.drag.is_none()) {
             if let (Some(g), Some(r)) = (self.groups.get(i), self.grips.get(i)) {
                 if !g.title.is_empty() && r.w > 0 {
-                    // 손잡이 툴팁도 바와 같이 아래(넘치면 위) — 전역 방향을 따르면 맨 위 도크에서 메뉴바에 가린다(236차).
-                    crate::draw::draw_tooltip_in_dir(
-                        ctx,
-                        theme,
-                        *r,
-                        clamp,
-                        &g.title,
-                        self.base.scale,
-                        false,
-                    );
+                    crate::draw::draw_tooltip_in(ctx, theme, *r, clamp, &g.title, self.base.scale);
                 }
             }
         }
