@@ -765,22 +765,17 @@ impl Toolbar {
     pub fn paint_tooltip_in(&self, ctx: &mut dyn DrawCtx, theme: &Theme, clamp_x: (i32, i32)) {
         if let Some(i) = self.hover {
             if self.items[i].visible && !self.items[i].tip.is_empty() {
-                let mut anchor = self.slot_rect(i);
-                if self.tip_above {
-                    // draw_tooltip은 anchor 아래 6px에 그린다 → 아래가 슬롯 위에 닿는 가짜 anchor.
-                    ctx.select_font(crate::draw::FontSlot::Status, false);
-                    let lines = self.items[i].tip.split('\n').count() as i32;
-                    let tip_h = ctx.text_height() * lines + self.s(8);
-                    let gap = self.s(6);
-                    anchor = Rect::new(anchor.x, anchor.y - gap - tip_h - gap - 1, anchor.w, 1);
-                }
-                crate::draw::draw_tooltip_in(
+                // ★ 방향은 바의 `tip_above`(기본 = 아래 · 넘치면 위)로 — 전역 `tooltip_above`를 따르지 않는다(236차 · nexa-sql 11-11:
+                //   전역이 "위"가 된 뒤(10-07) 맨 위 툴바의 툴팁이 메뉴바 띠에 그려졌고 최상위 메뉴바 패스가 덮어 **모든 툴바 툴팁이
+                //   안 보였다**). 종전의 가짜 anchor(위로 올리기)는 `draw_tooltip_in_dir`가 대신한다.
+                crate::draw::draw_tooltip_in_dir(
                     ctx,
                     theme,
-                    anchor,
+                    self.slot_rect(i),
                     clamp_x,
                     &self.items[i].tip,
                     self.base.scale,
+                    self.tip_above,
                 );
             }
         }
