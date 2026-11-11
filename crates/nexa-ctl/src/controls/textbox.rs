@@ -433,6 +433,8 @@ pub struct TextBox {
     changed: bool,
     /// 값이 있으면 우측에 ×(지우기) 버튼 표시(클릭 = 초기화 · 사용자 요청 08-09).
     clearable: bool,
+    /// ★ 포커스가 없어도 **고정 빔**(흐린 색)을 그린다(nexa-sql 11-11 "실제 포커스만 깜빡 · 나머지는 빔") — 편집기·대화 작성 상자용.
+    idle_caret: bool,
     /// 텍스트 시작 x(페인트가 기록 — 클릭 좌표를 글자 위치로 바꾸는 근거).
     text_x: std::cell::Cell<i32>,
     /// 각 문자 경계의 누적 폭(페인트가 실측해 기록 · 폰트를 모르는 이벤트 경로가 쓴다).
@@ -988,6 +990,7 @@ impl TextBox {
             committed: false,
             changed: false,
             clearable: false,
+            idle_caret: false,
             text_x: std::cell::Cell::new(0),
             caret_xs: std::cell::RefCell::new(Vec::new()),
             dragging: false,
@@ -3120,6 +3123,11 @@ impl TextBox {
     }
 
     /// ×(지우기) 버튼 사용(체이닝) — 값이 있을 때만 표시, 클릭 = 즉시 초기화.
+    /// 포커스가 없을 때도 고정 빔을 그릴지(깜빡임은 포커스 + 호스트 위상 `caret_on`일 때만).
+    pub fn set_idle_caret(&mut self, on: bool) {
+        self.idle_caret = on;
+    }
+
     #[must_use]
     pub fn with_clearable(mut self) -> Self {
         self.clearable = true;
@@ -4916,7 +4924,7 @@ impl TextBox {
                 }
             }
             // 캐럿 — 이 줄에 있는 캐럿 전부(다중 커서 · 포커스·깜빡임 위상).
-            if self.base.focused && ctx.caret_on() {
+            if (self.base.focused && ctx.caret_on()) || (!self.base.focused && self.idle_caret) {
                 for &(cl, c) in &caret_rows {
                     if cl != li {
                         continue;
@@ -4927,7 +4935,14 @@ impl TextBox {
                         // 캐럿은 글자와 같은 `ty`(행 가운데)에서 — 행 위(`y`)에 두면 글자가 캐럿보다 (lh−th)/2 아래로 보인다
                         //   (nexa-sql 조건 바 10-07 "플레이스홀더가 캐럿보다 약간 아래").
                         if let Some(r) = clipv(Rect::new(cx, ty, self.s(2).max(2), th)) {
-                            ctx.fill_rect(r, theme.text);
+                            ctx.fill_rect(
+                                r,
+                                if self.base.focused {
+                                    theme.text
+                                } else {
+                                    theme.text_dim
+                                },
+                            );
                         }
                     }
                 }
@@ -6332,11 +6347,18 @@ impl Widget for TextBox {
 
         // 캐럿은 **별도 세로 막대**로 그린다(문자열에 '|'를 끼워 넣지 않음 → 위치 고정).
         // 깜빡임 위상(caret_on)은 호스트가 주입한다(08-13 — 포커스 창에서만 점멸).
-        if self.base.focused && ctx.caret_on() {
+        if (self.base.focused && ctx.caret_on()) || (!self.base.focused && self.idle_caret) {
             let cx = tx + caret_px;
             // 캐럿 높이 = 실측 텍스트 높이(고정 16 근사는 고배율에서 반토막으로 보였다).
             let th = ctx.text_height();
-            ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(2), th), theme.text);
+            ctx.fill_rect(
+                Rect::new(cx, ty, self.s(2).max(2), th),
+                if self.base.focused {
+                    theme.text
+                } else {
+                    theme.text_dim
+                },
+            );
         }
 
         // ×(지우기) — 값이 있을 때만(원 배경 없이 × 두 획 · text_dim).
