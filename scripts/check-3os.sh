@@ -40,6 +40,20 @@ step "fmt --check"
 run cargo fmt --all -- --check
 step "clippy 호스트($HOST)"
 run cargo clippy --workspace --all-targets -- -D warnings
+# ★ 더 새 툴체인의 clippy(nexa-sql 11-15): CI는 `stable`이라 이 PC의 기본 rustc보다 새 버전으로 돈다 — 새 버전에서 생긴
+#   lint(예: 1.100 needless_range_loop)는 기본 툴체인 검사로는 안 잡혀 push 뒤 CI가 빨개졌다. 설치돼 있는 **기본보다 새**
+#   숫자 툴체인(`rustup toolchain install 1.100.0` 같은 것)마다 호스트 clippy를 한 번 더 돈다(산출물 = target/clippy-<버전>).
+if command -v rustup >/dev/null 2>&1; then
+    CUR="$(rustc -V | awk '{print $2}')"
+    for TC in $(rustup toolchain list | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)-.*/\1/p' | sort -uV); do
+        if [[ "$TC" != "$CUR" && "$(printf '%s
+%s
+' "$CUR" "$TC" | sort -V | tail -1)" == "$TC" ]]; then
+            step "clippy 호스트 · 툴체인 $TC(기본 $CUR보다 새 버전)"
+            run env CARGO_TARGET_DIR="target/clippy-$TC" cargo "+$TC" clippy --workspace --all-targets -- -D warnings
+        fi
+    done
+fi
 if [[ "${1:-}" != "--quick" ]]; then
     for T in "${OTHERS[@]}"; do
         if ! rustup target list --installed | grep -q "^$T\$"; then

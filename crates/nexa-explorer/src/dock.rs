@@ -353,8 +353,7 @@ impl InfoDock {
         let mut parts = Vec::with_capacity(hl - ll + 1);
         let f = chars_of(ll);
         parts.push(f[lc.min(f.len())..].iter().collect::<String>());
-        for l in ll + 1..hl {
-            let s = &self.lines[l];
+        for s in &self.lines[ll + 1..hl] {
             parts.push(if s.starts_with('\u{1}') {
                 String::new()
             } else {
