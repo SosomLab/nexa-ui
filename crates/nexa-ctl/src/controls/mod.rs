@@ -832,6 +832,8 @@ pub struct RecordCtx {
     pub fills: Vec<(Rect, Color)>,
     /// `text`/`text_opaque` 호출 — (x, y, clip, 문자열).
     pub texts: Vec<(i32, i32, Rect, String)>,
+    /// `texts`와 같은 순서의 글자색(구문 색 시험 · nexa-sql 11-14 접힌 줄의 주석색).
+    pub text_colors: Vec<Color>,
     /// `text`/`text_opaque`에 넘어온 클립 전부(순서대로).
     pub clips: Vec<Rect>,
     /// `fill_round_rect`(알파 포함) — (rect, radius, color).
@@ -932,14 +934,16 @@ impl DrawCtx for RecordCtx {
     fn fill_rect(&mut self, r: Rect, c: Color) {
         self.fills.push((r, c));
     }
-    fn text_opaque(&mut self, x: i32, y: i32, clip: Rect, t: &str, _f: Color, b: Color) {
+    fn text_opaque(&mut self, x: i32, y: i32, clip: Rect, t: &str, f: Color, b: Color) {
         self.fills.push((clip, b));
         self.clips.push(clip);
         self.texts.push((x, y, clip, t.to_string()));
+        self.text_colors.push(f);
     }
-    fn text(&mut self, x: i32, y: i32, clip: Rect, t: &str, _f: Color) {
+    fn text(&mut self, x: i32, y: i32, clip: Rect, t: &str, f: Color) {
         self.clips.push(clip);
         self.texts.push((x, y, clip, t.to_string()));
+        self.text_colors.push(f);
     }
     fn text_width(&mut self, text: &str) -> i32 {
         text.chars().count() as i32 * 7

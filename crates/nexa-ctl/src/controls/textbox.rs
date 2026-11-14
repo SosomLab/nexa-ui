@@ -1350,6 +1350,8 @@ impl TextBox {
         key: &MinimapKey,
         theme: &Theme,
         hl_state: u32,
+        // 접기 모드: (전체 행 목록, `lines[0]`의 행 번호) — 조각이 아니라 논리 줄 전체를 토큰화한다.
+        wrap_rows: Option<(&[(usize, &str)], usize)>,
     ) -> IconImage {
         let (w, h) = (key.w.max(1) as u32, key.h.max(1) as u32);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
@@ -1374,28 +1376,50 @@ impl TextBox {
             rgba[i + 2] = b;
             rgba[i + 3] = alpha;
         };
-        for (ri, (_, line)) in lines.iter().enumerate().take(key.rows) {
+        // 글자별 토큰 종류(접기 모드 = 논리 줄 전체 · 아니면 그 행) + 접기 모드의 지금 논리 줄(끝 행 · 첫 글자 인덱스).
+        let mut kinds: Vec<crate::highlight::TokenKind> = Vec::new();
+        let mut wline: Option<(usize, usize)> = None;
+        for (ri, (rstart, line)) in lines.iter().enumerate().take(key.rows) {
             let y0 = ri as i32 * row_h;
             // 색 구간 — 강조기가 없으면 줄 전체가 Plain.
-            spans.clear();
+            let mut skip = 0usize;
             if let Some(hl) = &self.highlighter {
-                hl.line_spans(line, &mut state, &mut spans);
+                match wrap_rows {
+                    Some((all, base)) if base + ri < all.len() => {
+                        let gi = base + ri;
+                        if wline.is_none_or(|(e, _)| gi > e) {
+                            let (f, e) = Self::wrap_line_rows(all, gi);
+                            spans.clear();
+                            hl.line_spans(&Self::wrap_line_text(all, f, e), &mut state, &mut spans);
+                            kinds.clear();
+                            for (n, k) in &spans {
+                                kinds.extend(std::iter::repeat_n(*k, *n));
+                            }
+                            wline = Some((e, all[f].0));
+                        }
+                        skip = rstart.saturating_sub(wline.map_or(0, |w| w.1));
+                    }
+                    _ => {
+                        spans.clear();
+                        hl.line_spans(line, &mut state, &mut spans);
+                        kinds.clear();
+                        for (n, k) in &spans {
+                            kinds.extend(std::iter::repeat_n(*k, *n));
+                        }
+                    }
+                }
+            } else {
+                kinds.clear();
             }
             let mut col = 0usize; // 표시 열(탭 확장)
-            let mut si = 0usize; // 현재 스팬
-            let mut left = spans.first().map_or(usize::MAX, |s| s.0);
-            for ch in line.chars() {
+            for (ci, ch) in line.chars().enumerate() {
                 if col >= cols {
                     break;
                 }
-                while left == 0 && si + 1 < spans.len() {
-                    si += 1;
-                    left = spans[si].0;
-                }
-                let kind = spans
-                    .get(si)
-                    .map_or(crate::highlight::TokenKind::Plain, |s| s.1);
-                left = left.saturating_sub(1);
+                let kind = kinds
+                    .get(skip + ci)
+                    .copied()
+                    .unwrap_or(crate::highlight::TokenKind::Plain);
                 if ch == '\t' {
                     col += Self::tab_cells(ts, col, self.tab_stops);
                     continue;
@@ -2681,14 +2705,59 @@ impl TextBox {
         if !composing && slot.0 == rev && slot.1 == wrap_key && slot.2.len() == lines.len() {
             return slot.2.clone();
         }
-        let v = Rc::new(lines.iter().map(|(_, l)| row_hash(l)).collect::<Vec<u64>>());
+        // 이어지는 조각(같은 논리 줄)인지도 섞는다 — 글은 같아도 줄 경계가 달라지면 구문 상태가 달라진다.
+        let v = Rc::new(
+            lines
+                .iter()
+                .enumerate()
+                .map(|(i, (_, l))| {
+                    let cont = i > 0 && Self::wrap_cont(lines[i - 1].1, l);
+                    row_hash(l) ^ if cont { 0x9E37_79B9_7F4A_7C15 } else { 0 }
+                })
+                .collect::<Vec<u64>>(),
+        );
         if !composing {
             *slot = (rev, wrap_key, v.clone());
         }
         v
     }
 
-    /// 표시 행 `top`과 `mm_start`를 시작할 때의 구문 상태(캐시 · 필요한 행까지만 계산 · 편집 뒤에는 바뀐 행부터).
+    /// 접기 모드: 행 `cur`가 바로 앞 행 `prev`에서 **이어지는 조각**(같은 논리 줄)인가 — 조각은 같은 본문 문자열의 이웃한
+    /// 슬라이스라 주소로 가린다(논리 줄이 바뀌면 사이에 줄바꿈 글자가 끼어 이어지지 않는다 · 빈 줄은 따로 만든 빈 글).
+    fn wrap_cont(prev: &str, cur: &str) -> bool {
+        !cur.is_empty() && !prev.is_empty() && prev.as_bytes().as_ptr_range().end == cur.as_ptr()
+    }
+
+    /// 접기 모드: 행 `i`가 속한 논리 줄의 (첫 행, 끝 행).
+    fn wrap_line_rows(rows: &[(usize, &str)], i: usize) -> (usize, usize) {
+        let mut f = i;
+        while f > 0 && Self::wrap_cont(rows[f - 1].1, rows[f].1) {
+            f -= 1;
+        }
+        let mut e = i;
+        while e + 1 < rows.len() && Self::wrap_cont(rows[e].1, rows[e + 1].1) {
+            e += 1;
+        }
+        (f, e)
+    }
+
+    /// 접기 모드: 행 `f..=e`(한 논리 줄의 조각들)를 이은 글 — 조각이 하나면 빌린다.
+    fn wrap_line_text<'a>(
+        rows: &[(usize, &'a str)],
+        f: usize,
+        e: usize,
+    ) -> std::borrow::Cow<'a, str> {
+        if f == e {
+            std::borrow::Cow::Borrowed(rows[f].1)
+        } else {
+            std::borrow::Cow::Owned(rows[f..=e].iter().map(|r| r.1).collect())
+        }
+    }
+
+    /// 표시 행 `top`과 `mm_start`가 속한 **논리 줄을 시작할 때**의 구문 상태(캐시 · 필요한 행까지만 계산 · 편집 뒤에는
+    /// 바뀐 행부터). ★ 조각 단위가 아니라 논리 줄 단위(nexa-sql 사용자 11-14 "줄바꿈으로 넘어간 주석이 일반 글자색"): 종전에는
+    /// 조각마다 따로 토큰화해 줄 주석·문자열·낱말이 조각 경계에서 끊겼다(이어지는 것은 블록 주석 상태뿐) → 한 논리 줄의 조각은
+    /// 모두 같은 시작 상태를 갖고, 그리는 쪽이 논리 줄 전체를 토큰화해 자기 조각 몫만 쓴다.
     fn hl_states_at(
         &self,
         h: &Rc<dyn crate::highlight::Highlighter>,
@@ -2719,8 +2788,9 @@ impl TextBox {
                     .zip(hashes)
                     .take_while(|(a, b)| a == b)
                     .count();
-                // 앞의 `same`개 행이 같다 = 그 행들을 지난 뒤의 상태(`states[same]`)까지 유효.
-                (same + 1).min(c.states.len())
+                // 앞의 `same`개 행이 (글·줄 경계 모두) 같다 = 그 행들의 "논리 줄 시작 상태"(`states[..same]`)가 유효.
+                // `states[same]`은 버린다 — 바뀐 행이 앞 줄에 이어 붙었거나 떨어졌으면 그 값의 뜻이 달라진다.
+                same.min(c.states.len())
             } else {
                 0
             };
@@ -2736,10 +2806,17 @@ impl TextBox {
         let need = top.max(mm_start.min(top)).min(lines.len());
         if c.states.len() <= need {
             let mut spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
-            let mut state = c.states.last().copied().unwrap_or(0);
-            for (_, l) in &lines[c.states.len() - 1..need] {
+            while c.states.len() <= need {
+                // 마지막으로 아는 행 `k`의 논리 줄을 통째로 토큰화한다: 남은 조각은 같은 시작 상태 · 다음 줄 첫 행은 끝 상태.
+                let k = c.states.len() - 1;
+                let state0 = c.states[k];
+                let (f, e) = Self::wrap_line_rows(lines, k);
+                for _ in k..e {
+                    c.states.push(state0);
+                }
+                let mut state = state0;
                 spans.clear();
-                h.line_spans(l, &mut state, &mut spans);
+                h.line_spans(&Self::wrap_line_text(lines, f, e), &mut state, &mut spans);
                 c.states.push(state);
                 c.scanned += 1;
             }
@@ -4510,6 +4587,9 @@ impl TextBox {
         let mut hl_state = 0u32;
         let mut mm_hl_state = 0u32;
         let mut hl_spans: Vec<(usize, crate::highlight::TokenKind)> = Vec::new();
+        // 접기 모드: 지금 논리 줄의 글자별 토큰 종류 + (끝 행 · 논리 줄 첫 글자 인덱스) — 조각은 자기 몫만 잘라 쓴다.
+        let mut wrap_kinds: Vec<crate::highlight::TokenKind> = Vec::new();
+        let mut wrap_line: Option<(usize, usize)> = None;
         if let Some(h) = &self.highlighter {
             let (at_top, at_mm) = match &rows_src.wrapped {
                 Some(w) => {
@@ -4764,15 +4844,38 @@ impl TextBox {
                 let lchars: Vec<char> = line_str.chars().collect();
                 let mut colors: Vec<Color> = vec![theme.text; lchars.len()];
                 if let Some(h) = &self.highlighter {
-                    hl_spans.clear();
-                    h.line_spans(line_str, &mut hl_state, &mut hl_spans);
-                    let mut ci = 0usize;
-                    for (n, k) in &hl_spans {
-                        let end = (ci + n).min(lchars.len());
-                        for c in &mut colors[ci..end] {
+                    if let Some(w) = rows_src.wrapped.as_deref().filter(|w| li < w.len()) {
+                        // ★ 접기 모드(nexa-sql 사용자 11-14): 논리 줄 전체를 한 번 토큰화하고 조각은 자기 글자 몫만 쓴다 —
+                        //   넘어간 조각도 줄 주석·문자열 색이 이어진다(`hl_state` = 이 논리 줄의 시작 상태).
+                        if wrap_line.is_none_or(|(e, _)| li > e) {
+                            let (f, e) = Self::wrap_line_rows(w, li);
+                            hl_spans.clear();
+                            h.line_spans(
+                                &Self::wrap_line_text(w, f, e),
+                                &mut hl_state,
+                                &mut hl_spans,
+                            );
+                            wrap_kinds.clear();
+                            for (n, k) in &hl_spans {
+                                wrap_kinds.extend(std::iter::repeat_n(*k, *n));
+                            }
+                            wrap_line = Some((e, w[f].0));
+                        }
+                        let off = start_idx.saturating_sub(wrap_line.map_or(0, |l| l.1));
+                        for (c, k) in colors.iter_mut().zip(wrap_kinds.iter().skip(off)) {
                             *c = k.color(theme);
                         }
-                        ci = end;
+                    } else {
+                        hl_spans.clear();
+                        h.line_spans(line_str, &mut hl_state, &mut hl_spans);
+                        let mut ci = 0usize;
+                        for (n, k) in &hl_spans {
+                            let end = (ci + n).min(lchars.len());
+                            for c in &mut colors[ci..end] {
+                                *c = k.color(theme);
+                            }
+                            ci = end;
+                        }
                     }
                 }
                 let (ls, le) = (*start_idx, *start_idx + lchars.len());
@@ -4975,6 +5078,20 @@ impl TextBox {
             let window_refs: Vec<(usize, &str)> =
                 window_own.iter().map(|(s, l)| (*s, l.as_ref())).collect();
             let window: &[(usize, &str)] = &window_refs;
+            let mm_wrap = rows_src
+                .wrapped
+                .as_deref()
+                .map(|w| (w, mm_start.min(n_rows)));
+            let mm_head = mm_wrap.map_or(0u32, |(w, s)| {
+                if s >= w.len() {
+                    return 0;
+                }
+                let (f, _) = Self::wrap_line_rows(w, s);
+                let h = w[f..s]
+                    .iter()
+                    .fold(0u64, |a, r| a.rotate_left(7) ^ row_hash(r.1));
+                u32::try_from(h & 0xFFFF_FFFF).unwrap_or(0)
+            });
             let key = MinimapKey {
                 start: mm_start,
                 rows: mm_rows,
@@ -4983,7 +5100,8 @@ impl TextBox {
                 row_h: mm_row_h,
                 cw: mm_cw,
                 hash: Self::minimap_hash(window, cols, self.tab_size),
-                hl_state: mm_hl_state,
+                // 접기 모드: 띠 첫 행이 이어지는 조각이면 띠 밖에 있는 앞 조각들의 글도 색을 정한다 → 열쇠에 섞는다.
+                hl_state: mm_hl_state ^ mm_head,
                 has_hl: self.highlighter.is_some(),
                 colors,
             };
@@ -4992,7 +5110,7 @@ impl TextBox {
             {
                 let mut cache = self.minimap_cache.borrow_mut();
                 if cache.as_ref().is_none_or(|c| c.key != key) {
-                    let img = self.minimap_raster(window, &key, theme, mm_hl_state);
+                    let img = self.minimap_raster(window, &key, theme, mm_hl_state, mm_wrap);
                     *cache = Some(MinimapCache { key, img });
                     self.minimap_builds
                         .set(self.minimap_builds.get().wrapping_add(1));
@@ -7920,6 +8038,65 @@ mod minimap_tests {
         t.set_git_baseline(None);
         assert!(t.git_marks().is_empty());
         paint(&t);
+    }
+
+    /// 접기 모드에서 넘어간 조각도 논리 줄의 구문 색을 잇는다(nexa-sql 사용자 11-14 "줄바꿈으로 넘어간 주석이 일반 글자색") —
+    /// 줄 주석·문자열이 조각 경계를 넘고 · 다음 논리 줄은 새로 시작하며 · 블록 주석 상태는 종전처럼 줄을 넘는다.
+    #[test]
+    fn wrapped_rows_keep_logical_line_syntax_colors() {
+        let theme = crate::theme::Theme::dark();
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 220, 400), &mut inv);
+        t.set_highlighter(Some(Rc::new(crate::highlight::SyntaxSpec::sql())));
+        t.set_wrap(true);
+        t.set_text(concat!(
+            "select a -- 주석 one two three four five six seven eight nine ten\n",
+            "select 'aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq' from t\n",
+            "/* 블록 one two three four five six seven eight nine\n",
+            "still block */ select b\n",
+        ));
+        let mut rec = crate::RecordCtx::default();
+        t.paint(&mut rec, &theme);
+        // (y, 글, 색) — 낱말이 든 조각을 찾는다.
+        let find = |word: &str| -> (i32, Color) {
+            rec.texts
+                .iter()
+                .zip(&rec.text_colors)
+                .find(|((_, _, _, s), _)| s.contains(word))
+                .map(|((_, y, _, _), c)| (*y, *c))
+                .unwrap_or_else(|| panic!("no run with {word:?}: {:?}", rec.texts))
+        };
+        let (y_first, c_kw) = find("select");
+        assert_eq!(c_kw, theme.syn_keyword);
+        // 줄 주석: 첫 조각과 넘어간 조각 모두 주석색.
+        assert_eq!(find("주석").1, theme.syn_comment);
+        let (y_ten, c_ten) = find("ten");
+        assert!(
+            y_ten > y_first,
+            "the comment must have wrapped: {:?}",
+            rec.texts
+        );
+        assert_eq!(c_ten, theme.syn_comment);
+        // 문자열: 넘어간 조각도 문자열색 · 닫힌 뒤의 `from`은 키워드.
+        let (y_qq, c_qq) = find("qq");
+        assert_eq!(c_qq, theme.syn_string);
+        assert!(
+            y_qq > find("aa").0,
+            "the string must have wrapped: {:?}",
+            rec.texts
+        );
+        assert_eq!(find("from").1, theme.syn_keyword);
+        // 블록 주석: 넘어간 조각과 다음 논리 줄까지 주석 · 닫힌 뒤는 다시 일반 토큰.
+        assert_eq!(find("nine").1, theme.syn_comment);
+        assert_eq!(find("still").1, theme.syn_comment);
+        let last_select = rec
+            .texts
+            .iter()
+            .zip(&rec.text_colors)
+            .rfind(|((_, _, _, s), _)| s.contains("select"))
+            .map(|(_, c)| *c);
+        assert_eq!(last_select, Some(theme.syn_keyword));
     }
 
     fn editor(lines: usize) -> TextBox {
