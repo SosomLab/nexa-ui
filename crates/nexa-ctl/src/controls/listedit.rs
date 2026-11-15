@@ -275,7 +275,7 @@ impl Widget for ListEditor {
                 InputEvent::MouseDown { x, y, .. }
                     if !self.input.bounds().contains(Point { x, y }) =>
                 {
-                    let text = self.input.text();
+                    let text = self.input.display_text();
                     self.input.set_focused(false);
                     self.commit_edit(&text, inv);
                     // 아래 일반 처리로 계속 흐른다.

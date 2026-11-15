@@ -601,6 +601,10 @@ pub struct TextBox {
     /// ★ 한글 **앱 조합기**([`set_hangul_app_compose`] · nexa-sql T-139): 호스트가 IME를 끄고 raw 자모를 보내는 환경(macOS 한글
     /// 입력 소스)에서 상자가 직접 음절을 조합한다 — 조합 중 글자는 기존 preedit 표시를 그대로 쓴다.
     hangul: crate::hangul::Composer,
+    /// 뒤늦은 시스템 IME 확정 버리기(nexa-sql 11-16): 이 상자가 조합 글을 **먼저** 본문에 넣었거나([`Self::commit_preedit`])
+    /// 호스트가 조합 중에 글을 갈아 끼웠을 때([`Self::set_text`]) 그 조합 글 · 시각 · 무장 여부. OS가 뒤따라 보내는 같은 확정
+    /// (`set_preedit("")` 뒤의 `Char`들)을 한 번 버려 두 번 들어가거나 비운 상자에 되살아나지 않게 한다 — 호스트는 손댈 것이 없다.
+    ime_late: Option<(std::collections::VecDeque<char>, std::time::Instant, bool)>,
     /// 목표 열(글자 수) — 배치가 없을 때(아직 안 그렸음 · 테스트)의 대체 기준.
     goal_col: Option<usize>,
     /// ★ 단일 행 hover 페이드(회색 계열 · `Slow` 1초 · nexa-sql 사용자 09-14) — 멀티라인(편집기)은 제외.
@@ -1074,6 +1078,7 @@ impl TextBox {
             lay_rev: std::cell::Cell::new(u64::MAX),
             goal_x: None,
             hangul: crate::hangul::Composer::new(),
+            ime_late: None,
             goal_col: None,
             hover: crate::tokens::Fade::at(crate::tokens::FadeSpeed::Slow),
             highlighter: None,
@@ -3188,6 +3193,14 @@ impl TextBox {
         if self.edit.is_read_only() && !text.is_empty() {
             return; // 읽기 전용 = OS IME 조합 문자열도 표시하지 않는다(09-26).
         }
+        // 뒤늦은 확정 버리기: 빈 조합 글 = 확정 직전(무장) · 새 조합 글 = IME가 조합을 잇는다(버릴 것 없음).
+        if text.is_empty() {
+            if let Some(late) = &mut self.ime_late {
+                late.2 = true;
+            }
+        } else {
+            self.ime_late = None;
+        }
         let changed = self.edit.preedit() != text;
         // H-25(조합 시작 = 선택 삭제)는 EditState::set_preedit이 공용으로 처리하고,
         // 버퍼를 바꿨으면 true를 준다 — dirty 플래그 갱신 근거(M3-1e ①).
@@ -3649,8 +3662,18 @@ impl TextBox {
         self.edit.text()
     }
 
-    /// 텍스트 지정(보고 없음).
+    /// 텍스트 지정(보고 없음). 조합 중이던 음절은 버린다(nexa-sql 11-15 — 종전에는 앱 조합기가 그대로 남아, 상자를 비운 뒤
+    /// 다음 자모에서 옛 음절이 되살아났다 · 값을 읽는 쪽은 [`Self::display_text`]로 조합 중 음절까지 이미 가져갔다).
     pub fn set_text(&mut self, text: &str) {
+        if self.hangul.is_composing() {
+            self.hangul.reset();
+            self.edit.set_preedit("");
+        } else if !self.edit.preedit().is_empty() {
+            // 시스템 IME 조합 중에 글을 갈아 끼웠다 — 조합 글을 버리고, 뒤늦게 오는 그 글의 확정도 버린다(11-16).
+            let pre = self.edit.preedit().to_string();
+            self.edit.set_preedit("");
+            self.ime_late_note(&pre);
+        }
         self.edit.set_text(text);
     }
 
@@ -3972,6 +3995,11 @@ impl TextBox {
     /// 본문을 꺼내고 **상자 쪽은 바로 지운다** — 비밀번호를 상자에 남겨 두지 않는다.
     #[must_use]
     pub fn take_secret_text(&mut self) -> String {
+        // 조합 중 글까지 꺼낸다(11-16 · 가린 상자는 앱 조합을 하지 않으므로 시스템 IME 조합 글만 있을 수 있다).
+        let mut inv = Invalidations::default();
+        if !self.commit_composition(&mut inv) {
+            let _ = self.commit_preedit(&mut inv);
+        }
         let s = self.text();
         self.wipe();
         s
@@ -5441,6 +5469,51 @@ impl TextBox {
         true
     }
 
+    /// ★ **시스템 IME**의 조합 글(preedit)을 그 자리에서 본문에 확정한다(nexa-sql 11-15 "AI 작성 상자에서 Enter = 마지막 음절이
+    /// 빠진 채 전송"): 호스트가 Enter를 가로채 바로 보내는 상자는 OS의 확정(`Ime::Commit`)이 **키 뒤에** 오면 조합 중 음절을
+    /// 놓친다. 확정한 글을 돌려주므로 호스트는 뒤따라 오는 같은 `Ime::Commit`을 한 번 버려 두 번 들어가지 않게 한다.
+    /// 앱 조합 중([`Self::commit_composition`] 몫)이거나 조합 글이 없으면 `None`.
+    pub fn commit_preedit(&mut self, inv: &mut Invalidations) -> Option<String> {
+        if self.hangul.is_composing() || self.edit.preedit().is_empty() {
+            return None;
+        }
+        let pre = self.edit.preedit().to_string();
+        // 본문에 먼저 넣고 preedit을 비운다(`hangul_flush`와 같은 순서 = 조합 시작이 연 되돌리기 묶음에 함께).
+        for c in pre.chars().filter(|c| !c.is_control()) {
+            self.on_event_core(&InputEvent::Char { c, now_ms: 0 }, inv);
+        }
+        self.set_preedit("", inv);
+        self.ime_late_note(&pre);
+        Some(pre)
+    }
+
+    /// 뒤늦게 올 확정 글을 적어 둔다([`Self::ime_late`] · 1초 안 · 한 번).
+    fn ime_late_note(&mut self, pre: &str) {
+        let rest: std::collections::VecDeque<char> =
+            pre.chars().filter(|c| !c.is_control()).collect();
+        self.ime_late = (!rest.is_empty()).then(|| (rest, std::time::Instant::now(), false));
+    }
+
+    /// 이 글자가 이미 처리한 조합 글의 뒤늦은 확정이면 참(버린다). 무장 전(`set_preedit("")`가 아직 안 옴)에는 건드리지 않고,
+    /// 무장 뒤 다른 글자가 오거나 1초가 지났으면 기록을 지운다.
+    fn ime_late_swallow(&mut self, c: char) -> bool {
+        let Some((rest, at, armed)) = &mut self.ime_late else {
+            return false;
+        };
+        if !*armed {
+            return false;
+        }
+        if at.elapsed() < std::time::Duration::from_secs(1) && rest.front() == Some(&c) {
+            rest.pop_front();
+            if rest.is_empty() {
+                self.ime_late = None;
+            }
+            return true;
+        }
+        self.ime_late = None;
+        false
+    }
+
     /// 조합기의 미리보기를 preedit 표시에 맞춘다.
     fn hangul_sync_preedit(&mut self, inv: &mut Invalidations) {
         let pre = self.hangul.preview().map(String::from).unwrap_or_default();
@@ -6254,6 +6327,12 @@ impl Widget for TextBox {
             )
         {
             self.minimap_activity.set(Some(std::time::Instant::now()));
+        }
+        // 이미 본문에 넣은(또는 버린) 시스템 IME 조합 글의 뒤늦은 확정 글자 = 버린다(11-16).
+        if let InputEvent::Char { c, .. } = *ev {
+            if self.ime_late.is_some() && self.ime_late_swallow(c) {
+                return;
+            }
         }
         // 한글 앱 조합(켜져 있을 때만 · 자모/Backspace는 조합기가 먹고, 그 밖의 입력은 조합을 확정한 뒤 평소대로).
         // ★ 읽기 전용 상자는 조합도 안 한다(nexa-sql 09-26 실기: 객체 상세 창에 초성 "ㅇ"이 preedit로 보였다).
@@ -9053,6 +9132,85 @@ mod hangul_compose_tests {
         assert!(t.commit_composition(&mut inv));
         assert_eq!(t.text(), "간ㅏ");
         set_hangul_app_compose(false);
+    }
+
+    /// nexa-sql 11-15: 값 확정 자리는 `display_text`로 조합 중 음절까지 읽고, 상자를 비우면(`set_text`) 조합기도 비워져
+    /// 다음 자모에서 옛 음절이 되살아나지 않는다.
+    #[test]
+    fn set_text_drops_the_syllable_being_composed() {
+        set_hangul_app_compose(true);
+        let (mut t, mut inv) = tb();
+        feed(&mut t, &mut inv, "ㄱㅏㄴㅏ");
+        assert_eq!(
+            (t.text().as_ref(), t.display_text().as_str()),
+            ("가", "가나")
+        );
+        t.set_text("");
+        assert_eq!(t.display_text(), "", "조합 중이던 '나'도 사라진다");
+        feed(&mut t, &mut inv, "ㄷㅏ");
+        assert_eq!(t.display_text(), "다", "옛 음절이 되살아나지 않는다");
+        set_hangul_app_compose(false);
+    }
+
+    /// 시스템 IME 조합 글 확정(nexa-sql 11-15): preedit을 본문에 넣고 비운 뒤 그 글을 돌려준다 · 조합 글이 없으면 None.
+    #[test]
+    fn commit_preedit_moves_system_ime_text_into_the_body() {
+        let (mut t, mut inv) = tb();
+        feed(&mut t, &mut inv, "ab");
+        assert_eq!(t.commit_preedit(&mut inv), None, "조합 글 없음");
+        t.set_preedit("인", &mut inv);
+        assert_eq!(
+            (t.text().as_ref(), t.display_text().as_str()),
+            ("ab", "ab인")
+        );
+        assert_eq!(t.commit_preedit(&mut inv).as_deref(), Some("인"));
+        assert_eq!(
+            (t.text().as_ref(), t.display_text().as_str()),
+            ("ab인", "ab인")
+        );
+        assert_eq!(t.commit_preedit(&mut inv), None, "두 번째는 할 일이 없다");
+        // OS의 뒤늦은 확정(호스트 = `set_preedit("")` + 글자) = 한 번 버린다 · 그다음 같은 글자는 들어간다.
+        let before = t.text();
+        t.set_preedit("", &mut inv);
+        t.on_event(
+            &InputEvent::Char {
+                c: '인', now_ms: 0
+            },
+            &mut inv,
+        );
+        assert_eq!(t.text(), before, "뒤늦은 확정은 두 번 들어가지 않는다");
+        t.set_preedit("", &mut inv);
+        t.on_event(
+            &InputEvent::Char {
+                c: '인', now_ms: 0
+            },
+            &mut inv,
+        );
+        assert_eq!(t.text(), format!("{before}인"), "한 번만 버린다");
+        // 조합 중에 글을 갈아 끼우면 조합 글도, 뒤늦은 확정도 버린다.
+        t.set_preedit("가", &mut inv);
+        t.set_text("");
+        assert_eq!(t.display_text(), "");
+        t.set_preedit("", &mut inv);
+        t.on_event(
+            &InputEvent::Char {
+                c: '가', now_ms: 0
+            },
+            &mut inv,
+        );
+        assert_eq!(t.text(), "", "비운 상자에 옛 조합 글이 되살아나지 않는다");
+        // IME가 조합을 이으면(새 조합 글) 버리지 않는다.
+        t.set_preedit("나", &mut inv);
+        t.set_text("");
+        t.set_preedit("낙", &mut inv);
+        t.set_preedit("", &mut inv);
+        t.on_event(
+            &InputEvent::Char {
+                c: '낙', now_ms: 0
+            },
+            &mut inv,
+        );
+        assert_eq!(t.text(), "낙");
     }
 
     /// 조합 중 = preedit 표시(본문엔 아직 없음) · Backspace = 자모 단위 · 포커스 이탈 = 확정 · 도깨비불(받침 → 다음 초성).

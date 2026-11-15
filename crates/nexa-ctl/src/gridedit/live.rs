@@ -238,6 +238,13 @@ impl LiveEditor {
 
     /// 지금 글로 커밋 시도(마우스로 다른 셀을 클릭했을 때 호스트가 부른다).
     pub fn try_commit(&mut self, mv: Move) -> LiveEvent {
+        // ★ 조합 중 음절을 먼저 본문에 확정한다(nexa-sql 11-15 실증 "ㄱㅏㄴㅏ + Enter = 셀 값 '가'"): Enter·Tab·↑↓·다른 셀 클릭은
+        //   상자를 거치지 않고 여기로 바로 와서, 앱 조합(맥 한글) 중인 마지막 음절이 값에서 빠졌다 — 데이터 쓰기 경로.
+        let mut inv = Invalidations::default();
+        if !self.tb.commit_composition(&mut inv) {
+            // 시스템 IME 조합 글도 같다(확정이 키 뒤에 오는 OS · 뒤늦은 확정은 상자가 버린다 · 11-16).
+            let _ = self.tb.commit_preedit(&mut inv);
+        }
         let text = self.tb.text();
         let input: Option<&str> = if text.is_empty() && self.empty_as_null {
             None
@@ -330,6 +337,30 @@ mod tests {
             }
         );
         assert!(!le.is_open());
+    }
+
+    /// nexa-sql 11-15: 앱 조합 중인 마지막 음절까지 값에 들어간다(Enter · Tab · 호스트의 `try_commit`).
+    #[test]
+    fn commit_includes_the_syllable_being_composed() {
+        crate::controls::set_hangul_app_compose(true);
+        let mut inv = Invalidations::default();
+        for commit in 0..3 {
+            let mut le = open(CellSpec::text("n"), "", None);
+            for c in "ㄱㅏㄴㅏ".chars() {
+                le.on_event(&InputEvent::Char { c, now_ms: 0 }, false, &mut inv);
+            }
+            assert_eq!(le.text(), "가", "나 = 아직 조합 중");
+            let ev = match commit {
+                0 => le.on_event(&key(Key::Enter, false), false, &mut inv),
+                1 => le.on_event(&InputEvent::Char { c: '\t', now_ms: 0 }, false, &mut inv),
+                _ => le.try_commit(Move::None),
+            };
+            assert!(
+                matches!(&ev, LiveEvent::Commit { value: Some(v), .. } if v == "가나"),
+                "{commit}: {ev:?}"
+            );
+        }
+        crate::controls::set_hangul_app_compose(false);
     }
 
     #[test]

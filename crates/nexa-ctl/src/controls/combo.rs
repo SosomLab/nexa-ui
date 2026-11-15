@@ -654,7 +654,7 @@ impl Combo {
         let Some(tb) = self.editor.take() else {
             return;
         };
-        let v = tb.text().trim().to_string();
+        let v = tb.display_text().trim().to_string();
         if !v.is_empty() {
             if let Some(i) = self.core.items.iter().position(|it| it.value == v) {
                 self.core.selected = i;

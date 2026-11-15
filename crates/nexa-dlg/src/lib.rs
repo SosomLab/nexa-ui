@@ -2143,7 +2143,7 @@ impl FilePicker {
         let Some((_, old, tb)) = self.rename.take() else {
             return;
         };
-        let new = tb.text().trim().to_string();
+        let new = tb.display_text().trim().to_string();
         let old_name = old
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
