@@ -38,12 +38,8 @@ unwrap_used = "warn"
 [workspace.dependencies]
 nexa-gfx = { path = "crates/nexa-gfx" }
 nexa-ctl = { path = "crates/nexa-ctl" }
-nexa-conf = { path = "crates/nexa-conf" }
 nexa-font = { path = "crates/nexa-font" }
 nexa-fs = { path = "crates/nexa-fs" }
-nexa-dlg = { path = "crates/nexa-dlg" }
-nexa-sys = { path = "crates/nexa-sys" }
 nexa-grid = { path = "crates/nexa-grid" }
-nexa-explorer = { path = "crates/nexa-explorer" }
 
 # 라이브러리 워크스페이스 — 릴리스 프로필은 소비 앱이 정한다(여기서는 기본값).

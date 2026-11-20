@@ -49,7 +49,7 @@ if command -v rustup >/dev/null 2>&1; then
         if [[ "$TC" != "$CUR" && "$(printf '%s
 %s
 ' "$CUR" "$TC" | sort -V | tail -1)" == "$TC" ]]; then
-            step "clippy 호스트 · 툴체인 $TC(기본 $CUR보다 새 버전)"
+            step "clippy 호스트 · 툴체인 ${TC}(기본 ${CUR}보다 새 버전)"
             run env CARGO_TARGET_DIR="target/clippy-$TC" cargo "+$TC" clippy --workspace --all-targets -- -D warnings
         fi
     done
