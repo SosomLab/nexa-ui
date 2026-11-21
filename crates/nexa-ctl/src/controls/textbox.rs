@@ -646,6 +646,8 @@ pub struct TextBox {
     /// **표시 행별 폭 캐시** — 종전에는 글자 하나를 칠 때마다 전 줄을 폰트 엔진으로 다시 쟀다(4만 줄 = 키당 200 ms).
     /// 줄 해시로 앞·뒤의 같은 행을 살리고 **바뀐 가운데 행만** 다시 잰다.
     row_width_cache: std::cell::RefCell<RowWidthCache>,
+    /// 줄별 접기 자리(접는 모드 — 변경 기록으로 바뀐 줄만 다시 잰다 · [`WrapCache`]).
+    wrap_cache: std::cell::RefCell<WrapCache>,
     /// 줄 시작 구문 상태(접지 않는 모드 — 변경 기록으로 갱신).
     line_hl_cache: std::cell::RefCell<LineHlCache>,
     /// 표시 행 해시(세대·접기 열쇠별 1회 계산 · 폭 캐시와 구문 상태 캐시가 같이 쓴다).
@@ -821,6 +823,22 @@ struct RowWidthCache {
     widths: Vec<i32>,
     max: i32,
     /// 진단·테스트: 지금까지 폰트 엔진으로(또는 지름길로) 잰 줄 수.
+    measured: u64,
+}
+
+/// **줄별 접기 자리 캐시**([`TextBox::wrap_cache`] · 접는 모드 · nexa-sql 사용자 11-21 "줄바꿈을 켜면 큰 파일 타이핑이 밀린다") —
+/// 종전에는 그릴 때마다 **모든 논리 줄**의 글자 폭을 폰트 엔진으로 재고 접었다(2 MB · 7,800줄 = 프레임당 약 220 ms · 캐럿
+/// 깜빡임만 있어도). 줄마다 "행이 끝나는 글자 자리" 목록을 들고, 버퍼의 변경 기록으로 **바뀐 줄만** 다시 잰다
+/// ([`RowWidthCache`]와 같은 규칙 · `(epoch, seq)` 소비자 · 열쇠 = 접는 폭 + 글꼴).
+#[derive(Debug, Default)]
+struct WrapCache {
+    epoch: u64,
+    seq: u64,
+    /// (접는 폭 px, 글꼴 열쇠 = "0"의 폭).
+    key: (i32, i32),
+    /// 논리 줄마다: 행이 끝나는 글자 자리(줄 시작 기준 · 마지막 = 줄 길이) · `None` = 아직 안 잼.
+    breaks: Vec<Option<Rc<[u32]>>>,
+    /// 폰트 엔진으로 접은 줄 수 누계(진단·시험 — 본문이 그대로면 늘지 않아야 한다).
     measured: u64,
 }
 
@@ -1100,6 +1118,7 @@ impl TextBox {
             ml_text_cache: std::cell::RefCell::new(None),
             hl_state_cache: std::cell::RefCell::new(HlStateCache::default()),
             row_width_cache: std::cell::RefCell::new(RowWidthCache::default()),
+            wrap_cache: std::cell::RefCell::new(WrapCache::default()),
             line_hl_cache: std::cell::RefCell::new(LineHlCache::default()),
             row_hash_cache: std::cell::RefCell::new((u64::MAX, (false, 0), Rc::new(Vec::new()))),
             minimap_builds: std::cell::Cell::new(0),
@@ -2839,6 +2858,62 @@ impl TextBox {
     }
 
     /// **줄별 폭의 최댓값**(가로 스크롤 범위 · 접지 않는 모드) — 변경 기록으로 바뀐 줄만 다시 잰다.
+    /// 접기 캐시를 버퍼의 지금 상태에 맞춘다 — 변경 기록이 말한 줄만 비우고(`None`), 기록이 끊겼거나 열쇠(폭·글꼴)·줄 수가
+    /// 달라졌으면 전부 비운다.
+    fn wrap_cache_sync(&self, key: (i32, i32), lines: usize) {
+        let buf = self.edit.buf();
+        let mut c = self.wrap_cache.borrow_mut();
+        let changes = (c.epoch == buf.epoch() && c.key == key)
+            .then(|| buf.changes_since(c.seq))
+            .flatten();
+        match changes {
+            Some(list) => {
+                for ch in list {
+                    let end = (ch.first + ch.removed).min(c.breaks.len());
+                    let first = ch.first.min(end);
+                    c.breaks
+                        .splice(first..end, std::iter::repeat_n(None, ch.inserted));
+                }
+            }
+            None => c.breaks.clear(),
+        }
+        if c.breaks.len() != lines {
+            c.breaks.clear();
+            c.breaks.resize(lines, None);
+        }
+        c.epoch = buf.epoch();
+        c.seq = buf.change_seq();
+        c.key = key;
+    }
+
+    /// 논리 줄 하나를 폭 `avail`에 맞춰 접는다 → 행이 끝나는 글자 자리들(마지막 = 줄 길이 · 공백 경계 선호 — 종전 규칙 그대로).
+    fn wrap_breaks(ctx: &mut dyn DrawCtx, line: &str, avail: i32) -> Vec<u32> {
+        let chars: Vec<char> = line.chars().collect();
+        let n = chars.len();
+        let mut wpx = Vec::new();
+        ctx.text_prefix_widths(line, &mut wpx);
+        let mut out = Vec::new();
+        let mut row_start = 0usize;
+        while row_start < n {
+            let base = wpx[row_start];
+            let mut end = row_start + 1;
+            while end < n && wpx[end + 1] - base <= avail {
+                end += 1;
+            }
+            let mut brk = end;
+            if end < n {
+                if let Some(sp) = chars[row_start..end].iter().rposition(|c| *c == ' ') {
+                    if sp > 0 {
+                        brk = row_start + sp + 1;
+                    }
+                }
+            }
+            out.push(brk as u32);
+            row_start = brk;
+        }
+        out
+    }
+
     fn line_widths_max(&self, ctx: &mut dyn DrawCtx, font_key: i32) -> i32 {
         const PROBE_N: i32 = 400;
         const MONO_FAST_MIN: usize = 2000;
@@ -3899,6 +3974,7 @@ impl TextBox {
         *self.row_hash_cache.borrow_mut() = (u64::MAX, (false, 0), Rc::new(Vec::new()));
         *self.hl_state_cache.borrow_mut() = HlStateCache::default();
         *self.row_width_cache.borrow_mut() = RowWidthCache::default();
+        *self.wrap_cache.borrow_mut() = WrapCache::default();
         *self.line_hl_cache.borrow_mut() = LineHlCache::default();
         *self.minimap_cache.borrow_mut() = None;
         *self.line_lay.borrow_mut() = Vec::new();
@@ -4039,7 +4115,7 @@ impl TextBox {
     pub fn paint_work(&self) -> (u64, u64) {
         (
             self.hl_state_cache.borrow().scanned + self.line_hl_cache.borrow().scanned,
-            self.row_width_cache.borrow().measured,
+            self.row_width_cache.borrow().measured + self.wrap_cache.borrow().measured,
         )
     }
 
@@ -4300,40 +4376,53 @@ impl TextBox {
             Rc::new(self.edit.display_text())
         };
         let wrapped: Option<Vec<(usize, &str)>> = self.wrap.then(|| {
-            let mut rows: Vec<(usize, &str)> = Vec::new();
-            for (lstart, lstr) in Self::logical_lines(&display) {
-                // 글자 경계의 바이트 오프셋(끝 포함) — 행을 슬라이스로 자른다.
-                let bytes: Vec<usize> = lstr
-                    .char_indices()
-                    .map(|(b, _)| b)
-                    .chain(std::iter::once(lstr.len()))
-                    .collect();
-                let n = bytes.len() - 1;
-                if n == 0 {
+            // ★ 접기 자리는 줄별 캐시에서(바뀐 줄만 다시 잰다 · [`WrapCache`]). 조합 중에는 캐럿 줄의 글이 버퍼와 다르므로
+            //   그 줄 하나만 캐시를 건너뛰어 그때그때 접는다(나머지 줄은 캐시 그대로).
+            let lines = Self::logical_lines(&display);
+            let key = (avail, ctx.text_width("0"));
+            self.wrap_cache_sync(key, lines.len());
+            let live_line = (preedit_n > 0).then(|| tbuf.line_of(caret_i));
+            let mut rows: Vec<(usize, &str)> = Vec::with_capacity(lines.len());
+            for (li, (lstart, lstr)) in lines.iter().copied().enumerate() {
+                if lstr.is_empty() {
                     rows.push((lstart, ""));
                     continue;
                 }
-                let mut wpx = Vec::new();
-                ctx.text_prefix_widths(lstr, &mut wpx);
-                let mut row_start = 0usize;
-                while row_start < n {
-                    let base = wpx[row_start];
-                    let mut end = row_start + 1;
-                    while end < n && wpx[end + 1] - base <= avail {
-                        end += 1;
+                let cached = if Some(li) == live_line {
+                    None
+                } else {
+                    self.wrap_cache.borrow().breaks[li].clone()
+                };
+                let br: Rc<[u32]> = match cached {
+                    Some(b) => b,
+                    None => {
+                        let b: Rc<[u32]> = Self::wrap_breaks(ctx, lstr, avail).into();
+                        let mut c = self.wrap_cache.borrow_mut();
+                        c.measured += 1;
+                        if Some(li) != live_line {
+                            c.breaks[li] = Some(b.clone());
+                        }
+                        b
                     }
-                    let mut brk = end;
-                    if end < n {
-                        let seg = &lstr[bytes[row_start]..bytes[end]];
-                        let seg_chars: Vec<char> = seg.chars().collect();
-                        if let Some(sp) = seg_chars.iter().rposition(|c| *c == ' ') {
-                            if sp > 0 {
-                                brk = row_start + sp + 1;
+                };
+                // 글자 자리 → 바이트 자리(한 번 훑기)로 행 슬라이스를 낸다.
+                let mut it = lstr.char_indices();
+                let (mut ch, mut byte) = (0usize, 0usize);
+                let (mut row_c, mut row_b) = (0usize, 0usize);
+                for &e in br.iter() {
+                    let e = e as usize;
+                    while ch < e {
+                        match it.next() {
+                            Some((b, c0)) => {
+                                byte = b + c0.len_utf8();
+                                ch += 1;
                             }
+                            None => break,
                         }
                     }
-                    rows.push((lstart + row_start, &lstr[bytes[row_start]..bytes[brk]]));
-                    row_start = brk;
+                    rows.push((lstart + row_c, &lstr[row_b..byte]));
+                    row_c = e;
+                    row_b = byte;
                 }
             }
             rows
@@ -8117,6 +8206,50 @@ mod minimap_tests {
         t.set_git_baseline(None);
         assert!(t.git_marks().is_empty());
         paint(&t);
+    }
+
+    /// ★ 접기 캐시(nexa-sql 사용자 11-21): 본문이 그대로면 다시 접지 않고 · 한 줄을 고치면 그 줄만 다시 접으며 ·
+    ///   폭이 바뀌면 전부 다시 접는다 · 결과(행 글)는 캐시가 없을 때와 같다.
+    #[test]
+    fn wrap_cache_remeasures_only_changed_lines() {
+        let theme = crate::theme::Theme::dark();
+        let mut t = TextBox::new("").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 220, 400), &mut inv);
+        t.set_wrap(true);
+        t.set_text(concat!(
+            "one two three four five six seven eight nine ten eleven twelve\n",
+            "\n",
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda\n",
+            "short\n",
+        ));
+        let texts = |t: &TextBox| -> Vec<String> {
+            let mut rec = crate::RecordCtx::default();
+            t.paint(&mut rec, &theme);
+            rec.texts.iter().map(|(_, _, _, s)| s.clone()).collect()
+        };
+        let first = texts(&t);
+        let m0 = t.wrap_cache.borrow().measured;
+        assert_eq!(m0, 3, "빈 줄을 뺀 세 줄을 한 번씩 접는다");
+        assert!(first.len() > 4, "긴 줄은 여러 행으로 접힌다: {first:?}");
+        // 같은 본문 = 다시 접지 않는다 · 그림도 같다.
+        assert_eq!(texts(&t), first);
+        assert_eq!(t.wrap_cache.borrow().measured, m0);
+        // 마지막 줄만 고치면 그 줄만 다시 접는다.
+        let n = t.buf().len();
+        t.edit.set_caret(n - 1, false);
+        t.edit.insert_str("er");
+        let after = texts(&t);
+        assert_eq!(t.wrap_cache.borrow().measured, m0 + 1);
+        assert!(after.iter().any(|s| s.contains("shorter")), "{after:?}");
+        // 캐시를 버리고 처음부터 접은 것과 같다.
+        *t.wrap_cache.borrow_mut() = WrapCache::default();
+        assert_eq!(texts(&t), after);
+        // 폭이 바뀌면 전부 다시.
+        let m1 = t.wrap_cache.borrow().measured;
+        t.set_bounds(Rect::new(0, 0, 150, 400), &mut inv);
+        let _ = texts(&t);
+        assert_eq!(t.wrap_cache.borrow().measured, m1 + 3);
     }
 
     /// 접기 모드에서 넘어간 조각도 논리 줄의 구문 색을 잇는다(nexa-sql 사용자 11-14 "줄바꿈으로 넘어간 주석이 일반 글자색") —
