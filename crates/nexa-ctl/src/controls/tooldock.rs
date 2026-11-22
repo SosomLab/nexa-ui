@@ -414,6 +414,12 @@ impl ToolDock {
         let rows_before = self.rows();
         self.order = d.orig_order;
         self.row_of = d.orig_rows;
+        // 옆 띠에서 끌어 위 도크로 들어와 있던 그룹은 원래 띠로 되돌린다(T-105 · 끄는 동안 띠 소속을 잠시 풀어 둔다).
+        if self.side_of[d.gi] != d.from_side {
+            self.side_of[d.gi] = d.from_side;
+            self.bars[d.gi].set_vertical(d.from_side.is_some());
+            self.actions.push(DockAction::Resized);
+        }
         self.relayout();
         if self.rows() != rows_before {
             self.actions.push(DockAction::Resized);
@@ -690,6 +696,10 @@ impl ToolDock {
             self.grips[i] = Rect::new(0, 0, 0, 0);
         }
         self.relayout();
+        // 옆 띠의 그룹을 숨기거나 보이면 띠 폭이 달라진다 → 호스트가 창을 다시 배치(T-105).
+        if self.side_of[i].is_some() {
+            self.actions.push(DockAction::Resized);
+        }
         true
     }
 
@@ -1622,6 +1632,24 @@ mod tests {
         assert_eq!(d.side_of("run"), None);
         assert!(!d.bar("run").unwrap().is_vertical());
         assert!(d.take_actions().contains(&DockAction::LayoutChanged));
+        // 띠에서 끌어 위 도크 안까지 들어온 뒤 Esc = 원래 띠로(세로 툴바 · 배치 글 그대로).
+        d.set_side("run", Some(DockSide::Left));
+        d.set_side_bounds(Rect::new(0, 28, w, 400), Rect::new(0, 0, 0, 0), &mut inv);
+        let _ = d.take_actions();
+        let before = d.layout().serialize();
+        let vb = d.bar("run").unwrap().bounds();
+        let (sx, sy) = (vb.x + vb.w / 2, vb.y - GRIP_W / 2);
+        d.on_event(&dn(sx, sy), &mut inv);
+        d.on_event(&mv(sx + 60, sy + 60), &mut inv);
+        d.on_event(&mv(300, 10), &mut inv);
+        assert_eq!(d.side_of("run"), None, "끄는 동안 위 도크 자리");
+        assert!(d.cancel_drag(&mut inv));
+        assert_eq!(d.side_of("run"), Some(DockSide::Left));
+        assert!(d.bar("run").unwrap().is_vertical());
+        assert_eq!(d.layout().serialize(), before);
+        d.set_side("run", None);
+        d.set_side_bounds(Rect::new(0, 0, 0, 0), Rect::new(0, 0, 0, 0), &mut inv);
+        let _ = d.take_actions();
         // 띠 자리도 도크도 아닌 곳에 놓음 = 떼어 내기.
         let rb = d.bar("run").unwrap().bounds();
         let (gx, gy) = (rb.x - GRIP_W / 2, rb.y + rb.h / 2);
