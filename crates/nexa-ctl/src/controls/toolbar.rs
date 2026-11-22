@@ -336,6 +336,8 @@ pub struct Toolbar {
     soft: Option<SoftStates>,
     /// 아이콘 그림 배율(136차 `set_icon_scale` · 0.5~1.0 · 기본 1.0) — 칸 크기는 그대로 두고 그림만 가운데로 줄인다.
     icon_scale: f32,
+    /// 세로 배치(`set_vertical` · 도크의 왼쪽/오른쪽 띠 · nexa-sql T-105) — 항목을 위에서 아래로 쌓는다.
+    vertical: bool,
 }
 
 impl Toolbar {
@@ -361,7 +363,52 @@ impl Toolbar {
             side: 6,
             soft: None,
             icon_scale: 1.0,
+            vertical: false,
         }
+    }
+
+    /// **세로 배치**(nexa-sql T-105 "세로 도크"): 항목을 위에서 아래로 쌓는다 — 칸은 가로 배치와 같은 크기 · 구분자는 가로 선 ·
+    /// 오른쪽 정렬(`right`) 구분 없이 정의 순서대로 · 바닥 테두리 선 없음(띠의 테두리는 호스트/도크가 그린다). 크기 =
+    /// [`Toolbar::preferred_width_v`] × [`Toolbar::preferred_length_v`]. 기본 false(가로).
+    pub fn set_vertical(&mut self, on: bool) {
+        self.vertical = on;
+    }
+
+    #[must_use]
+    pub fn is_vertical(&self) -> bool {
+        self.vertical
+    }
+
+    /// 세로 배치에서 항목이 쌓이는 방향의 크기(물리 px) — 구분자 = [`SEP_W`] · 그 밖 = 칸 한 변.
+    fn item_main_v(&self, i: usize) -> i32 {
+        if self.items[i].separator {
+            self.s(SEP_W)
+        } else {
+            self.slot()
+        }
+    }
+
+    /// 세로 배치의 **권장 길이**(물리 px · 위아래 여백 포함 · 보이는 항목만).
+    #[must_use]
+    pub fn preferred_length_v(&self) -> i32 {
+        let mut h = self.s(self.side) * 2;
+        for (i, it) in self.items.iter().enumerate() {
+            if it.visible {
+                h += self.item_main_v(i) + self.gap_before(i);
+            }
+        }
+        h
+    }
+
+    /// 세로 배치의 **권장 폭**(물리 px) — 가장 넓은 칸(글자 항목 · 드롭다운 포함) + 좌우 여백.
+    #[must_use]
+    pub fn preferred_width_v(&self) -> i32 {
+        let widest = (0..self.items.len())
+            .filter(|&i| self.items[i].visible && !self.items[i].separator)
+            .map(|i| self.item_w(i))
+            .max()
+            .unwrap_or_else(|| self.slot());
+        widest.max(self.slot()) + self.s(self.bar_pad) * 2
     }
 
     /// 여백 지정(슬롯 안쪽 · 바 위아래 · 논리 px) — 권장 높이 = 아이콘 + (slot + bar) × 2.
@@ -533,6 +580,21 @@ impl Toolbar {
     fn slot_rect(&self, i: usize) -> Rect {
         let b = self.base.bounds;
         let slot = self.slot();
+        if self.vertical {
+            // 위에서 아래로 — 칸은 띠 폭의 가운데(구분자는 칸 한 변 폭의 가로 선 자리).
+            let mut y = b.y + self.s(self.side);
+            for j in 0..i {
+                if self.items[j].visible {
+                    y += self.item_main_v(j) + self.gap_before(j);
+                }
+            }
+            let w = if self.items[i].separator {
+                slot
+            } else {
+                self.item_w(i)
+            };
+            return Rect::new(b.x + (b.w - w) / 2, y, w, self.item_main_v(i));
+        }
         let y = b.y + (b.h - slot) / 2;
         if self.items[i].right {
             // 오른쪽 끝부터 — 뒤(오른쪽)의 보이는 right 항목 폭+간격만큼 밀린다.
@@ -898,7 +960,9 @@ impl Toolbar {
         let b = self.base.bounds;
         let b = Rect::new(b.x + dx, b.y + dy, b.w, b.h);
         ctx.fill_rect(b, theme.chrome_bg);
-        ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
+        if !self.vertical {
+            ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
+        }
         // 글자 항목의 폭을 먼저 잰다(슬롯 배치가 이 값을 쓴다).
         ctx.select_font(FontSlot::Base, false);
         for it in &self.items {
@@ -914,6 +978,15 @@ impl Toolbar {
             }
             let slot = self.slot_rect(i);
             let slot = Rect::new(slot.x + dx, slot.y + dy, slot.w, slot.h);
+            if it.separator && self.vertical {
+                let ly = slot.y + slot.h / 2;
+                let inset = self.s(4);
+                ctx.fill_rect(
+                    Rect::new(slot.x + inset, ly, (slot.w - inset * 2).max(1), 1),
+                    theme.border,
+                );
+                continue;
+            }
             if it.separator {
                 let lx = slot.x + slot.w / 2;
                 let inset = self.s(4);
@@ -1468,6 +1541,46 @@ mod tests {
     }
     fn up(x: i32, y: i32) -> InputEvent {
         InputEvent::MouseUp { x, y }
+    }
+
+    /// 세로 배치(T-105): 항목이 위에서 아래로 쌓이고 · 숨긴 항목은 자리를 차지하지 않고 · 클릭이 그 칸에 닿고 · 가로로 되돌리면 종전 자리.
+    #[test]
+    fn vertical_layout_stacks_items_and_hits() {
+        let (mut tb, mut inv) = bar();
+        let ids: Vec<String> = tb
+            .items()
+            .iter()
+            .filter(|it| !it.separator)
+            .map(|it| it.id.clone())
+            .collect();
+        assert!(ids.len() >= 2, "{ids:?}");
+        let horiz: Vec<Rect> = ids.iter().map(|id| tb.item_rect(id).unwrap()).collect();
+        tb.set_vertical(true);
+        let (w, h) = (tb.preferred_width_v(), tb.preferred_length_v());
+        assert!(w >= tb.slot_px() && h > tb.slot_px() * ids.len() as i32 - 1);
+        tb.set_bounds(Rect::new(10, 50, w, h), &mut inv);
+        let v: Vec<Rect> = ids.iter().map(|id| tb.item_rect(id).unwrap()).collect();
+        for pair in v.windows(2) {
+            assert!(pair[1].y >= pair[0].bottom(), "{pair:?}");
+            assert_eq!(pair[0].x + pair[0].w / 2, pair[1].x + pair[1].w / 2);
+        }
+        assert!(v[0].x >= 10 && v[0].right() <= 10 + w && v.last().unwrap().bottom() <= 50 + h);
+        // 둘째 칸 클릭 = 그 id.
+        let c = v[1];
+        tb.on_event(&down(c.x + c.w / 2, c.y + c.h / 2), &mut inv);
+        tb.on_event(&up(c.x + c.w / 2, c.y + c.h / 2), &mut inv);
+        assert_eq!(tb.take_clicked().as_deref(), Some(ids[1].as_str()));
+        // 첫 항목을 숨기면 둘째가 첫 자리로.
+        tb.set_item_visible(&ids[0], false, &mut inv);
+        assert_eq!(tb.item_rect(&ids[1]).unwrap().y, v[0].y);
+        tb.set_item_visible(&ids[0], true, &mut inv);
+        tb.set_vertical(false);
+        tb.set_bounds(Rect::new(0, 0, 400, 40), &mut inv);
+        let _ = horiz;
+        let back: Vec<Rect> = ids.iter().map(|id| tb.item_rect(id).unwrap()).collect();
+        assert!(back
+            .windows(2)
+            .all(|p| p[1].x >= p[0].right() && p[0].y == p[1].y));
     }
 
     #[test]
