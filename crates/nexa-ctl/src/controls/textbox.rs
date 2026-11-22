@@ -216,6 +216,51 @@ pub enum DiffKind {
     DeletedAbove,
 }
 
+/// 자동 들여쓰기 판정용 **코드 자리**(nexa-sql T-115 · docs/49 §5): 줄(캐럿 앞 부분)의 글자마다 "문자열·줄 주석 밖인가" +
+/// 줄 주석이 시작하는 바이트 자리(없으면 줄 길이). 문자열 = `'…'` · `"…"`(같은 따옴표로 닫힘 · `''`는 닫고 다시 여는 것으로
+/// 같은 결과) · 줄 주석 = 문자열 밖의 `--`. 여는/닫는 따옴표 자신은 코드가 아니다. 줄을 넘는 문자열·블록 주석은 보지 않는다
+/// (한 줄만 보는 싼 판정 — 강조 토큰을 쓰지 않는다).
+#[must_use]
+pub fn indent_code_mask(line: &str) -> (Vec<bool>, usize) {
+    let mut mask = Vec::with_capacity(line.len());
+    let mut quote: Option<char> = None;
+    let mut comment_at: Option<usize> = None;
+    let mut prev_dash = false;
+    for (bi, ch) in line.char_indices() {
+        if comment_at.is_some() {
+            mask.push(false);
+            continue;
+        }
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                }
+                mask.push(false);
+                prev_dash = false;
+            }
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                mask.push(false);
+                prev_dash = false;
+            }
+            None if ch == '-' && prev_dash => {
+                // 앞의 `-`부터 주석 — 그 글자도 코드가 아니다.
+                comment_at = Some(bi - 1);
+                if let Some(last) = mask.last_mut() {
+                    *last = false;
+                }
+                mask.push(false);
+            }
+            None => {
+                prev_dash = ch == '-';
+                mask.push(true);
+            }
+        }
+    }
+    (mask, comment_at.unwrap_or(line.len()))
+}
+
 /// 줄 단위 디프(nexa-sql 사용자 09-17 "수정/추가 식별"): 공통 앞·뒤 제거 → 가운데는 LCS(상한 `LCS_CAP`) → 정렬 정합에서
 /// (옛 줄 소비 + 새 줄 소비) 쌍 = `Modified` · 새 줄만 = `Added` · 옛 줄만 = 다음 새 줄에 `DeletedAbove`. 상한을 넘으면 가운데 전부 `Modified`.
 pub fn diff_lines(base: &[String], cur: &[&str]) -> Vec<(usize, DiffKind)> {
@@ -1585,30 +1630,42 @@ impl TextBox {
         let mut opened: Option<char> = None;
         if self.auto_indent.smart {
             // 닫히지 않은 마지막 열림 괄호(열 정렬·짝 판정용).
+            // ★ T-115(docs/49 §5): 문자열(`'…'` · `"…"`)과 줄 주석(`--` 뒤) 안의 괄호·낱말은 규칙 판정에서 뺀다 —
+            //   `WHERE c = '('`에서 Enter가 들여쓰거나 괄호 열에 맞추지 않게 · 문자열 안의 `--`는 주석이 아니다.
+            let (in_code, code_end) = indent_code_mask(&before);
             let mut stack: Vec<(char, usize)> = Vec::new();
             for (col, ch) in before.chars().enumerate() {
+                if !in_code.get(col).copied().unwrap_or(false) {
+                    continue;
+                }
                 if self.indent_rules.open.contains(&ch) {
                     stack.push((ch, col));
                 } else if self.indent_rules.close.contains(&ch) {
                     stack.pop();
                 }
             }
-            // 줄 주석(`--` · `#`은 아님) 뒤는 규칙 판정에서 뺀다(docs/49 §5 `unIndentedLinePattern` 1차 · "-- BEGIN"에 들여쓰지 않게).
-            let code_part: &str = match before.find("--") {
-                Some(i) => &before[..i],
-                None => before.as_str(),
-            };
+            // 줄 주석 뒤는 규칙 판정에서 뺀다("-- BEGIN"에 들여쓰지 않게 · `unIndentedLinePattern` 1차).
+            let code_part: &str = &before[..code_end];
             let trimmed = code_part.trim_end();
-            let last_char = trimmed.chars().last();
-            let last_word: String = trimmed
-                .chars()
-                .rev()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<String>()
-                .to_ascii_uppercase();
+            // 줄 끝 글자가 (닫히지 않은) 문자열 안이면 괄호·낱말로 보지 않는다.
+            let last_in_code = in_code
+                .get(trimmed.chars().count().saturating_sub(1))
+                .copied()
+                .unwrap_or(false);
+            let last_char = trimmed.chars().last().filter(|_| last_in_code);
+            let last_word: String = if last_in_code {
+                trimmed
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<String>()
+                    .to_ascii_uppercase()
+            } else {
+                String::new()
+            };
             if self.auto_indent.to_bracket {
                 if let Some(&(_, col)) = stack.last() {
                     // 괄호 다음 열까지 공백(탭은 tab_size로 환산한 시각 열).
@@ -7910,6 +7967,79 @@ c  d",
             &mut inv,
         );
         assert_eq!(c.text(), "x -- BEGIN\n");
+    }
+
+    /// T-115: 문자열·줄 주석 안의 괄호·낱말은 들여쓰기 규칙에서 뺀다 — 코드 자리 판정 + Enter 결과.
+    #[test]
+    fn auto_indent_ignores_brackets_in_strings_and_comments() {
+        let m = |s: &str| {
+            let (mask, end) = indent_code_mask(s);
+            (
+                s.chars()
+                    .zip(mask)
+                    .filter(|(_, ok)| *ok)
+                    .map(|(c, _)| c)
+                    .collect::<String>(),
+                end,
+            )
+        };
+        assert_eq!(m("a = '(' + b"), ("a =  + b".to_string(), 11));
+        assert_eq!(m("x '--' y -- (z"), ("x  y ".to_string(), 9));
+        assert_eq!(m("a - b \"(\" c"), ("a - b  c".to_string(), 11));
+        assert_eq!(m("it''s ( -- c"), ("its ( ".to_string(), 8));
+        assert_eq!(m("f('abc ("), ("f(".to_string(), 8));
+        let enter = InputEvent::Key {
+            key: Key::Enter,
+            shift: false,
+            primary: false,
+        };
+        let run = |text: &str| {
+            let mut t = TextBox::new("p").with_multiline().with_text(text);
+            t.set_indent(4, true);
+            t.set_focused(true);
+            let mut inv = Invalidations::default();
+            t.edit.set_caret(text.chars().count(), false);
+            t.on_event(&enter, &mut inv);
+            t.text()
+        };
+        // 문자열 안의 여는 괄호로 끝나는 줄 = 유지(들여쓰지 않는다).
+        assert_eq!(
+            run("  WHERE c = '('"),
+            "  WHERE c = '('
+  "
+        );
+        assert_eq!(
+            run("  WHERE c = 'x ("),
+            "  WHERE c = 'x (
+  "
+        );
+        // 주석 안의 괄호·낱말 = 유지 · 문자열 안의 `--`는 주석이 아니다(그 뒤의 진짜 괄호는 규칙대로).
+        assert_eq!(
+            run("  x -- note ("),
+            "  x -- note (
+  "
+        );
+        assert_eq!(
+            run("  x -- BEGIN"),
+            "  x -- BEGIN
+  "
+        );
+        assert_eq!(
+            run("  f('--', ("),
+            "  f('--', (
+      "
+        );
+        // 코드의 여는 괄호로 끝나는 줄 = 종전대로 증가.
+        assert_eq!(
+            run("  f("),
+            "  f(
+      "
+        );
+        assert_eq!(
+            run("  BEGIN"),
+            "  BEGIN
+      "
+        );
     }
 
     /// Auto indent(docs/49): 유지 · 증가 · 괄호 사이 · 닫힘 내어쓰기 · 이탈 시 비움.
