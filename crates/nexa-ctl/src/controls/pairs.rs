@@ -536,9 +536,12 @@ impl PairTable {
             let ka = pairs.get(a).map(|p| p.open);
             let kb = close_order.get(b).map(|&pi| pairs[pi as usize].close);
             let kc = unmatched.get(c).map(|u| u.0);
-            let m = match ka.min(kb).min(kc) {
-                Some(m) => m,
-                None => break,
+            // 🔧 nexa-sql 11-22: `Option`의 순서는 `None < Some(_)`이라 `ka.min(kb).min(kc)`는 세 열 중 **하나라도 비면** `None` →
+            //   곧바로 끝났다. 짝 없는 괄호가 없는 보통 본문은 처음부터 `kc`가 `None`이라 marks가 통째로 비어 레인보우 괄호 색이
+            //   하나도 칠해지지 않았다(5169a3f 병합 도입 · 종전 시험은 본문 끝에 짝 없는 `)`가 있어 앞쪽만 채워져 통과).
+            //   남은 열의 값끼리만 비교한다.
+            let Some(m) = [ka, kb, kc].into_iter().flatten().min() else {
+                break;
             };
             if ka == Some(m) {
                 marks.push((m, pairs[a].depth, false));
@@ -1056,6 +1059,46 @@ mod tests {
             observable(&PairTable::build(&lines.join("\n"), Some(&hl), opts))
         );
         assert!(scanned3.get() <= CK_EVERY + 2, "읽은 줄 {}", scanned3.get());
+    }
+
+    /// 🔧 nexa-sql 11-22 회귀: 짝 없는 괄호가 **없는** 본문에서도 모든 괄호 글자가 marks에 든다(열림·닫힘 · 위치 오름차순 · 깊이) ·
+    /// 짝 없는 괄호가 중간에 있어도 그 뒤의 괄호가 빠지지 않는다 · 강조기 유무와 무관.
+    #[test]
+    fn marks_cover_every_bracket_without_unmatched() {
+        let text = "SELECT ((((1)))) FROM ((((dual))));
+SELECT (((((2))))) FROM dual;";
+        let n = text.chars().count();
+        let brackets: Vec<usize> = text
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| matches!(c, '(' | ')'))
+            .map(|(i, _)| i)
+            .collect();
+        let spec = crate::highlight::SyntaxSpec::sql();
+        for hl in [None, Some(&spec as &dyn Highlighter)] {
+            let t = PairTable::build(text, hl, PairOpts::default());
+            assert_eq!(t.pairs.len(), 13);
+            let m = t.marks_in(0, n);
+            assert_eq!(m.iter().map(|x| x.0).collect::<Vec<_>>(), brackets);
+            assert!(m.iter().all(|x| !x.2), "짝 없음 표시 없음");
+            // 깊이: 첫 묶음 `((((1))))` = 0,1,2,3 | 3,2,1,0.
+            assert_eq!(
+                m[..8].iter().map(|x| x.1).collect::<Vec<_>>(),
+                vec![0, 1, 2, 3, 3, 2, 1, 0]
+            );
+            assert_eq!(t.marks_in(7, 11).len(), 4, "구간 조회");
+        }
+        // 짝 없는 `)`가 앞에 있어도 뒤 괄호가 전부 남는다(열 하나가 먼저 끝나는 경우).
+        let u = PairTable::build(") (a) (b)", None, PairOpts::default());
+        let um = u.marks_in(0, 9);
+        assert_eq!(
+            um.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![0, 2, 4, 6, 8]
+        );
+        assert_eq!(
+            um.iter().map(|x| x.2).collect::<Vec<_>>(),
+            vec![true, false, false, false, false]
+        );
     }
 
     /// 평문 스캔: 깊이 · 인용부호 쌍 · 짝 없음 · 조회(옆/감싸는/부모/자식/형제).
