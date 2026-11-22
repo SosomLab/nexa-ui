@@ -73,10 +73,29 @@ pub struct DockLayout {
     pub rows: Vec<usize>,
     /// 플로팅(그룹 id, x, y).
     pub floating: Vec<(String, i32, i32)>,
+    /// 옆 띠에 붙은 그룹(그룹 id, 어느 쪽) — 띠 안 순서 = `order`(nexa-sql T-105 세로 도크).
+    pub sides: Vec<(String, DockSide)>,
+}
+
+/// 도크 옆 띠(창 왼쪽/오른쪽 가장자리의 세로 띠 · nexa-sql T-105).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockSide {
+    Left,
+    Right,
+}
+
+impl DockSide {
+    fn code(self) -> &'static str {
+        match self {
+            DockSide::Left => "L",
+            DockSide::Right => "R",
+        }
+    }
 }
 
 impl DockLayout {
-    /// `a,b;c@120:340,d` — `,` = 같은 행의 다음 · `;` = 다음 행 · `@x:y`가 붙은 그룹은 플로팅(순서는 돌아올 자리).
+    /// `a,b;c@120:340,d` — `,` = 같은 행의 다음 · `;` = 다음 행 · `@x:y`가 붙은 그룹은 플로팅(순서는 돌아올 자리) ·
+    /// `@L`/`@R` = 왼쪽/오른쪽 띠에 붙은 그룹(행·순서는 위 도크로 돌아올 자리이자 띠 안 순서).
     #[must_use]
     pub fn parse(text: &str) -> Self {
         let mut l = DockLayout::default();
@@ -92,6 +111,11 @@ impl DockLayout {
                 l.order.push(id.to_string());
                 l.rows.push(row);
                 if let Some(pos) = pos {
+                    match pos.trim() {
+                        "L" | "l" => l.sides.push((id.to_string(), DockSide::Left)),
+                        "R" | "r" => l.sides.push((id.to_string(), DockSide::Right)),
+                        _ => {}
+                    }
                     if let Some((x, y)) = pos.split_once(':') {
                         if let (Ok(x), Ok(y)) = (x.trim().parse(), y.trim().parse()) {
                             l.floating.push((id.to_string(), x, y));
@@ -128,12 +152,15 @@ impl DockLayout {
                     .iter()
                     .enumerate()
                     .filter(|(i, _)| self.row_at(*i) == r)
-                    .map(
-                        |(_, id)| match self.floating.iter().find(|(f, _, _)| f == id) {
+                    .map(|(_, id)| {
+                        if let Some((_, side)) = self.sides.iter().find(|(f, _)| f == id) {
+                            return format!("{id}@{}", side.code());
+                        }
+                        match self.floating.iter().find(|(f, _, _)| f == id) {
                             Some((_, x, y)) => format!("{id}@{x}:{y}"),
                             None => id.clone(),
-                        },
-                    )
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(",")
             })
@@ -166,6 +193,10 @@ struct Drag {
     moved: bool,
     /// 도크(+ 새 행 영역) 밖에 있다 = **플로팅 미리보기**(놓으면 떼어 낸다 · 다시 들어오면 순서 이동으로 복귀 · 226차).
     outside: bool,
+    /// 밖에 있으면서 옆 띠 자리 위에 있다 = 놓으면 그 띠에 붙는다(T-105).
+    over_side: Option<DockSide>,
+    /// 끌기 시작 때 그룹이 붙어 있던 옆 띠(위 도크에서 시작 = None).
+    from_side: Option<DockSide>,
     /// 시작 때 순서·행(Esc 복원).
     orig_order: Vec<usize>,
     orig_rows: Vec<usize>,
@@ -185,6 +216,14 @@ pub struct ToolDock {
     row_h: i32,
     /// 플로팅 그룹(index, x, y).
     floating: Vec<(usize, i32, i32)>,
+    /// ★ 옆 띠에 붙은 그룹(index별 · T-105): `Some` = 위 도크 배치에서 빠지고 그 띠에 세로 툴바로 그려진다 · 띠 안 순서 = `order`.
+    side_of: Vec<Option<DockSide>>,
+    /// 옆 띠 자리(호스트가 준다 · [`ToolDock::set_side_bounds`]) — 왼쪽 · 오른쪽. 폭 0 = 그 띠에 그룹 없음.
+    side_rects: [Rect; 2],
+    /// 끌어 붙일 수 있는 가장자리 영역(호스트가 준다 · 띠가 비어 있어도 잡히게 띠보다 넓다) — 왼쪽 · 오른쪽.
+    side_zones: [Rect; 2],
+    /// 바깥(플로팅 창)에서 끌어 온 그룹이 이 띠 자리 위에 있다 — 붙을 수 있음 표시([`ToolDock::set_side_hint`]).
+    side_hint: Option<DockSide>,
     /// ★ 숨긴 그룹(index별 · nexa-sql T-278 10-30 "그룹 숨김"): 배치·그리기·사건에서 빠진다 · 순서(`order`)·행은 그대로 둬 다시 보이면 제자리.
     hidden: Vec<bool>,
     /// 그룹별 그립 사각형(마지막 배치).
@@ -242,6 +281,10 @@ impl ToolDock {
             row_of: vec![0; n],
             row_h: 0,
             floating: Vec::new(),
+            side_of: vec![None; n],
+            side_rects: [Rect::new(0, 0, 0, 0); 2],
+            side_zones: [Rect::new(0, 0, 0, 0); 2],
+            side_hint: None,
             hidden: vec![false; n],
             grips: vec![Rect::new(0, 0, 0, 0); n],
             hover_grip: None,
@@ -439,7 +482,197 @@ impl ToolDock {
 
     /// 도크 배치·그리기·사건에서 빠지는 그룹(플로팅 또는 숨김).
     fn skip_idx(&self, i: usize) -> bool {
-        self.is_floating_idx(i) || self.hidden.get(i).copied().unwrap_or(false)
+        self.is_floating_idx(i) || self.hidden.get(i).copied().unwrap_or(false) || self.on_side(i)
+    }
+
+    /// 옆 띠에 붙어 있고 플로팅이 아닌가(띠에 실제로 그려지는 그룹).
+    fn on_side(&self, i: usize) -> bool {
+        self.side_of.get(i).copied().flatten().is_some() && !self.is_floating_idx(i)
+    }
+
+    /// 띠 `side`에 그려지는 그룹(도크 순서 · 숨김·플로팅 제외).
+    fn side_members(&self, side: DockSide) -> Vec<usize> {
+        self.order
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.side_of[i] == Some(side)
+                    && !self.is_floating_idx(i)
+                    && !self.hidden.get(i).copied().unwrap_or(false)
+            })
+            .collect()
+    }
+
+    fn side_slot(side: DockSide) -> usize {
+        match side {
+            DockSide::Left => 0,
+            DockSide::Right => 1,
+        }
+    }
+
+    // ── 옆 띠(T-105 세로 도크) ─────────────────────────────────────────────
+
+    /// 그룹이 붙어 있는 옆 띠(위 도크·플로팅 = None).
+    #[must_use]
+    pub fn side_of(&self, id: &str) -> Option<DockSide> {
+        let i = self.index(id)?;
+        self.side_of[i].filter(|_| !self.is_floating_idx(i))
+    }
+
+    /// 그룹을 옆 띠에 붙이거나(`Some`) 위 도크로 되돌린다(`None`) — 플로팅이었으면 플로팅도 푼다. 배치 변경 + 크기 변경 보고
+    /// (띠 폭·위 도크 행 수가 달라질 수 있다 → 호스트가 창을 다시 배치).
+    pub fn set_side(&mut self, id: &str, side: Option<DockSide>) {
+        let Some(i) = self.index(id) else { return };
+        self.floating.retain(|(f, _, _)| *f != i);
+        self.side_of[i] = side;
+        let mut inv = Invalidations::default();
+        self.bars[i].clear_hover(&mut inv);
+        self.bars[i].set_vertical(side.is_some());
+        self.compact_rows();
+        self.relayout();
+        self.side_hint = None;
+        self.actions.push(DockAction::LayoutChanged);
+        self.actions.push(DockAction::Resized);
+    }
+
+    /// 띠 `side`의 **권장 폭**(논리 px) — 붙은 그룹이 없으면 0. 호스트가 배율을 곱해 본문을 그만큼 들인다.
+    #[must_use]
+    pub fn side_width(&self, side: DockSide) -> i32 {
+        let scale = self.base.scale.max(0.01);
+        self.side_members(side)
+            .into_iter()
+            .map(|i| (self.bars[i].preferred_width_v() as f32 / scale).round() as i32)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// 옆 띠 자리(물리 px · 왼쪽, 오른쪽)를 정한다 — 호스트의 창 배치가 부른다(붙은 그룹이 없으면 폭 0 사각형).
+    pub fn set_side_bounds(&mut self, left: Rect, right: Rect, inv: &mut Invalidations) {
+        if self.side_rects != [left, right] {
+            inv.push(self.side_rects[0]);
+            inv.push(self.side_rects[1]);
+            self.side_rects = [left, right];
+            self.relayout();
+            inv.push(left);
+            inv.push(right);
+        }
+    }
+
+    /// 끌어 붙일 수 있는 가장자리 영역(물리 px · 왼쪽, 오른쪽) — 띠가 비어 있어도 잡히도록 호스트가 본문 가장자리의 얇은 띠를 준다.
+    pub fn set_side_zones(&mut self, left: Rect, right: Rect) {
+        self.side_zones = [left, right];
+    }
+
+    /// 띠 자리(읽기) — 호스트의 사건 라우팅·그리기 영역 판단용.
+    #[must_use]
+    pub fn side_bounds(&self, side: DockSide) -> Rect {
+        self.side_rects[Self::side_slot(side)]
+    }
+
+    /// 이 점이 옆 띠(그룹이 붙어 있는 자리) 안인가 — 호스트가 마우스 사건을 도크로 보낼지 판단.
+    #[must_use]
+    pub fn side_contains(&self, p: Point) -> bool {
+        self.side_rects.iter().any(|r| r.w > 0 && r.contains(p))
+    }
+
+    /// 이 점에 놓으면 붙는 옆 띠(가장자리 영역 또는 띠 자리) — 위 도크 자리(`accepts_drop`)가 먼저다.
+    #[must_use]
+    pub fn side_zone_at(&self, p: Point) -> Option<DockSide> {
+        [DockSide::Left, DockSide::Right].into_iter().find(|&s| {
+            let k = Self::side_slot(s);
+            self.side_zones[k].contains(p)
+                || (self.side_rects[k].w > 0 && self.side_rects[k].contains(p))
+        })
+    }
+
+    /// 점이 위 도크 띠 아래이면서 옆 띠 자리(가장자리 영역) 안인가 — 위 도크의 "새 행" 여유보다 옆 띠가 먼저다.
+    fn below_on_side(&self, p: Point) -> bool {
+        p.y >= self.base.bounds.bottom() && self.side_zone_at(p).is_some()
+    }
+
+    /// 붙을 수 있음 표시(옆 띠 가장자리)를 켜고 끈다 — 바뀌었으면 true(호스트가 다시 그린다).
+    pub fn set_side_hint(&mut self, side: Option<DockSide>) -> bool {
+        let changed = self.side_hint != side;
+        self.side_hint = side;
+        changed
+    }
+
+    /// 옆 띠 배치 — 띠마다 위에서 아래로: 손잡이(가로 띠) + 세로 툴바.
+    fn relayout_sides(&mut self) {
+        let grip = self.s(GRIP_W);
+        let gap = self.s(self.group_gap);
+        let mut inv = Invalidations::default();
+        for side in [DockSide::Left, DockSide::Right] {
+            let r = self.side_rects[Self::side_slot(side)];
+            let mut y = r.y + self.s(2);
+            for i in self.side_members(side) {
+                self.bars[i].set_scale(self.base.scale);
+                self.bars[i].set_vertical(true);
+                let h = self.bars[i].preferred_length_v();
+                self.grips[i] = Rect::new(r.x, y, r.w, grip);
+                self.bars[i].set_bounds(Rect::new(r.x, y + grip, r.w, h), &mut inv);
+                y += grip + h + gap;
+            }
+        }
+    }
+
+    /// 옆 띠 그리기(바탕 · 안쪽 테두리 · 그룹 손잡이 · 세로 툴바 · 붙을 수 있음 표시).
+    fn paint_sides(&self, ctx: &mut dyn DrawCtx, theme: &Theme, ghosted: Option<usize>) {
+        for side in [DockSide::Left, DockSide::Right] {
+            let k = Self::side_slot(side);
+            let r = self.side_rects[k];
+            if r.w > 0 {
+                ctx.fill_rect(r, theme.chrome_bg);
+                // 본문 쪽 가장자리에 테두리 선.
+                let ex = match side {
+                    DockSide::Left => r.right() - 1,
+                    DockSide::Right => r.x,
+                };
+                ctx.fill_rect(Rect::new(ex, r.y, 1, r.h), theme.border);
+                for i in self.side_members(side) {
+                    let br = self.bars[i].bounds();
+                    if ghosted == Some(i) {
+                        ctx.fill_rect_alpha(br, theme.accent, 0.12);
+                        continue;
+                    }
+                    self.bars[i].paint(ctx, theme);
+                    // 손잡이 = 가로 점 2행.
+                    let g = self.grips[i];
+                    let active =
+                        self.hover_grip == Some(i) || self.drag.as_ref().is_some_and(|d| d.gi == i);
+                    let c = if active { theme.accent } else { theme.text_dim };
+                    let dot = self.s(2).max(1);
+                    let cols = 4;
+                    let span = cols * dot * 2 - dot;
+                    let x0 = g.x + (g.w - span) / 2;
+                    let y0 = g.y + (g.h - (dot * 3)) / 2;
+                    for col in 0..cols {
+                        for row in 0..2 {
+                            ctx.fill_rect(
+                                Rect::new(x0 + col * dot * 2, y0 + row * dot * 2, dot, dot),
+                                c,
+                            );
+                        }
+                    }
+                }
+            }
+            // 붙을 수 있음 표시 — 끌고 있는 그룹(도크 안 끌기 · 플로팅 창)이 이 가장자리 위에 있다.
+            let hint = self.side_hint == Some(side)
+                || self
+                    .drag
+                    .as_ref()
+                    .is_some_and(|d| d.moved && d.over_side == Some(side));
+            if hint {
+                let z = if r.w > 0 { r } else { self.side_zones[k] };
+                let t = self.s(3).max(2);
+                let x = match side {
+                    DockSide::Left => z.x,
+                    DockSide::Right => z.right() - t,
+                };
+                ctx.fill_rect(Rect::new(x, z.y, t, z.h), theme.accent);
+                ctx.fill_rect_alpha(z, theme.accent, 0.10);
+            }
+        }
     }
 
     /// ★ 그룹 표시/숨김(T-278): 숨기면 자리를 차지하지 않는다(행이 비면 접힌다) · 사각형은 0 · 플로팅 상태·순서는 그대로. 모르는 id = false.
@@ -512,7 +745,7 @@ impl ToolDock {
     #[must_use]
     pub fn accepts_drop(&self, p: Point) -> bool {
         let b = self.base.bounds;
-        p.x >= b.x && p.x < b.right() && self.target_row(p.y).is_some()
+        p.x >= b.x && p.x < b.right() && self.target_row(p.y).is_some() && !self.below_on_side(p)
     }
 
     /// 붙을 수 있음 표시(도크 테두리)를 켜고 끈다 — 바뀌었으면 `true`(호스트가 다시 그린다).
@@ -527,6 +760,9 @@ impl ToolDock {
     pub fn dock_at(&mut self, id: &str, p: Point) {
         self.drop_hint = false;
         let Some(i) = self.index(id) else { return };
+        // 위 도크의 이 자리에 붙인다 = 옆 띠 소속도 푼다(T-105).
+        self.side_of[i] = None;
+        self.bars[i].set_vertical(false);
         self.dock(id);
         self.relayout();
         self.reorder_to(i, p);
@@ -560,6 +796,11 @@ impl ToolDock {
                 .iter()
                 .map(|&(i, x, y)| (self.groups[i].id.clone(), x, y))
                 .collect(),
+            sides: self
+                .order
+                .iter()
+                .filter_map(|&i| Some((self.groups[i].id.clone(), self.side_of[i]?)))
+                .collect(),
         }
     }
 
@@ -587,6 +828,18 @@ impl ToolDock {
             .iter()
             .filter_map(|(id, x, y)| self.index(id).map(|i| (i, *x, *y)))
             .collect();
+        self.side_of = vec![None; self.groups.len()];
+        for (id, side) in &l.sides {
+            if let Some(i) = self.index(id) {
+                self.side_of[i] = Some(*side);
+            }
+        }
+        for i in 0..self.bars.len() {
+            let v = self.side_of[i].is_some();
+            self.bars[i].set_vertical(v);
+        }
+        self.compact_rows();
+        self.relayout();
     }
 
     /// 기본 배치로(전부 도크 · 정의 순서).
@@ -594,8 +847,11 @@ impl ToolDock {
         self.order = (0..self.groups.len()).collect();
         self.row_of = vec![0; self.groups.len()];
         self.floating.clear();
+        self.side_of = vec![None; self.groups.len()];
         self.drag = None;
+        self.relayout();
         self.actions.push(DockAction::LayoutChanged);
+        self.actions.push(DockAction::Resized);
     }
 
     /// 호스트가 처리할 일(1회성).
@@ -605,10 +861,7 @@ impl ToolDock {
 
     /// 도크에 붙은 그룹에서 클릭된 액션 id(1회성 · 플로팅 창의 클릭은 호스트가 `bar_mut`로 직접 가져간다).
     pub fn take_clicked(&mut self) -> Option<String> {
-        for &i in &self.order {
-            if self.skip_idx(i) {
-                continue;
-            }
+        for i in self.live_groups() {
             if let Some(id) = self.bars[i].take_clicked() {
                 return Some(id);
             }
@@ -755,6 +1008,7 @@ impl ToolDock {
                     continue;
                 }
                 self.bars[i].set_scale(self.base.scale);
+                self.bars[i].set_vertical(false);
                 let w = self.bars[i].preferred_width();
                 if self.groups[i].right {
                     let bx = rx - w;
@@ -768,6 +1022,7 @@ impl ToolDock {
                 }
             }
         }
+        self.relayout_sides();
     }
 
     /// 고스트 자리(커서 − 잡은 오프셋 · 그룹 툴바 크기).
@@ -813,7 +1068,21 @@ impl ToolDock {
         self.order
             .iter()
             .copied()
-            .find(|&i| !self.skip_idx(i) && self.grips[i].contains(p))
+            .find(|&i| (!self.skip_idx(i) || self.shown_on_side(i)) && self.grips[i].contains(p))
+    }
+
+    /// 옆 띠에 실제로 그려지는 그룹인가(붙어 있고 · 플로팅·숨김 아님).
+    fn shown_on_side(&self, i: usize) -> bool {
+        self.on_side(i) && !self.hidden.get(i).copied().unwrap_or(false)
+    }
+
+    /// 사건을 받는 그룹(위 도크에 그려지는 것 + 옆 띠에 그려지는 것 · 도크 순서).
+    fn live_groups(&self) -> Vec<usize> {
+        self.order
+            .iter()
+            .copied()
+            .filter(|&i| !self.skip_idx(i) || self.shown_on_side(i))
+            .collect()
     }
 
     /// 드래그 중 자리 이동(라이브 미리보기) — 커서의 행(`target_row`) 안에서, 같은 정렬 띠의 다른 그룹들 중앙을 기준으로
@@ -934,9 +1203,9 @@ impl ToolDock {
     #[must_use]
     pub fn tooltip_visible(&self) -> bool {
         let bar = self
-            .order
-            .iter()
-            .any(|&i| !self.skip_idx(i) && self.bars[i].tooltip_visible());
+            .live_groups()
+            .into_iter()
+            .any(|i| self.bars[i].tooltip_visible());
         let grip = self
             .hover_grip
             .filter(|_| self.drag.is_none())
@@ -950,10 +1219,8 @@ impl ToolDock {
     pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         // 도크의 폭(= 창 폭) 안에 — 오른쪽 정렬 그룹의 툴팁도 창 안에서 왼쪽으로 밀린다.
         let clamp = (self.base.bounds.x, self.base.bounds.right());
-        for &i in &self.order {
-            if !self.skip_idx(i) {
-                self.bars[i].paint_tooltip_in(ctx, theme, clamp);
-            }
+        for i in self.live_groups() {
+            self.bars[i].paint_tooltip_in(ctx, theme, clamp);
         }
         // ★ 그룹 손잡이 위 = 그룹 이름 툴팁(nexa-sql 09-28 "그룹을 이동하는 영역에 마우스를 올리면 그룹 이름") — 끄는 중에는 없음.
         if let Some(i) = self.hover_grip.filter(|_| self.drag.is_none()) {
@@ -1004,6 +1271,8 @@ impl Widget for ToolDock {
                         cur: p,
                         moved: false,
                         outside: false,
+                        over_side: None,
+                        from_side: self.side_of[gi],
                         orig_order: self.order.clone(),
                         orig_rows: self.row_of.clone(),
                     });
@@ -1011,8 +1280,8 @@ impl Widget for ToolDock {
                     return;
                 }
                 // 마우스 라우팅 규칙: 커서 아래 그룹에만.
-                for &i in &self.order.clone() {
-                    if !self.skip_idx(i) && self.bars[i].bounds().contains(p) {
+                for i in self.live_groups() {
+                    if self.bars[i].bounds().contains(p) {
                         self.bars[i].on_event(ev, inv);
                     }
                 }
@@ -1021,10 +1290,27 @@ impl Widget for ToolDock {
                 if let Some(d) = self.drag.take() {
                     if d.moved {
                         inv.push(self.ghost_inv_rect_of(&d.cur, d.off_x, d.off_y, d.gi));
+                        inv.push(self.side_rects[0]);
+                        inv.push(self.side_rects[1]);
                         if d.outside {
-                            // 도크 밖에서 **놓음** = 떼어 내기(호스트가 창을 만든다 · 순서는 이미 시작 때로 돌아가 있다 · 226차).
                             let id = self.groups[d.gi].id.clone();
+                            // ★ 옆 띠 자리에 놓음 = 그 띠에 붙인다(T-105) · 같은 띠에서 끌다 제자리에 놓으면 변화 없음.
+                            if let Some(side) = d.over_side {
+                                if d.from_side != Some(side) {
+                                    self.set_side(&id, Some(side));
+                                }
+                                inv.push(b);
+                                return;
+                            }
+                            // 도크 밖에서 **놓음** = 떼어 내기(호스트가 창을 만든다 · 순서는 이미 시작 때로 돌아가 있다 · 226차).
                             self.actions.push(DockAction::Float { id, x, y });
+                            inv.push(b);
+                            return;
+                        }
+                        // 옆 띠에서 끌어 위 도크 자리에 놓음 = 위 도크로(자리는 끄는 동안 정해졌다).
+                        if d.from_side.is_some() {
+                            self.actions.push(DockAction::LayoutChanged);
+                            self.actions.push(DockAction::Resized);
                             inv.push(b);
                             return;
                         }
@@ -1035,13 +1321,9 @@ impl Widget for ToolDock {
                     inv.push(b);
                     return;
                 }
-                let p = Point { x, y };
-                for &i in &self.order.clone() {
-                    if !self.skip_idx(i) {
-                        // Up은 눌린 툴바가 스스로 판정(눌림 해제 포함)하도록 전부에.
-                        let _ = p;
-                        self.bars[i].on_event(ev, inv);
-                    }
+                // Up은 눌린 툴바가 스스로 판정(눌림 해제 포함)하도록 전부에.
+                for i in self.live_groups() {
+                    self.bars[i].on_event(ev, inv);
                 }
             }
             InputEvent::MouseMove { x, y } => {
@@ -1068,13 +1350,40 @@ impl Widget for ToolDock {
                     }
                     // 도크(+ 새 행 영역) 밖 = **플로팅 미리보기**: 떼어 내기는 놓을 때(MouseUp) · 놓지 않고 다시 들어오면 순서 이동으로
                     // 복귀(dir3 사용자 10-24 · 종전 = 나가는 순간 떼어 냈다). 밖에 있는 동안 도크는 시작 때 순서로 돌려 둔다.
-                    let outside = self.target_row(y).is_none();
+                    // 도크 띠 아래의 옆 띠 자리는 "새 행" 여유와 겹친다 → 옆 띠 자리가 먼저다(밖으로 본다).
+                    let outside = self.target_row(y).is_none() || self.below_on_side(p);
                     let was_outside = self.drag.as_ref().is_some_and(|d| d.outside);
+                    // 밖에 있을 때 옆 띠 자리 위인가(T-105) — 표시가 바뀌면 그 띠를 다시 그린다.
+                    let over_side = if outside { self.side_zone_at(p) } else { None };
+                    if self.drag.as_ref().is_some_and(|d| d.over_side != over_side) {
+                        if let Some(d) = self.drag.as_mut() {
+                            d.over_side = over_side;
+                        }
+                        for k in 0..2 {
+                            inv.push(self.side_rects[k]);
+                            inv.push(self.side_zones[k]);
+                        }
+                    }
+                    // 옆 띠에서 끌어 온 그룹이 위 도크 자리로 들어왔다 = 위 도크 그룹으로 바꿔 자리 잡기를 잇는다(나가면 다시 띠로).
+                    let from_side = self.drag.as_ref().and_then(|d| d.from_side);
+                    if from_side.is_some() && outside == self.side_of[gi].is_none() {
+                        self.side_of[gi] = if outside { from_side } else { None };
+                        self.bars[gi].set_vertical(outside);
+                        let rows_before = self.rows();
+                        self.compact_rows();
+                        self.relayout();
+                        if self.rows() != rows_before {
+                            self.actions.push(DockAction::Resized);
+                        }
+                        inv.push(b);
+                        inv.push(self.side_rects[0]);
+                        inv.push(self.side_rects[1]);
+                    }
                     if outside != was_outside {
                         if let Some(d) = self.drag.as_mut() {
                             d.outside = outside;
                         }
-                        if outside {
+                        if outside && from_side.is_none() {
                             let (orig_order, orig_rows) = self
                                 .drag
                                 .as_ref()
@@ -1102,11 +1411,11 @@ impl Widget for ToolDock {
                 if over != self.hover_grip {
                     self.hover_grip = over;
                     inv.push(b);
+                    inv.push(self.side_rects[0]);
+                    inv.push(self.side_rects[1]);
                 }
-                for &i in &self.order.clone() {
-                    if !self.skip_idx(i) {
-                        self.bars[i].on_event(ev, inv);
-                    }
+                for i in self.live_groups() {
+                    self.bars[i].on_event(ev, inv);
                 }
             }
             _ => {}
@@ -1164,6 +1473,7 @@ impl Widget for ToolDock {
                 }
             }
         }
+        self.paint_sides(ctx, theme, ghosted);
         if self.drop_hint {
             let t = self.s(2).max(1);
             let c = theme.accent;
@@ -1198,6 +1508,124 @@ mod tests {
         let mut inv = Invalidations::default();
         d.set_bounds(Rect::new(0, 0, 800, 28), &mut inv);
         d
+    }
+
+    /// T-105 옆 띠: 배치 글 왕복(`@L`/`@R`) · 붙이면 위 도크에서 빠지고 띠에 세로로 놓임 · 클릭이 닿음 · 위 도크로 되돌리면 제자리.
+    #[test]
+    fn side_dock_layout_round_trip_and_placement() {
+        let l = DockLayout::parse("file,run@L;view@R,x@10:20");
+        assert_eq!(
+            l.sides,
+            vec![
+                ("run".to_string(), DockSide::Left),
+                ("view".to_string(), DockSide::Right)
+            ]
+        );
+        assert_eq!(l.serialize(), "file,run@L;view@R,x@10:20");
+        assert_eq!(DockLayout::parse("a,b;c@120:340").sides, vec![]);
+
+        let mut d = dock();
+        let mut inv = Invalidations::default();
+        assert_eq!(d.side_width(DockSide::Left), 0);
+        let run_top = d.bar("run").unwrap().bounds();
+        d.set_side("run", Some(DockSide::Left));
+        assert!(d.take_actions().contains(&DockAction::Resized));
+        assert_eq!(d.side_of("run"), Some(DockSide::Left));
+        let w = d.side_width(DockSide::Left);
+        assert!(w > 0);
+        d.set_side_bounds(Rect::new(0, 28, w, 400), Rect::new(0, 0, 0, 0), &mut inv);
+        let rb = d.bar("run").unwrap();
+        assert!(rb.is_vertical());
+        let r = rb.bounds();
+        assert!(r.x == 0 && r.y > 28 && r.w == w && r.h > r.w, "{r:?}");
+        // 위 도크에서는 빠졌다 = 뒤 그룹이 그 자리로 당겨지지 않는다(오른쪽 정렬 view는 그대로) · file은 그대로.
+        assert!(d.bar("file").unwrap().bounds().y == 0 && !d.bar("file").unwrap().is_vertical());
+        assert_eq!(d.layout().serialize(), "file,run@L,view");
+        assert!(
+            d.side_contains(Point { x: 2, y: 100 }) && !d.side_contains(Point { x: 300, y: 100 })
+        );
+        // 띠 안 항목 클릭.
+        let it = d.item_rect("r.stmt").unwrap();
+        let (cx, cy) = (it.x + it.w / 2, it.y + it.h / 2);
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: cx,
+                y: cy,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        d.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
+        assert_eq!(d.take_clicked().as_deref(), Some("r.stmt"));
+        // 배치 적용으로도 같은 상태 · 되돌리기.
+        let saved = d.layout();
+        let mut d2 = dock();
+        d2.apply_layout(&saved);
+        assert_eq!(d2.side_of("run"), Some(DockSide::Left));
+        d.set_side("run", None);
+        d.set_side_bounds(Rect::new(0, 0, 0, 0), Rect::new(0, 0, 0, 0), &mut inv);
+        assert_eq!(d.side_of("run"), None);
+        assert_eq!(d.bar("run").unwrap().bounds(), run_top);
+        d.reset();
+        assert_eq!(d.layout().sides, vec![]);
+    }
+
+    /// T-105 끌어 붙이기: 위 도크의 손잡이를 끌어 왼쪽 가장자리 영역에 놓으면 그 띠에 붙고(Float 보고 없음) · 띠의 손잡이를 끌어
+    /// 위 도크 자리에 놓으면 위 도크로 · 아무 데도 아닌 곳에 놓으면 종전대로 떼어 내기.
+    #[test]
+    fn drag_to_edge_docks_to_side_and_back() {
+        let mut d = dock();
+        let mut inv = Invalidations::default();
+        d.set_side_zones(Rect::new(0, 28, 24, 400), Rect::new(776, 28, 24, 400));
+        let dn = |x, y| InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        };
+        let mv = |x, y| InputEvent::MouseMove { x, y };
+        let up = |x, y| InputEvent::MouseUp { x, y };
+        // run 손잡이 = run 툴바 왼쪽.
+        let rb = d.bar("run").unwrap().bounds();
+        let (gx, gy) = (rb.x - GRIP_W / 2, rb.y + rb.h / 2);
+        d.on_event(&dn(gx, gy), &mut inv);
+        d.on_event(&mv(gx, gy + 100), &mut inv);
+        d.on_event(&mv(10, 200), &mut inv);
+        d.on_event(&up(10, 200), &mut inv);
+        let acts = d.take_actions();
+        assert!(
+            !acts.iter().any(|a| matches!(a, DockAction::Float { .. })),
+            "{acts:?}"
+        );
+        assert_eq!(d.side_of("run"), Some(DockSide::Left));
+        let w = d.side_width(DockSide::Left);
+        d.set_side_bounds(Rect::new(0, 28, w, 400), Rect::new(0, 0, 0, 0), &mut inv);
+        // 띠의 손잡이(툴바 바로 위 가로 띠)를 끌어 위 도크 안에 놓는다.
+        let vb = d.bar("run").unwrap().bounds();
+        let (sx, sy) = (vb.x + vb.w / 2, vb.y - GRIP_W / 2);
+        d.on_event(&dn(sx, sy), &mut inv);
+        d.on_event(&mv(sx + 60, sy + 60), &mut inv);
+        assert_eq!(
+            d.side_of("run"),
+            Some(DockSide::Left),
+            "밖에 있는 동안은 띠 소속 그대로"
+        );
+        d.on_event(&mv(300, 10), &mut inv);
+        d.on_event(&up(300, 10), &mut inv);
+        assert_eq!(d.side_of("run"), None);
+        assert!(!d.bar("run").unwrap().is_vertical());
+        assert!(d.take_actions().contains(&DockAction::LayoutChanged));
+        // 띠 자리도 도크도 아닌 곳에 놓음 = 떼어 내기.
+        let rb = d.bar("run").unwrap().bounds();
+        let (gx, gy) = (rb.x - GRIP_W / 2, rb.y + rb.h / 2);
+        d.on_event(&dn(gx, gy), &mut inv);
+        d.on_event(&mv(400, 300), &mut inv);
+        d.on_event(&up(400, 300), &mut inv);
+        assert!(d
+            .take_actions()
+            .iter()
+            .any(|a| matches!(a, DockAction::Float { .. })));
     }
 
     /// 간격 설정(117차): 그룹 간격 0 = 그룹이 그립 폭만 두고 맞닿는다 · 행 간격 = 권장 높이와 행 y에 반영 · 칸 여백 0 = 아이콘이 맞닿는다.
