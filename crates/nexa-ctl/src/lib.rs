@@ -53,9 +53,9 @@ pub use controls::{busy_style, set_busy_style, BusyRing, BusyState, BusyStyle};
 pub use controls::{default_click_guard_ms, set_default_click_guard_ms};
 pub use controls::{fast_scroll, set_fast_scroll, FastScroll};
 pub use controls::{
-    rgba_from_hex, rgba_to_hex, DockAction, DockLayout, DropClick, FiredBy, HAlign, MenuBar,
-    MenuDef, MenuEntry, TabAction, TabBadge, TabBar, TimeoutButton, ToolDock, ToolGroup, ToolIcon,
-    ToolItem, ToolTone, Toolbar, VAlign,
+    rgba_from_hex, rgba_to_hex, DockAction, DockLayout, DockSide, DropClick, FiredBy, HAlign,
+    MenuBar, MenuDef, MenuEntry, TabAction, TabBadge, TabBar, TimeoutButton, ToolDock, ToolGroup,
+    ToolIcon, ToolItem, ToolTone, Toolbar, VAlign,
 };
 pub use controls::{
     AutoIndent, BorderSpec, BracketOpts, Button, ButtonMode, Checkbox, Choose, ChoosePicker,

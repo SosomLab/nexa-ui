@@ -724,6 +724,12 @@ impl ToolDock {
             self.floating.push((i, x, y));
             let mut inv = Invalidations::default();
             self.bars[i].clear_hover(&mut inv);
+            // 옆 띠에서 떼어 낸 그룹 = 띠 소속을 푼다(플로팅 창은 가로 툴바 · 다시 붙일 자리는 놓는 곳이 정한다 · T-105).
+            if self.side_of[i].take().is_some() {
+                self.bars[i].set_vertical(false);
+                self.relayout();
+                self.actions.push(DockAction::Resized);
+            }
         }
         self.actions.push(DockAction::LayoutChanged);
     }
