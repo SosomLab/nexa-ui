@@ -24,6 +24,15 @@ pub struct Merge3 {
 
 /// `a`의 줄 i가 `b`의 줄 j와 같다 = `out[i] = Some(j)`(LCS 정합 · 단조 증가). 차이가 너무 크면 `None`.
 fn match_lines(a: &[&str], b: &[&str]) -> Option<Vec<Option<usize>>> {
+    match_seq(a, b, MAX_D)
+}
+
+/// [`match_lines`]의 일반형(nexa-sql T-117) — 줄 글이든 줄 해시든 같은 Myers O(ND) 정합 · 차이 수가 `max_d`를 넘으면 `None`.
+/// 줄 디프([`crate::diff::align`] · `textbox::diff_seq_hint`)가 LCS 표 상한을 넘는 큰 구간에서 쓴다.
+pub(crate) fn match_seq<A, B>(a: &[A], b: &[B], max_d: usize) -> Option<Vec<Option<usize>>>
+where
+    A: PartialEq<B>,
+{
     let (n, m) = (a.len(), b.len());
     let mut out = vec![None; n];
     // 공통 앞·뒤를 먼저 걷는다(대부분의 편집은 국소적이다).
@@ -43,7 +52,7 @@ fn match_lines(a: &[&str], b: &[&str]) -> Option<Vec<Option<usize>>> {
         return Some(out);
     }
     // Myers: v[k] = 대각선 k에서 가장 멀리 간 x. 단계마다 v를 남겨 되짚는다.
-    let max = (n + m).min(MAX_D);
+    let max = (n + m).min(max_d);
     let off = max as isize + 1;
     let mut v = vec![0isize; 2 * max + 3];
     let mut trace: Vec<Vec<isize>> = Vec::new();

@@ -343,7 +343,45 @@ where
     }
     let (la, lb) = (a1 - a0, b1 - b0);
     if la > LCS_CAP || lb > LCS_CAP {
-        out.extend((b0..b1).map(|i| (i, DiffKind::Modified)));
+        // ★ T-117: 상한 초과 = Myers 정합으로 같은 줄을 살린다(종전 = 구간 전체 Modified — 큰 파일에서 멀리 떨어진 두 곳만
+        //   고쳐도 사이 수천 줄이 "수정됨"으로 칠해졌다). 입력마다 도는 길이라 차이 수 상한은 작게 — 넘으면 종전대로 뭉갠다.
+        const MYERS_MAX_D: usize = 256;
+        let Some(mt) = crate::merge3::match_seq(&base[a0..a1], &cur[b0..b1], MYERS_MAX_D) else {
+            out.extend((b0..b1).map(|i| (i, DiffKind::Modified)));
+            return out;
+        };
+        // 같은 줄 사이의 틈마다: 옛 줄 수만큼 새 줄 = Modified · 남는 새 줄 = Added · 옛 줄이 더 많으면 다음 같은 줄에 DeletedAbove.
+        let mut j = 0usize;
+        let mut gap_a = 0usize;
+        let mark_gap = |out: &mut Vec<(usize, DiffKind)>, j0: usize, j1: usize, gap_a: usize| {
+            for (k, y) in (j0..j1).enumerate() {
+                let kind = if k < gap_a {
+                    DiffKind::Modified
+                } else {
+                    DiffKind::Added
+                };
+                out.push((b0 + y, kind));
+            }
+            gap_a > j1 - j0
+        };
+        for hit in &mt {
+            match hit {
+                Some(jm) => {
+                    if mark_gap(&mut out, j, *jm, gap_a) {
+                        out.push((b0 + jm, DiffKind::DeletedAbove));
+                    }
+                    gap_a = 0;
+                    j = jm + 1;
+                }
+                None => gap_a += 1,
+            }
+        }
+        if mark_gap(&mut out, j, lb, gap_a) {
+            let at = if b1 < m { b1 } else { m.saturating_sub(1) };
+            out.push((at, DiffKind::DeletedAbove));
+        }
+        out.sort_by_key(|(l, _)| *l);
+        out.dedup_by_key(|(l, _)| *l);
         return out;
     }
     // LCS 표(u16 · (la+1)×(lb+1)).
@@ -7675,6 +7713,36 @@ c  d",
         b.set_focused(true);
         b.on_event(&InputEvent::Char { c: '(', now_ms: 0 }, &mut inv);
         assert_eq!(b.text(), "(");
+    }
+
+    /// T-117: LCS 표 상한(1500줄)을 넘는 구간 — 멀리 떨어진 곳만 바뀌면 그 줄만 표시(종전 = 사이 전체 Modified) · 작은 구간의
+    /// 종전 결과와 같은 뜻(수정 · 추가 · 삭제 쐐기) · 차이가 너무 크면 종전처럼 구간 전체 Modified.
+    #[test]
+    fn diff_lines_over_cap_marks_only_changed_lines() {
+        let base: Vec<String> = (0..6000).map(|i| format!("line {i}")).collect();
+        let mut cur_s = base.clone();
+        cur_s[10] = "changed near top".into();
+        cur_s.insert(3000, "inserted in the middle".into());
+        cur_s.remove(5500);
+        let cur: Vec<&str> = cur_s.iter().map(String::as_str).collect();
+        assert_eq!(
+            diff_lines(&base, &cur),
+            vec![
+                (10, DiffKind::Modified),
+                (3000, DiffKind::Added),
+                (5500, DiffKind::DeletedAbove),
+            ]
+        );
+        // 줄 해시로도 같은 결과(편집기가 실제로 쓰는 길).
+        let hb: Vec<u64> = base.iter().map(|l| line_hash(l)).collect();
+        let hc: Vec<u64> = cur.iter().map(|l| line_hash(l)).collect();
+        assert_eq!(diff_seq_hint(&hb, &hc, None), diff_lines(&base, &cur));
+        // 전혀 다른 큰 구간 = Myers 포기 → 종전처럼 전체 Modified.
+        let other_s: Vec<String> = (0..4000).map(|i| format!("other {i}")).collect();
+        let other: Vec<&str> = other_s.iter().map(String::as_str).collect();
+        let d = diff_lines(&base, &other);
+        assert_eq!(d.len(), 4000);
+        assert!(d.iter().all(|(_, k)| *k == DiffKind::Modified));
     }
 
     /// 줄 변경 표시(기준선 디프): 수정 · 추가 · 삭제 쐐기 · 저장하면 사라짐.

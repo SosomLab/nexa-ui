@@ -35,8 +35,39 @@ pub struct Hunk {
     pub b: Range<usize>,
 }
 
-/// LCS 상한(가운데 구간 한쪽이 이보다 길면 전부 Replace/Insert/Delete로 뭉뚱그린다 — `diff_lines`와 같은 값).
+/// LCS 표 상한(가운데 구간 한쪽이 이보다 길면 표((la+1)×(lb+1))를 만들지 않는다 — `diff_lines`와 같은 값). 넘으면 Myers 정합
+/// ([`MYERS_MAX_D`])으로 가고, 그것도 포기하면(차이가 너무 큼) 전부 Replace/Insert/Delete로 뭉뚱그린다.
 const LCS_CAP: usize = 1500;
+/// 상한을 넘은 구간의 Myers 차이 수 상한(nexa-sql T-117) — 비교 탭은 한 번만 계산하므로 넉넉히.
+const MYERS_MAX_D: usize = 1500;
+
+/// 모아 둔 한쪽 줄들을 짝지어 낸다 — 양쪽에 다 있으면 Replace(나란히) · 남는 쪽은 Delete/Insert.
+fn flush_pending(rows: &mut Vec<Row>, pa: &mut Vec<usize>, pb: &mut Vec<usize>) {
+    let k = pa.len().min(pb.len());
+    for t in 0..k {
+        rows.push(Row {
+            a: Some(pa[t]),
+            b: Some(pb[t]),
+            kind: RowKind::Replace,
+        });
+    }
+    for &x in &pa[k..] {
+        rows.push(Row {
+            a: Some(x),
+            b: None,
+            kind: RowKind::Delete,
+        });
+    }
+    for &y in &pb[k..] {
+        rows.push(Row {
+            a: None,
+            b: Some(y),
+            kind: RowKind::Insert,
+        });
+    }
+    pa.clear();
+    pb.clear();
+}
 
 /// 두 줄 목록을 행으로 정렬한다.
 #[must_use]
@@ -58,8 +89,35 @@ pub fn align(a: &[String], b: &[String]) -> Vec<Row> {
     }
     let (a0, a1, b0, b1) = (pre, n - suf, pre, m - suf);
     let (la, lb) = (a1 - a0, b1 - b0);
-    if la > LCS_CAP || lb > LCS_CAP {
-        // 상한 초과 = 짝수 길이만큼 Replace · 나머지는 한쪽만.
+    // ★ T-117: 상한 초과 = Myers 정합(같은 줄은 Equal로 살린다 — 종전엔 멀리 떨어진 두 곳만 고쳐도 사이 전체가 Replace였다).
+    let big = la > LCS_CAP || lb > LCS_CAP;
+    let matched = if big {
+        crate::merge3::match_seq(&a[a0..a1], &b[b0..b1], MYERS_MAX_D)
+    } else {
+        None
+    };
+    if let Some(mt) = matched {
+        let (mut pend_a, mut pend_b): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
+        let mut j = 0usize;
+        for (i, hit) in mt.iter().enumerate() {
+            match hit {
+                Some(jm) => {
+                    pend_b.extend((j..*jm).map(|y| b0 + y));
+                    flush_pending(&mut rows, &mut pend_a, &mut pend_b);
+                    rows.push(Row {
+                        a: Some(a0 + i),
+                        b: Some(b0 + jm),
+                        kind: RowKind::Equal,
+                    });
+                    j = jm + 1;
+                }
+                None => pend_a.push(a0 + i),
+            }
+        }
+        pend_b.extend((j..lb).map(|y| b0 + y));
+        flush_pending(&mut rows, &mut pend_a, &mut pend_b);
+    } else if big {
+        // Myers도 포기(차이가 너무 큼) = 짝수 길이만큼 Replace · 나머지는 한쪽만.
         let k = la.min(lb);
         for i in 0..k {
             rows.push(Row {
@@ -99,32 +157,7 @@ pub fn align(a: &[String], b: &[String]) -> Vec<Row> {
         // 한쪽만 소비한 줄은 잠시 모아 두었다가 맞은편 소비와 짝지어 Replace로(양쪽 다른 줄은 나란히 보이게).
         let mut pend_a: Vec<usize> = Vec::new();
         let mut pend_b: Vec<usize> = Vec::new();
-        let flush = |rows: &mut Vec<Row>, pa: &mut Vec<usize>, pb: &mut Vec<usize>| {
-            let k = pa.len().min(pb.len());
-            for t in 0..k {
-                rows.push(Row {
-                    a: Some(pa[t]),
-                    b: Some(pb[t]),
-                    kind: RowKind::Replace,
-                });
-            }
-            for &x in &pa[k..] {
-                rows.push(Row {
-                    a: Some(x),
-                    b: None,
-                    kind: RowKind::Delete,
-                });
-            }
-            for &y in &pb[k..] {
-                rows.push(Row {
-                    a: None,
-                    b: Some(y),
-                    kind: RowKind::Insert,
-                });
-            }
-            pa.clear();
-            pb.clear();
-        };
+        let flush = flush_pending;
         while i < la || j < lb {
             if i < la && j < lb && a[a0 + i] == b[b0 + j] {
                 flush(&mut rows, &mut pend_a, &mut pend_b);
@@ -266,6 +299,32 @@ mod tests {
     }
 
     /// 난수 대조(61 §2 자료 구조 규칙): 모델이 늘 성립 · Equal 행 수 ≥ 공통 줄의 하한(최장 공통 부분열 ≥ 공통 앞·뒤).
+    /// T-117: LCS 표 상한(1500줄)을 넘는 구간 — 멀리 떨어진 두 곳만 바뀌면 그 두 곳만 비-Equal(종전 = 사이 전체 Replace) ·
+    /// 단순 모델 통과 · 덩어리 수 = 바뀐 곳 수 · 차이가 너무 크면(Myers 포기) 종전처럼 뭉개되 모델은 지킨다.
+    #[test]
+    fn over_cap_uses_myers_and_keeps_equal_lines() {
+        let a: Vec<String> = (0..6000).map(|i| format!("line {i}")).collect();
+        let mut b = a.clone();
+        b[10] = "changed near top".into();
+        b.insert(3000, "inserted in the middle".into());
+        b.remove(5500);
+        let rows = align(&a, &b);
+        check(&a, &b, &rows);
+        let non_equal = rows.iter().filter(|r| r.kind != RowKind::Equal).count();
+        assert_eq!(non_equal, 3, "바뀐 세 곳만");
+        assert_eq!(hunks(&rows).len(), 3);
+        // 순서를 뒤섞은 큰 구간도 모델은 지킨다(같은 줄을 살리는 수만 달라질 뿐).
+        let mut c = a.clone();
+        c.reverse();
+        let rows = align(&a, &c);
+        check(&a, &c, &rows);
+        // 전혀 다른 큰 구간 = Myers 포기 → 뭉갬(모델은 그대로).
+        let d: Vec<String> = (0..4000).map(|i| format!("other {i}")).collect();
+        let rows = align(&a, &d);
+        check(&a, &d, &rows);
+        assert!(rows.iter().all(|r| r.kind != RowKind::Equal));
+    }
+
     #[test]
     fn random_vs_model() {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
