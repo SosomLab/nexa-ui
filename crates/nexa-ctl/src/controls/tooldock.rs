@@ -1447,6 +1447,15 @@ impl Widget for ToolDock {
         // ★ 글자 항목 폭 실측은 툴바 paint에서 — 그려진 뒤 권장 폭이 배치 폭과 다르면 낡음 표시(다음 사건·호스트가 재배치).
         let check_stale = |dock: &Self| {
             for &i in &dock.order {
+                // 옆 띠 그룹 = 세로 길이로 본다(항목 표시·글자 폭이 바뀌면 길이가 달라진다 · 폭은 호스트 배치가 정하므로
+                //   여기서 낡음으로 치지 않는다 — 호스트가 다시 배치하기 전까지 매 프레임 낡음이 되는 것을 피한다 · 검토 11-23).
+                if dock.shown_on_side(i) {
+                    if dock.bars[i].preferred_length_v() != dock.bars[i].bounds().h {
+                        dock.stale.set(true);
+                        return;
+                    }
+                    continue;
+                }
                 if dock.skip_idx(i) {
                     continue;
                 }
