@@ -191,6 +191,8 @@ pub struct ToolDock {
     grips: Vec<Rect>,
     hover_grip: Option<usize>,
     drag: Option<Drag>,
+    /// 바깥(플로팅 창)에서 끌어 온 그룹이 지금 도크 위에 있다 — 붙을 수 있음을 테두리로 알린다([`ToolDock::set_drop_hint`]).
+    drop_hint: bool,
     actions: Vec<DockAction>,
     /// ★ 그룹 사각형이 낡았다(10-01 nexa-sql ⑲): 글자 항목의 폭은 그릴 때 실측되는데(`Toolbar::label_w`) 글이 바뀌면 그룹 폭이
     /// 달라져 항목이 사각형 밖으로 나간다 — 마우스 라우팅이 "그룹 사각형 안"이라 클릭이 안 닿았다. `paint`가 표시하고
@@ -244,6 +246,7 @@ impl ToolDock {
             grips: vec![Rect::new(0, 0, 0, 0); n],
             hover_grip: None,
             drag: None,
+            drop_hint: false,
             actions: Vec::new(),
             stale: std::cell::Cell::new(false),
             icon_px: super::toolbar::DEFAULT_ICON,
@@ -503,6 +506,31 @@ impl ToolDock {
                 }
             }
         }
+    }
+
+    /// 바깥에서 끌어 온 그룹을 이 점(도크 좌표)에 놓으면 붙는가 — 도크 띠와 그 위아래 여유(떼어 내기와 같은 문턱) 안.
+    #[must_use]
+    pub fn accepts_drop(&self, p: Point) -> bool {
+        let b = self.base.bounds;
+        p.x >= b.x && p.x < b.right() && self.target_row(p.y).is_some()
+    }
+
+    /// 붙을 수 있음 표시(도크 테두리)를 켜고 끈다 — 바뀌었으면 `true`(호스트가 다시 그린다).
+    pub fn set_drop_hint(&mut self, on: bool) -> bool {
+        let changed = self.drop_hint != on;
+        self.drop_hint = on;
+        changed
+    }
+
+    /// 플로팅 그룹을 **이 점의 자리에** 붙인다(nexa-sql 사용자 11-21 "떼어 낸 그룹을 끌어서 다시 붙이기") — 그립으로 끌어
+    /// 순서를 바꿀 때와 같은 자리 계산(행 + 같은 띠 그룹들의 가운데 비교). 점이 도크 밖이면 원래 자리로([`ToolDock::dock`]).
+    pub fn dock_at(&mut self, id: &str, p: Point) {
+        self.drop_hint = false;
+        let Some(i) = self.index(id) else { return };
+        self.dock(id);
+        self.relayout();
+        self.reorder_to(i, p);
+        self.actions.push(DockAction::LayoutChanged);
     }
 
     /// 도크로 되돌리기(자리는 `order`에 남아 있던 곳).
@@ -1135,6 +1163,14 @@ impl Widget for ToolDock {
                     ctx.fill_rect(Rect::new(x0 + col * dot * 2, y0 + r * dot * 2, dot, dot), c);
                 }
             }
+        }
+        if self.drop_hint {
+            let t = self.s(2).max(1);
+            let c = theme.accent;
+            ctx.fill_rect(Rect::new(b.x, b.y, b.w, t), c);
+            ctx.fill_rect(Rect::new(b.x, b.bottom() - t, b.w, t), c);
+            ctx.fill_rect(Rect::new(b.x, b.y, t, b.h), c);
+            ctx.fill_rect(Rect::new(b.right() - t, b.y, t, b.h), c);
         }
         check_stale(self);
     }
